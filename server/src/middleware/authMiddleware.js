@@ -1,0 +1,57 @@
+import { getAuth, getDb } from '../config/firebase.js';
+import { AppError, formatErrorResponse } from '../utils/errors.js';
+
+export const requireAuth = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    const isDevOrTest = ['development', 'test'].includes(process.env.NODE_ENV || 'development');
+
+    // Demo/test header support (backward compatibility for dev/test execution)
+    if (isDevOrTest && req.headers['x-demo-uid']) {
+      req.user = {
+        uid: req.headers['x-demo-uid'],
+        email: req.headers['x-demo-email'] || 'demo@healthcare.org',
+        role: req.headers['x-demo-role'] || 'patient'
+      };
+      return next();
+    }
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json(formatErrorResponse('UNAUTHORIZED', 'Unauthorized access. Authentication token missing or invalid.'));
+    }
+
+    const token = authHeader.split('Bearer ')[1];
+    const auth = getAuth();
+
+    if (!auth) {
+      // Mock mode fallback when Firebase Admin is not connected in tests
+      req.user = {
+        uid: token,
+        email: 'user@healthcare.org',
+        role: req.headers['x-demo-role'] || 'patient'
+      };
+      return next();
+    }
+
+    const decodedToken = await auth.verifyIdToken(token);
+    let role = decodedToken.role || 'patient';
+    const db = getDb();
+    
+    if (db) {
+      const userDoc = await db.collection('users').doc(decodedToken.uid).get();
+      if (userDoc.exists) {
+        role = userDoc.data().role || role;
+      }
+    }
+
+    req.user = {
+      uid: decodedToken.uid,
+      email: decodedToken.email,
+      role
+    };
+
+    next();
+  } catch (error) {
+    return res.status(401).json(formatErrorResponse('UNAUTHORIZED', 'Invalid or expired authentication token.'));
+  }
+};

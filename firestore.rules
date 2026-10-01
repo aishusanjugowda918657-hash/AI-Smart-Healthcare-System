@@ -1,0 +1,33 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function role() { return request.auth.token.role; }
+    function isStaff() { return signedIn() && role() in ['nurse','reception','admin']; }
+
+    match /appointments/{id} {
+      allow read: if signedIn() && (
+        request.auth.uid in resource.data.viewerUids ||
+        resource.data.doctorId == request.auth.uid ||
+        isStaff());
+      allow write: if false;
+    }
+    match /queues/{id} {
+      allow read: if signedIn() && (resource.data.doctorId == request.auth.uid || isStaff());
+      allow write: if false;
+    }
+    match /notifications/{id} {
+      allow read: if signedIn() && resource.data.uid == request.auth.uid;
+      allow update: if signedIn() && resource.data.uid == request.auth.uid
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      allow create, delete: if false;
+    }
+    match /alerts/{id} {
+      allow read: if signedIn() && (
+        resource.data.doctorId == request.auth.uid ||
+        (resource.data.kind == 'triage' && role() in ['nurse','admin']));
+      allow write: if false;
+    }
+    match /{document=**} { allow read, write: if false; }   // everything else is server-only
+  }
+}

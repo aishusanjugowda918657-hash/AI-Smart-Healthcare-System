@@ -1,0 +1,35 @@
+{
+  "name": "ai-smart-healthcare-server",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "seed": "node scripts/seedDemoData.js",
+    "seed:doctors": "node scripts/seedDemoDoctors.js",
+    "seed:patients": "node scripts/seedDemoPatients.js",
+    "backfill:name-lower": "node scripts/backfillNameLower.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@google/genai": "^2.23.0",
+    "cors": "^2.8.5",
+    "dayjs": "^1.11.23",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^8.7.0",
+    "express-validator": "^7.2.0",
+    "firebase-admin": "^12.4.0",
+    "helmet": "^8.3.0",
+    "node-cron": "^4.6.0",
+    "pdfkit": "^0.20.2",
+    "qrcode": "^1.5.4",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "supertest": "^7.0.0",
+    "vitest": "^2.0.5"
+  }
+}
