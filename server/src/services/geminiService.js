@@ -5,7 +5,7 @@ import { ai } from '../config/gemini.js';
  * with fallback to the current supported model.
  */
 export const getModelName = () => {
-  return process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+  return process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 };
 
 /**

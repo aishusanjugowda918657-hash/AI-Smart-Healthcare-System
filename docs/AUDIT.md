@@ -123,7 +123,7 @@ Test Files  18 passed (18)
 | `NODE_ENV` | Yes | Keep |
 | `HOSPITAL_TZ` | **No** | Add (`Asia/Kolkata`) |
 | `GEMINI_API_KEY` | Yes | Keep |
-| `GEMINI_MODEL` | Yes | Keep (`gemini-2.5-flash`) |
+| `GEMINI_MODEL` | Yes | Keep (`gemini-3.8-flash`) |
 | `FIREBASE_SERVICE_ACCOUNT_PATH` | Yes | Keep |
 | `FIREBASE_STORAGE_BUCKET` | **No** | Add |
 | `CLIENT_ORIGIN` | **No** | Add (`http://localhost:5173`) |
@@ -147,7 +147,7 @@ Test Files  18 passed (18)
 
 1. **Firestore Composite Indexes Missing:** Complex queries against Firestore (`reminders`, `followups`, `appointments`, `waitlist`) will fail without declaring all 15 composite indexes in `firestore.indexes.json`.
 2. **Missing Firestore Security Rules:** `firestore.rules` file is missing. Client-side Firestore operations could bypass backend authorization if direct access is enabled.
-3. **Model Name Discrepancy & Fallbacks:** Certain cloud API endpoints fail if `gemini-2.5-flash` model identifier is unavailable or deprecated by Google. Robust fallback to rule-based execution must be verified.
+3. **Model Name Discrepancy & Fallbacks:** Certain cloud API endpoints fail if `gemini-3.8-flash` model identifier is unavailable or deprecated by Google. Robust fallback to rule-based execution must be verified.
 4. **Time & Clock Mutations:** Reliance on `new Date()` directly in business logic instead of centralized `utils/clock.js` helper prevents deterministic time-travel testing for scheduler jobs.
 
 ---

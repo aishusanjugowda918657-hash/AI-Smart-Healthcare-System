@@ -415,4 +415,3 @@ export function getSmartSlotSuggestions({
     fullList: slots
   };
 }
-}

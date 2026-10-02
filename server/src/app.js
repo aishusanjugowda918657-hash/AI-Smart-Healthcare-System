@@ -27,6 +27,7 @@ import adminRoutes from './routes/admin.routes.js';
 import patientAgentRoutes from './routes/patientAgent.routes.js';
 import slotRoutes from './routes/slot.routes.js';
 import bookingRoutes from './routes/booking.routes.js';
+import checkinRoutes from './routes/checkin.routes.js';
 
 const app = express();
 
@@ -94,6 +95,7 @@ app.use('/api/patient-agent', patientAgentRoutes);
 app.use('/api/slots', slotRoutes);
 app.use('/api/booking', bookingRoutes);
 app.use('/api/triage', bookingRoutes);
+app.use('/api/checkin', checkinRoutes);
 
 // Error handling middleware
 app.use(errorHandler);

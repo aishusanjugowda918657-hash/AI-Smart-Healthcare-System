@@ -1,13 +1,35 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import app from '../src/app.js';
 import { evaluateTriageRules, mergeAIWithRulesTriage } from '../src/domain/triage.js';
 import { ClinicalLevel } from '../src/domain/constants.js';
+import * as geminiService from '../src/services/geminiService.js';
 
 describe('Phase 4 - Feature F3 & F4 Booking, Triage & Check-in QR Verification', () => {
   const doctorId = 'DOC-001';
   const patientHealthId = 'PHI-2026-000000-A';
   const date = '2026-10-25';
+
+  beforeEach(() => {
+    vi.spyOn(geminiService, 'generateText').mockImplementation(async (prompt) => {
+      if (prompt.includes('chest pain')) {
+        return JSON.stringify({
+          departmentId: 'dept-card',
+          visitType: 'new',
+          complexity: 'high',
+          urgencySuggested: 'emergency',
+          followUpQuestion: 'Are you having radiating left arm pain?'
+        });
+      }
+      return JSON.stringify({
+        departmentId: 'dept-gen',
+        visitType: 'new',
+        complexity: 'moderate',
+        urgencySuggested: 'routine',
+        followUpQuestion: 'How long have you had these symptoms?'
+      });
+    });
+  });
 
   // -------------------------------------------------------------
   // AC 1: Disclaimer Requirement Enforcement (PRD F3)

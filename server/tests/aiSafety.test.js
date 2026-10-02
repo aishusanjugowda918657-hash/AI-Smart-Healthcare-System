@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import request from 'supertest';
 import app from '../src/app.js';
 import { getModelName } from '../src/services/geminiService.js';
+import * as geminiService from '../src/services/geminiService.js';
 
 describe('Phase 13 & 14 - Gemini AI Safety Boundaries & Service Unit Tests', () => {
   it('configured GEMINI_MODEL is respected or defaults gracefully', () => {
@@ -11,6 +12,10 @@ describe('Phase 13 & 14 - Gemini AI Safety Boundaries & Service Unit Tests', () 
   });
 
   it('POST /api/ai/chat returns response containing mandatory medical disclaimer', async () => {
+    vi.spyOn(geminiService, 'generateText').mockResolvedValueOnce(
+      'Hypertension is high blood pressure. Please consult a doctor for diagnosis. Disclaimer: This is AI generated content.'
+    );
+
     const res = await request(app)
       .post('/api/ai/chat')
       .set('x-demo-uid', 'demo-patient-001')
@@ -22,6 +27,10 @@ describe('Phase 13 & 14 - Gemini AI Safety Boundaries & Service Unit Tests', () 
   });
 
   it('POST /api/ai/chat handles unconfigured or failing API key with safe fallback', async () => {
+    vi.spyOn(geminiService, 'generateText').mockRejectedValueOnce(
+      new Error('API key unconfigured or quota exceeded')
+    );
+
     const res = await request(app)
       .post('/api/ai/chat')
       .set('x-demo-uid', 'demo-patient-001')
@@ -50,6 +59,10 @@ describe('Phase 13 & 14 - Gemini AI Safety Boundaries & Service Unit Tests', () 
   });
 
   it('POST /api/ai/extract-prescription marks extracted data as verifiedByDoctor: false', async () => {
+    vi.spyOn(geminiService, 'generateText').mockResolvedValueOnce(
+      JSON.stringify([{ name: 'Amoxicillin', dosage: '500mg', frequency: 'Twice daily', durationDays: 5 }])
+    );
+
     const res = await request(app)
       .post('/api/ai/extract-prescription')
       .set('x-demo-uid', 'demo-doctor-001')

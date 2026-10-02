@@ -14,7 +14,7 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   HOSPITAL_TZ: z.string().default('Asia/Kolkata'),
   GEMINI_API_KEY: z.string().optional().default(''),
-  GEMINI_MODEL: z.string().default('gemini-2.5-flash'),
+  GEMINI_MODEL: z.string().default('gemini-3.8-flash'),
   FIREBASE_SERVICE_ACCOUNT_PATH: z.string().optional().default(''),
   FIREBASE_STORAGE_BUCKET: z.string().optional().default(''),
   CLIENT_ORIGIN: z.string().default('http://localhost:5173'),

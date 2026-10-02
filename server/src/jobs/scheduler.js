@@ -76,13 +76,15 @@ export async function generateSlotsJob(daysAhead = 14) {
   }
 }
 
+import { clock } from '../utils/clock.js';
+
 /**
  * Sweep job: Expire held slots whose heldUntil timestamp is in the past
  */
 export async function expireHoldsJob() {
   try {
     const db = assertDbConnected();
-    const nowIso = new Date().toISOString();
+    const nowIso = clock.now().toISOString();
 
     const heldSnap = await db
       .collection('slots')
@@ -102,7 +104,7 @@ export async function expireHoldsJob() {
         status: newStatus,
         heldBy: null,
         heldUntil: null,
-        updatedAt: new Date()
+        updatedAt: clock.now()
       });
     });
 
@@ -115,12 +117,223 @@ export async function expireHoldsJob() {
 }
 
 /**
+ * Job: Sweep no-shows and handle late tiers / rejoin order (PRD F5 & 10)
+ */
+export async function noShowSweepJob({ nowOverride, gracePeriodMinutes = 5 } = {}) {
+  try {
+    const db = assertDbConnected();
+    const now = nowOverride ? new Date(nowOverride) : clock.now();
+    const todayStr = now.toISOString().split('T')[0];
+
+    const aptSnap = await db
+      .collection('appointments')
+      .where('date', '==', todayStr)
+      .where('status', 'in', ['booked', 'confirmed', 'on_the_way', 'nearby', 'not_arrived', 'called', 'rejoined'])
+      .get();
+
+    if (aptSnap.empty) {
+      return { success: true, processedCount: 0, noShowCount: 0 };
+    }
+
+    let noShowCount = 0;
+    const batch = db.batch();
+
+    for (const doc of aptSnap.docs) {
+      const apt = doc.data();
+      if (!apt.timeSlot) continue;
+
+      const [hours, mins] = apt.timeSlot.split(':').map(Number);
+      const apptTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, mins);
+      const apptTimeMs = apptTime.getTime();
+      const graceEndMs = apptTimeMs + (gracePeriodMinutes * 60 * 1000);
+
+      // Un-checked in past start time -> mark not_arrived
+      if (now.getTime() > apptTimeMs && ['booked', 'confirmed', 'on_the_way'].includes(apt.status)) {
+        batch.update(doc.ref, {
+          status: 'not_arrived',
+          notArrivedAt: now,
+          updatedAt: now
+        });
+      }
+
+      // Past grace period without check-in or call -> mark NO_SHOW
+      if (now.getTime() > graceEndMs && ['not_arrived', 'nearby', 'called'].includes(apt.status)) {
+        batch.update(doc.ref, {
+          status: 'no_show',
+          noShowAt: now,
+          updatedAt: now
+        });
+        noShowCount++;
+
+        // Serious follow-up alert hook if high risk or urgent triage
+        if (apt.clinicalLevel >= 2 || apt.riskLevel === 'high') {
+          const alertId = `alert_noshow_${doc.id}_${now.getTime()}`;
+          const alertRef = db.collection('alerts').doc(alertId);
+          batch.set(alertRef, {
+            id: alertId,
+            appointmentId: doc.id,
+            patientHealthId: apt.patientHealthId || apt.healthId,
+            patientName: apt.patientName || 'Patient',
+            reasons: [`High-risk patient NO-SHOW for appointment ${doc.id}`],
+            kind: 'no_show_followup',
+            status: 'open',
+            createdAt: now
+          });
+        }
+      }
+    }
+
+    await batch.commit();
+    return { success: true, processedCount: aptSnap.size, noShowCount };
+  } catch (error) {
+    console.error('❌ noShowSweepJob error:', error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Job: Release slots for cancelled appointments
+ */
+export async function releaseCancelledSlotsJob() {
+  try {
+    const db = assertDbConnected();
+    const cancelledSnap = await db
+      .collection('appointments')
+      .where('status', '==', 'cancelled')
+      .get();
+
+    if (cancelledSnap.empty) {
+      return { success: true, releasedCount: 0 };
+    }
+
+    let releasedCount = 0;
+    const batch = db.batch();
+
+    for (const doc of cancelledSnap.docs) {
+      const apt = doc.data();
+      if (apt.slotId) {
+        const slotRef = db.collection('slots').doc(apt.slotId);
+        const slotSnap = await slotRef.get();
+        if (slotSnap.exists && (slotSnap.data().status === SlotStatus.BOOKED || slotSnap.data().status === SlotStatus.HELD)) {
+          batch.update(slotRef, {
+            status: SlotStatus.FREE,
+            bookedBy: null,
+            updatedAt: clock.now()
+          });
+          releasedCount++;
+        }
+      }
+    }
+
+    if (releasedCount > 0) {
+      await batch.commit();
+    }
+
+    return { success: true, releasedCount };
+  } catch (error) {
+    console.error('❌ releaseCancelledSlotsJob error:', error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Job: Appointment reminders (24h and 2h windows) with Confirm and Cancel action buttons
+ */
+export async function appointmentRemindersJob({ nowOverride } = {}) {
+  try {
+    const db = assertDbConnected();
+    const now = nowOverride ? new Date(nowOverride) : clock.now();
+    const nowMs = now.getTime();
+
+    const upcomingSnap = await db
+      .collection('appointments')
+      .where('status', 'in', ['booked', 'confirmed'])
+      .get();
+
+    if (upcomingSnap.empty) {
+      return { success: true, remindersCreated: 0 };
+    }
+
+    let remindersCreated = 0;
+    const batch = db.batch();
+
+    for (const doc of upcomingSnap.docs) {
+      const apt = doc.data();
+      if (!apt.date || !apt.timeSlot) continue;
+
+      const [hours, mins] = apt.timeSlot.split(':').map(Number);
+      const [year, month, day] = apt.date.split('-').map(Number);
+      const apptTime = new Date(year, month - 1, day, hours, mins);
+      const apptMs = apptTime.getTime();
+
+      const diffHours = (apptMs - nowMs) / (1000 * 60 * 60);
+
+      // 24h Reminder (between 23h and 25h)
+      if (diffHours >= 23 && diffHours <= 25 && !apt.reminder24hSent) {
+        const remId = `rem_24h_${doc.id}`;
+        batch.set(db.collection('reminders').doc(remId), {
+          id: remId,
+          appointmentId: doc.id,
+          patientUid: apt.patientUid || apt.patientId,
+          type: 'APPOINTMENT_24H',
+          title: 'Upcoming Appointment Tomorrow',
+          body: `Your consultation with ${apt.doctorName || 'Doctor'} is scheduled for tomorrow at ${apt.timeSlot}.`,
+          actions: [
+            { label: 'Confirm', endpoint: `/api/appointments/${doc.id}/confirm`, method: 'POST' },
+            { label: 'Cancel', endpoint: `/api/appointments/${doc.id}/cancel`, method: 'POST' }
+          ],
+          createdAt: now
+        });
+        batch.update(doc.ref, { reminder24hSent: true, updatedAt: now });
+        remindersCreated++;
+      }
+
+      // 2h Reminder (between 1.5h and 2.5h)
+      if (diffHours >= 1.5 && diffHours <= 2.5 && !apt.reminder2hSent) {
+        const remId = `rem_2h_${doc.id}`;
+        batch.set(db.collection('reminders').doc(remId), {
+          id: remId,
+          appointmentId: doc.id,
+          patientUid: apt.patientUid || apt.patientId,
+          type: 'APPOINTMENT_2H',
+          title: 'Upcoming Appointment in 2 Hours',
+          body: `Your appointment is starting soon at ${apt.timeSlot}. Please mark if you are on the way.`,
+          actions: [
+            { label: 'Confirm', endpoint: `/api/appointments/${doc.id}/confirm`, method: 'POST' },
+            { label: 'Cancel', endpoint: `/api/appointments/${doc.id}/cancel`, method: 'POST' }
+          ],
+          createdAt: now
+        });
+        batch.update(doc.ref, { reminder2hSent: true, updatedAt: now });
+        remindersCreated++;
+      }
+    }
+
+    if (remindersCreated > 0) {
+      await batch.commit();
+    }
+
+    return { success: true, remindersCreated };
+  } catch (error) {
+    console.error('❌ appointmentRemindersJob error:', error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
  * Main Scheduler wiring entry point
  */
 export async function runSchedulerJobs() {
   const holdsResult = await expireHoldsJob();
+  const noShowResult = await noShowSweepJob();
+  const releaseResult = await releaseCancelledSlotsJob();
+  const remindersResult = await appointmentRemindersJob();
+
   return {
     holds: holdsResult,
-    timestamp: new Date().toISOString()
+    noShow: noShowResult,
+    release: releaseResult,
+    reminders: remindersResult,
+    timestamp: clock.now().toISOString()
   };
 }

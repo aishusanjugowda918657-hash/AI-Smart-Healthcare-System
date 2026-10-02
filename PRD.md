@@ -73,7 +73,7 @@ Version 1.0 | Prepared 1 Oct 2026 | Audience: the AI coding agent (Antigravity) 
 | File storage | Firebase Storage (reports) |
 | Server access to Firebase | Firebase Admin SDK |
 | Push | Firebase Cloud Messaging (part of Firebase) with a service worker |
-| AI | Google Gemini 2.5 Flash through `@google/genai`, model name from `GEMINI_MODEL` |
+| AI | Google Gemini Flash through `@google/genai`, model name from `GEMINI_MODEL` (current value `gemini-3.8-flash`) |
 | Tests | Vitest and Supertest |
 | Config | `.env` files |
 
@@ -93,7 +93,7 @@ PORT=5000
 NODE_ENV=development
 HOSPITAL_TZ=Asia/Kolkata
 GEMINI_API_KEY=
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-3.8-flash
 FIREBASE_SERVICE_ACCOUNT_PATH=
 FIREBASE_STORAGE_BUCKET=
 CLIENT_ORIGIN=http://localhost:5173

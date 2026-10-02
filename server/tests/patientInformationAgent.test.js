@@ -1,8 +1,25 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
 import app from '../src/app.js';
+import * as geminiService from '../src/services/geminiService.js';
+
+import { fallbackParseQuestion } from '../src/services/patientAgentService.js';
 
 describe('Phase 17 - Natural-Language Patient Information Agent API', () => {
+  beforeEach(() => {
+    vi.spyOn(geminiService, 'generateText').mockImplementation(async (prompt) => {
+      if (prompt.includes('NLP parsing engine')) {
+        const match = prompt.match(/DOCTOR QUESTION:\s*"([^"]+)"/i);
+        const q = match ? match[1] : prompt;
+        const parsed = fallbackParseQuestion(q);
+        let name = '';
+        if (/John Doe/i.test(q)) name = 'John Doe';
+        if (/Uncle Bob/i.test(q)) name = 'Uncle Bob';
+        return JSON.stringify({ patientName: name, intent: parsed.intent });
+      }
+      throw new Error('Fallback to deterministic answer formatter in test');
+    });
+  });
 
   it('POST /api/patient-agent/query returns 401 when unauthenticated', async () => {
     const res = await request(app)
