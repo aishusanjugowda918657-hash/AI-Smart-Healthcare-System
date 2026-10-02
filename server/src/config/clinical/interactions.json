@@ -1,0 +1,40 @@
+{
+  "_notice": "Clinical Drug Interaction Dataset & Risk Rules (PRD F9 & Section 9)",
+  "interactions": [
+    {
+      "drugA": "Warfarin",
+      "drugB": "Aspirin",
+      "severity": "red",
+      "description": "Severe bleeding risk due to synergistic anticoagulant and antiplatelet inhibition.",
+      "recommendation": "Avoid concurrent use unless strictly indicated under specialist hematology supervision with frequent INR monitoring."
+    },
+    {
+      "drugA": "Warfarin",
+      "drugB": "Ibuprofen",
+      "severity": "red",
+      "description": "Increased risk of severe gastrointestinal ulceration and major bleeding.",
+      "recommendation": "Use alternative analgesic/anti-inflammatory (e.g. Paracetamol) instead of NSAIDs."
+    },
+    {
+      "drugA": "Aspirin",
+      "drugB": "Ibuprofen",
+      "severity": "amber",
+      "description": "Ibuprofen may attenuate the antiplatelet effect of low-dose aspirin and increase GI side effects.",
+      "recommendation": "Take aspirin at least 30 minutes before or 8 hours after ibuprofen."
+    },
+    {
+      "drugA": "Metformin",
+      "drugB": "Ciprofloxacin",
+      "severity": "amber",
+      "description": "Ciprofloxacin may alter blood glucose levels when co-administered with antidiabetic agents.",
+      "recommendation": "Monitor blood glucose levels frequently during concurrent therapy."
+    },
+    {
+      "drugA": "Amlodipine",
+      "drugB": "Simvastatin",
+      "severity": "amber",
+      "description": "Amlodipine increases plasma concentration of Simvastatin, raising risk of myopathy/rhabdomyolysis.",
+      "recommendation": "Limit Simvastatin dose to maximum 20mg daily when taken with Amlodipine."
+    }
+  ]
+}

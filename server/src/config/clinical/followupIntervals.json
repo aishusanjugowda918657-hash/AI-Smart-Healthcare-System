@@ -1,0 +1,33 @@
+{
+  "_notice": "Clinical Follow-up Interval Recommendation Dataset (PRD F9)",
+  "intervals": [
+    {
+      "category": "acute_infection",
+      "conditions": ["fever", "upper respiratory tract infection", "bronchitis"],
+      "recommendedDaysMin": 5,
+      "recommendedDaysMax": 7,
+      "notes": "Re-evaluate if symptoms persist beyond 5-7 days or worsen."
+    },
+    {
+      "category": "antibiotic_course",
+      "drugClasses": ["Penicillin Antibiotic", "Fluoroquinolone Antibiotic"],
+      "recommendedDaysMin": 7,
+      "recommendedDaysMax": 10,
+      "notes": "Complete full antibiotic course and follow up after completion."
+    },
+    {
+      "category": "chronic_hypertension",
+      "conditions": ["hypertension", "high blood pressure"],
+      "recommendedDaysMin": 30,
+      "recommendedDaysMax": 90,
+      "notes": "Routine BP monitoring and medication titration."
+    },
+    {
+      "category": "chronic_diabetes",
+      "conditions": ["diabetes", "type 2 diabetes"],
+      "recommendedDaysMin": 30,
+      "recommendedDaysMax": 90,
+      "notes": "Review HbA1c, glycemic control, and kidney function."
+    }
+  ]
+}

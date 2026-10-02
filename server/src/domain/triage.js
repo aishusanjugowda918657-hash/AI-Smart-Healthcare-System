@@ -3,7 +3,7 @@
  * Guarantees rule-based safety overrides so AI can NEVER downgrade an emergency.
  */
 
-import redFlagsConfig from '../config/clinical/redflags.json' assert { type: 'json' };
+import redFlagsConfig from '../config/clinical/redflags.json' with { type: 'json' };
 import { ClinicalLevel, Complexity, VisitType } from './constants.js';
 
 /**

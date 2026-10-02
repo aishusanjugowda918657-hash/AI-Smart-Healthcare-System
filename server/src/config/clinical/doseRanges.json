@@ -1,0 +1,54 @@
+{
+  "_notice": "Clinical Dose Limits & Threshold Dataset (PRD F9)",
+  "doseLimits": [
+    {
+      "medicine": "Paracetamol",
+      "maxSingleDoseMg": 1000,
+      "maxDailyDoseMg": 4000,
+      "unit": "mg",
+      "warning": "Exceeding 4000 mg/day of Paracetamol poses severe risk of acute hepatotoxicity."
+    },
+    {
+      "medicine": "Amoxicillin",
+      "maxSingleDoseMg": 1000,
+      "maxDailyDoseMg": 3000,
+      "unit": "mg",
+      "warning": "Amoxicillin doses above 3000 mg/day exceed maximum recommended outpatient threshold."
+    },
+    {
+      "medicine": "Aspirin",
+      "maxSingleDoseMg": 1000,
+      "maxDailyDoseMg": 4000,
+      "unit": "mg",
+      "warning": "High-dose Aspirin increases gastrointestinal bleeding and salicylate toxicity risk."
+    },
+    {
+      "medicine": "Warfarin",
+      "maxSingleDoseMg": 10,
+      "maxDailyDoseMg": 15,
+      "unit": "mg",
+      "warning": "Warfarin daily dose exceeding 15 mg significantly increases life-threatening hemorrhage risk."
+    },
+    {
+      "medicine": "Ibuprofen",
+      "maxSingleDoseMg": 800,
+      "maxDailyDoseMg": 2400,
+      "unit": "mg",
+      "warning": "Ibuprofen daily dose exceeding 2400 mg increases GI bleeding and cardiovascular risk."
+    },
+    {
+      "medicine": "Metformin",
+      "maxSingleDoseMg": 1000,
+      "maxDailyDoseMg": 2550,
+      "unit": "mg",
+      "warning": "Metformin dose exceeding 2550 mg/day increases risk of lactic acidosis."
+    },
+    {
+      "medicine": "Amlodipine",
+      "maxSingleDoseMg": 10,
+      "maxDailyDoseMg": 10,
+      "unit": "mg",
+      "warning": "Amlodipine dose above 10 mg/day increases risk of peripheral edema and hypotension."
+    }
+  ]
+}

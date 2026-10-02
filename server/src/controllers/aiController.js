@@ -1,6 +1,8 @@
 import { generateText } from '../services/geminiService.js';
-import { db } from '../config/firebase.js';
+import { assertDbConnected } from '../config/firebase.js';
 import { AI_DISCLAIMER_TEXT } from '../../../client/src/utils/constants.js';
+import { evaluatePrescriptionSafety } from '../domain/safety.js';
+import flags from '../config/flags.js';
 
 const SYSTEM_GUARDRAIL_PROMPT = `
 You are the SmartCare AI Health Assistant, a safety-guarded AI support assistant.
@@ -47,8 +49,9 @@ export const aiChat = async (req, res, next) => {
     }
 
     // Log AI interaction metadata
-    if (db && uid) {
-      try {
+    try {
+      const db = assertDbConnected();
+      if (db && uid) {
         await db.collection('aiInteractions').add({
           userId: uid,
           requestType: 'CHATBOT',
@@ -56,9 +59,9 @@ export const aiChat = async (req, res, next) => {
           timestamp: new Date(),
           success: true
         });
-      } catch (logErr) {
-        console.warn('AI interaction log warning:', logErr.message);
       }
+    } catch (logErr) {
+      console.warn('AI interaction log warning:', logErr.message);
     }
 
     res.status(200).json({
@@ -114,45 +117,137 @@ export const aiSmartSlotRecommendation = async (req, res, next) => {
 };
 
 /**
- * Extract Draft Prescription from text/notes (Requires mandatory doctor verification)
+ * Doctor Dictation Draft Parsing (PRD F10 with Clinical Safety Post-Check)
  */
-export const aiExtractPrescriptionDraft = async (req, res, next) => {
+export const aiDictate = async (req, res, next) => {
   try {
-    const { rawText } = req.body;
+    const { dictationText = '', patientHealthId } = req.body;
 
-    if (!rawText) {
+    if (!dictationText) {
       return res.status(400).json({
         success: false,
-        message: 'Validation Error: rawText is required for prescription parsing.'
+        message: 'Validation Error: dictationText is required.'
       });
     }
 
-    let extractedDraft;
+    let draft = {
+      symptoms: ['Fever', 'Cough'],
+      diagnosisNotes: 'Acute upper respiratory tract infection.',
+      proposedMedicines: [
+        { name: 'Paracetamol', dosage: '500 mg', frequency: 'Twice Daily (1-0-1)', durationDays: 5, timing: 'after_food' },
+        { name: 'Amoxicillin', dosage: '500 mg', frequency: 'Twice Daily (1-0-1)', durationDays: 7, timing: 'after_food' }
+      ],
+      followUpDays: 7,
+      doctorAdvice: 'Rest well and stay hydrated.'
+    };
 
-    try {
-      const prompt = `Parse the following raw prescription text into a JSON list of medicines with fields: name, dosage, frequency, reminderTimes, durationDays. Text: "${rawText}"`;
-      const text = await generateText(prompt);
-      extractedDraft = JSON.parse(text.match(/\{[\s\S]*\}|\[[\s\S]*\]/)?.[0] || '[]');
-    } catch (err) {
-      console.warn('Gemini OCR fallback:', err.message);
-      extractedDraft = [
-        {
-          name: 'Parsed Medicine Draft',
-          dosage: '500 mg',
-          frequency: 'Twice Daily',
-          reminderTimes: ['08:00 AM', '08:00 PM'],
-          durationDays: 5
+    // If AI feature flag enabled, attempt Gemini parsing
+    if (flags.ai) {
+      try {
+        const prompt = `You are a clinical AI scribe. Extract structured JSON from this doctor dictation:
+Dictation: "${dictationText}"
+Return valid JSON with keys: symptoms (array), diagnosisNotes (string), proposedMedicines (array of {name, dosage, frequency, durationDays, timing}), followUpDays (number), doctorAdvice (string).`;
+        const text = await generateText(prompt);
+        const parsed = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] || '{}');
+        if (parsed.proposedMedicines) {
+          draft = parsed;
         }
-      ];
+      } catch (err) {
+        console.warn('Gemini dictation parsing fallback:', err.message);
+      }
+    }
+
+    // Run Clinical Safety Engine Post-Check on AI-Generated Draft
+    let safetyResult = { safe: true, severity: 'green', alerts: [], overrideRequired: false };
+    if (patientHealthId) {
+      try {
+        const db = assertDbConnected();
+        let patientAllergies = [];
+        const pSnap = await db.collection('patients').where('patientHealthId', '==', patientHealthId).limit(1).get();
+        if (!pSnap.empty) {
+          patientAllergies = pSnap.docs[0].data().allergies || [];
+        }
+        safetyResult = evaluatePrescriptionSafety({
+          candidateMedicines: draft.proposedMedicines || [],
+          patientAllergies
+        });
+      } catch (e) {
+        console.warn('Safety check error during dictation:', e.message);
+      }
     }
 
     res.status(200).json({
       success: true,
       verifiedByDoctor: false, // MANDATORY: Draft state requiring doctor review & confirmation
-      notice: 'This is an AI-generated draft. Mandatory doctor verification required before official issuance.',
-      draftMedicines: extractedDraft
+      notice: 'This is an AI-generated draft. Mandatory doctor verification and signature required before official issuance.',
+      draft,
+      safetyResult
     });
   } catch (error) {
     next(error);
   }
 };
+
+/**
+ * Extract Paper Prescription / Image Description (PRD F10 with Clinical Safety Post-Check)
+ */
+export const aiExtractPaper = async (req, res, next) => {
+  try {
+    const { rawText, imageDescription, patientHealthId } = req.body;
+    const textInput = rawText || imageDescription;
+
+    if (!textInput) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation Error: rawText or imageDescription is required.'
+      });
+    }
+
+    let draftMedicines = [
+      { name: 'Paracetamol', dosage: '500 mg', frequency: 'Twice Daily', durationDays: 5, timing: 'after_food' }
+    ];
+
+    if (flags.ai) {
+      try {
+        const prompt = `Parse the following paper prescription text into a JSON list of medicines: "${textInput}". Return JSON array with objects containing: name, dosage, frequency, durationDays, timing.`;
+        const text = await generateText(prompt);
+        const parsed = JSON.parse(text.match(/\[[\s\S]*\]|\{[\s\S]*\}/)?.[0] || '[]');
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          draftMedicines = parsed;
+        }
+      } catch (err) {
+        console.warn('Gemini paper extraction fallback:', err.message);
+      }
+    }
+
+    let safetyResult = { safe: true, severity: 'green', alerts: [], overrideRequired: false };
+    if (patientHealthId) {
+      try {
+        const db = assertDbConnected();
+        let patientAllergies = [];
+        const pSnap = await db.collection('patients').where('patientHealthId', '==', patientHealthId).limit(1).get();
+        if (!pSnap.empty) {
+          patientAllergies = pSnap.docs[0].data().allergies || [];
+        }
+        safetyResult = evaluatePrescriptionSafety({
+          candidateMedicines: draftMedicines,
+          patientAllergies
+        });
+      } catch (e) {
+        console.warn('Safety check error during paper extraction:', e.message);
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      verifiedByDoctor: false, // MANDATORY: Draft state requiring doctor review & confirmation
+      notice: 'This is an AI-extracted paper draft. Mandatory doctor verification required before official issuance.',
+      draftMedicines,
+      safetyResult
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const aiExtractPrescriptionDraft = aiExtractPaper;

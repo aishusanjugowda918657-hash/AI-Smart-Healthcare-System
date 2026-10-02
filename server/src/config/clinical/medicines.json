@@ -1,0 +1,105 @@
+{
+  "_notice": "Clinical Medicine Master Dataset & Formulations (PRD F9)",
+  "medicines": [
+    {
+      "id": "med-paracetamol",
+      "name": "Paracetamol",
+      "brandNames": ["Crocin", "Dolo 650", "Calpol", "Tylenol"],
+      "activeIngredient": "Paracetamol",
+      "drugClass": "Analgesic / Antipyretic",
+      "defaultDosage": "500 mg",
+      "forms": ["Tablet", "Syrup"],
+      "allergiesTriggered": ["paracetamol", "acetaminophen"]
+    },
+    {
+      "id": "med-amoxicillin",
+      "name": "Amoxicillin",
+      "brandNames": ["Mox 500", "Amoxil", "Novamox"],
+      "activeIngredient": "Amoxicillin",
+      "drugClass": "Penicillin Antibiotic",
+      "defaultDosage": "500 mg",
+      "forms": ["Capsule", "Syrup"],
+      "allergiesTriggered": ["penicillin", "amoxicillin", "beta-lactam"]
+    },
+    {
+      "id": "med-aspirin",
+      "name": "Aspirin",
+      "brandNames": ["Ecosprin", "Disprin", "Bayer"],
+      "activeIngredient": "Aspirin",
+      "drugClass": "NSAID / Antiplatelet",
+      "defaultDosage": "75 mg",
+      "forms": ["Tablet"],
+      "allergiesTriggered": ["aspirin", "nsaid", "salicylate"]
+    },
+    {
+      "id": "med-warfarin",
+      "name": "Warfarin",
+      "brandNames": ["Coumadin", "Marevan"],
+      "activeIngredient": "Warfarin",
+      "drugClass": "Anticoagulant",
+      "defaultDosage": "5 mg",
+      "forms": ["Tablet"],
+      "allergiesTriggered": ["warfarin"]
+    },
+    {
+      "id": "med-metformin",
+      "name": "Metformin",
+      "brandNames": ["Glycomet", "Glucophage"],
+      "activeIngredient": "Metformin",
+      "drugClass": "Biguanide Antidiabetic",
+      "defaultDosage": "500 mg",
+      "forms": ["Tablet"],
+      "allergiesTriggered": ["metformin"]
+    },
+    {
+      "id": "med-amlodipine",
+      "name": "Amlodipine",
+      "brandNames": ["Amlong", "Norvasc"],
+      "activeIngredient": "Amlodipine",
+      "drugClass": "Calcium Channel Blocker",
+      "defaultDosage": "5 mg",
+      "forms": ["Tablet"],
+      "allergiesTriggered": ["amlodipine"]
+    },
+    {
+      "id": "med-ibuprofen",
+      "name": "Ibuprofen",
+      "brandNames": ["Brufen", "Advil", "Motrin"],
+      "activeIngredient": "Ibuprofen",
+      "drugClass": "NSAID",
+      "defaultDosage": "400 mg",
+      "forms": ["Tablet"],
+      "allergiesTriggered": ["ibuprofen", "nsaid"]
+    },
+    {
+      "id": "med-ciprofloxacin",
+      "name": "Ciprofloxacin",
+      "brandNames": ["Cifran", "Cipro"],
+      "activeIngredient": "Ciprofloxacin",
+      "drugClass": "Fluoroquinolone Antibiotic",
+      "defaultDosage": "500 mg",
+      "forms": ["Tablet"],
+      "allergiesTriggered": ["ciprofloxacin", "fluoroquinolone"]
+    },
+    {
+      "id": "med-pantoprazole",
+      "name": "Pantoprazole",
+      "brandNames": ["Pan 40", "Pantocid"],
+      "activeIngredient": "Pantoprazole",
+      "drugClass": "Proton Pump Inhibitor",
+      "defaultDosage": "40 mg",
+      "forms": ["Tablet"],
+      "allergiesTriggered": ["pantoprazole", "ppi"]
+    },
+    {
+      "id": "med-cetirizine",
+      "name": "Cetirizine",
+      "brandNames": ["Cetzine", "Zyrtec"],
+      "activeIngredient": "Cetirizine",
+      "drugClass": "Antihistamine",
+      "defaultDosage": "10 mg",
+      "forms": ["Tablet"],
+      "allergiesTriggered": ["cetirizine"]
+    }
+  ]
+}

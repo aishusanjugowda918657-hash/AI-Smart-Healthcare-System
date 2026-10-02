@@ -38,6 +38,10 @@ import ConsultationWorkspace from './components/doctor/ConsultationWorkspace';
 import ScheduleConfigurator from './components/doctor/ScheduleConfigurator';
 import FollowUpList from './components/doctor/FollowUpList';
 
+import PharmacyVerifyPage from './pages/PharmacyVerifyPage';
+import PatientHistoryTimelinePage from './pages/PatientHistoryTimelinePage';
+import ReportUploadPage from './pages/ReportUploadPage';
+
 import ManageDoctors from './components/admin/ManageDoctors';
 import ManageDepartments from './components/admin/ManageDepartments';
 import ManagePatients from './components/admin/ManagePatients';
@@ -88,8 +92,13 @@ export const App = () => {
                       <Route path="/family" element={<FamilyMembersManager />} />
                       <Route path="/caregivers" element={<CaregiverManager />} />
                       <Route path="/preferences" element={<UserPreferences />} />
-                      <Route path="/medical-history" element={<HealthIdCard />} />
+                      <Route path="/medical-history" element={<PatientHistoryTimelinePage />} />
+                      <Route path="/patient-history" element={<PatientHistoryTimelinePage />} />
+                      <Route path="/diagnostic-reports" element={<ReportUploadPage />} />
+                      <Route path="/reports" element={<ReportUploadPage />} />
                       <Route path="/prescriptions" element={<PrescriptionViewer />} />
+                      <Route path="/pharmacy/verify" element={<PharmacyVerifyPage />} />
+                      <Route path="/pharmacy" element={<PharmacyVerifyPage />} />
                       <Route path="/medicine-reminders" element={<MedicineTracker />} />
                       <Route path="/notifications" element={<NotificationsPage />} />
                       <Route path="/ai-chat" element={<ChatbotPage />} />
