@@ -305,3 +305,114 @@ export function calculateDayFillLevel(slots = []) {
     label: `${bookedCount} / ${activeCapacity} Booked`
   };
 }
+
+/**
+ * Smart Slot Suggestion Engine (PRD Section 5.3)
+ * Calculates multi-factor scores (earliness, quietness, travelFit, continuity)
+ * and returns up to 3 recommendation cards.
+ */
+export function getSmartSlotSuggestions({
+  slots = [],
+  dateStr = new Date().toISOString().split('T')[0],
+  travelMinutes = null,
+  previousDoctorId = null,
+  currentDoctorId = null,
+  nowMs = Date.now()
+}) {
+  const availableSlots = slots.filter((s) => s.status === SlotStatus.FREE || s.status === SlotStatus.RESERVED);
+
+  if (availableSlots.length === 0) {
+    return {
+      cards: [],
+      fullList: []
+    };
+  }
+
+  const scoredSlots = availableSlots.map((slot, index) => {
+    // 1. Earliness: earlier slots in the day score higher (norm 0..1)
+    const earliness = 1 - (index / Math.max(availableSlots.length - 1, 1));
+
+    // 2. Quietness: slots surrounding fewer booked slots score higher
+    const slotMin = HHmmToMinutes(slot.startAt);
+    const nearbyBooked = slots.filter((s) => {
+      if (s.status !== SlotStatus.BOOKED) return false;
+      const m = HHmmToMinutes(s.startAt);
+      return Math.abs(m - slotMin) <= 30;
+    }).length;
+    const quietness = 1 - Math.min(nearbyBooked / 6, 1);
+
+    // 3. Travel Fit: check if travel time allows reaching on time
+    let travelFit = 0.5;
+    if (typeof travelMinutes === 'number' && travelMinutes > 0) {
+      const checkinBuffer = 10;
+      const leaveAtMin = slotMin - checkinBuffer - travelMinutes - 5;
+      const currentMin = new Date(nowMs).getHours() * 60 + new Date(nowMs).getMinutes();
+      if (leaveAtMin >= currentMin + 5 && leaveAtMin >= 360 && leaveAtMin <= 1260) {
+        travelFit = 1.0;
+      } else {
+        travelFit = 0.1;
+      }
+    }
+
+    // 4. Continuity bonus if doctor matches previous doctor
+    const continuity = (previousDoctorId && currentDoctorId && previousDoctorId === currentDoctorId) ? 1.0 : 0.0;
+
+    const score = Number((0.35 * earliness + 0.35 * quietness + 0.20 * travelFit + 0.10 * continuity).toFixed(3));
+
+    return {
+      slot,
+      score,
+      earliness,
+      quietness,
+      travelFit,
+      continuity
+    };
+  });
+
+  // Sort by score descending
+  scoredSlots.sort((a, b) => b.score - a.score);
+
+  const earliestCandidate = availableSlots[0];
+  const quietestCandidate = [...scoredSlots].sort((a, b) => b.quietness - a.quietness)[0]?.slot || availableSlots[0];
+
+  const cards = [];
+
+  if (earliestCandidate) {
+    cards.push({
+      type: 'earliest',
+      label: 'Earliest Available',
+      slotId: earliestCandidate.id,
+      startAt: earliestCandidate.startAt,
+      reason: 'Gets you seen as soon as possible today.'
+    });
+  }
+
+  if (quietestCandidate && quietestCandidate.id !== earliestCandidate?.id) {
+    cards.push({
+      type: 'quietest',
+      label: 'Shortest Expected Wait',
+      slotId: quietestCandidate.id,
+      startAt: quietestCandidate.startAt,
+      reason: 'Lowest expected clinic workload window.'
+    });
+  }
+
+  if (travelMinutes && travelMinutes > 0) {
+    const travelFitCandidate = [...scoredSlots].sort((a, b) => b.travelFit - a.travelFit)[0]?.slot;
+    if (travelFitCandidate && !cards.some((c) => c.slotId === travelFitCandidate.id)) {
+      cards.push({
+        type: 'travelFit',
+        label: 'Best for Your Travel',
+        slotId: travelFitCandidate.id,
+        startAt: travelFitCandidate.startAt,
+        reason: `Ideal time for your ${travelMinutes}-minute commute.`
+      });
+    }
+  }
+
+  return {
+    cards: cards.slice(0, 3),
+    fullList: slots
+  };
+}
+}

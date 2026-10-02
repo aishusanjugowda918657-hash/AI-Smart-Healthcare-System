@@ -1,0 +1,97 @@
+{
+  "_notice": "Clinical Triage Red Flag Rules & Multi-Language Symptom Pattern Dataset (PRD F4)",
+  "categories": [
+    {
+      "id": "cardiac",
+      "name": "Cardiac Emergency",
+      "level": 3,
+      "urgencySuggested": "emergency",
+      "departmentId": "dept-card",
+      "emergencyMessage": "CRITICAL EMERGENCY ALERT: Severe chest pain or suspected cardiac distress detected. Please go to the nearest Emergency Room immediately or dial 108 / Emergency Services.",
+      "patterns": [
+        "chest pain",
+        "chest tightness",
+        "chest pressure",
+        "heart attack",
+        "chhati me dard",
+        "chhati dard",
+        "dil ka daura",
+        "nenju vali",
+        "nenjil vali",
+        "edeyalli novu",
+        "hrudayaagatha"
+      ]
+    },
+    {
+      "id": "respiratory_severe",
+      "name": "Severe Respiratory Distress",
+      "level": 3,
+      "urgencySuggested": "emergency",
+      "departmentId": "dept-gen",
+      "emergencyMessage": "CRITICAL EMERGENCY ALERT: Severe breathing difficulty detected. Seek immediate emergency medical care.",
+      "patterns": [
+        "cannot breathe",
+        "shortness of breath",
+        "difficulty breathing",
+        "gasping for air",
+        "breathlessness",
+        "saans lene me takleef",
+        "saans phoolna",
+        "usiru kattuvike",
+        "moochu thinaral"
+      ]
+    },
+    {
+      "id": "neurological",
+      "name": "Acute Neurological / Stroke",
+      "level": 3,
+      "urgencySuggested": "emergency",
+      "departmentId": "dept-gen",
+      "emergencyMessage": "CRITICAL EMERGENCY ALERT: Sudden paralysis, numbness, or loss of consciousness detected. Immediate emergency evaluation required.",
+      "patterns": [
+        "sudden weakness",
+        "paralysis",
+        "stroke",
+        "unconscious",
+        "fainted",
+        "loss of consciousness",
+        "behosh",
+        "lakwa",
+        "svabodhina",
+        "fainting"
+      ]
+    },
+    {
+      "id": "fever_high",
+      "name": "High Fever & Severe Symptoms",
+      "level": 2,
+      "urgencySuggested": "urgent",
+      "departmentId": "dept-gen",
+      "emergencyMessage": "URGENT MEDICAL ALERT: High fever detected. Urgent medical consultation recommended today.",
+      "patterns": [
+        "high fever",
+        "fever over 102",
+        "tez bukhar",
+        "teevra jwara",
+        "kadu kaichal",
+        "chills and fever"
+      ]
+    },
+    {
+      "id": "pediatric_urgent",
+      "name": "Pediatric Acute Symptom",
+      "level": 2,
+      "urgencySuggested": "urgent",
+      "departmentId": "dept-ped",
+      "emergencyMessage": "URGENT PEDIATRIC ALERT: Acute pediatric illness detected. Prompt evaluation by a pediatrician recommended.",
+      "patterns": [
+        "baby high fever",
+        "child vomiting",
+        "infant breathlessness",
+        "bachhe ko bukhar",
+        "maguvige jwara",
+        "kulandhai kaichal"
+      ]
+    }
+  ]
+}

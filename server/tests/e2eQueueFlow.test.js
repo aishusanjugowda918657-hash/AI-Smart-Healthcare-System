@@ -214,8 +214,8 @@ describe('Phase 6 & 7 - Full E2E Patient Live Queue Workflow Verification', () =
     const patientA = `patient-a-${Date.now()}`;
     const patientB = `patient-b-${Date.now()}`;
     const doctorUid = 'doc-uid-001';
-    const testDate = `2029-01-${Math.floor(10 + Math.random() * 15)}`;
-    const slotB = `${Math.floor(10 + Math.random() * 10)}:30`;
+    const testDate = `2035-02-${Math.floor(10 + Math.random() * 15)}`;
+    const slotB = `${Math.floor(8 + Math.random() * 8)}:15`;
 
     // Patient B books
     const bookB = await request(app)

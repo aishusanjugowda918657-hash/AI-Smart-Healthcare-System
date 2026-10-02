@@ -1,46 +1,32 @@
 /**
- * Rule-Based Fallbacks for AI Layer
- * Defined as per PRD Section 3.5 & 9.4
+ * Rule-Based AI Fallbacks (PRD Section 9.1)
+ * Used when FLAG_AI=false or Gemini API is unreachable
  */
+import { ClinicalLevel, Complexity, VisitType } from '../domain/constants.js';
 
-export const getTriageFallback = (text = '') => {
-  return {
-    department: 'General Medicine',
-    visitType: 'routine',
-    complexity: 'moderate',
-    urgencySuggested: 1, // Routine
-    redFlagSuspected: false,
-    followUpQuestion: null,
-    source: 'rule_fallback'
-  };
-};
+export function getTriageFallback(reasonText = '') {
+  const lower = reasonText.toLowerCase();
 
-export const getChatFallback = () => {
-  return {
-    reply: "I am currently running in offline rule mode. How may I assist you today? You can choose one of the quick options below.",
-    quickChips: [
-      { label: "Book Appointment", action: "book" },
-      { label: "My Token Status", action: "status" },
-      { label: "Doctor Timings", action: "timings" },
-      { label: "Talk to Staff", action: "staff" }
-    ],
-    source: 'rule_fallback'
-  };
-};
+  let departmentId = 'dept-gen';
+  if (lower.includes('heart') || lower.includes('chest') || lower.includes('cardio')) {
+    departmentId = 'dept-card';
+  } else if (lower.includes('child') || lower.includes('baby') || lower.includes('pediatric')) {
+    departmentId = 'dept-ped';
+  } else if (lower.includes('bone') || lower.includes('joint') || lower.includes('fracture')) {
+    departmentId = 'dept-ortho';
+  } else if (lower.includes('skin') || lower.includes('rash')) {
+    departmentId = 'dept-derm';
+  }
 
-export const getDoctorAgentFallback = () => {
-  return {
-    reply: "The AI assistant is currently unavailable. Please use the patient search and medical history screens to view patient records directly.",
-    sources: [],
-    source: 'rule_fallback'
-  };
-};
+  const visitType = lower.includes('follow') || lower.includes('checkup') ? VisitType.FOLLOWUP : VisitType.NEW;
+  const complexity = lower.includes('severe') || lower.includes('chronic') ? Complexity.COMPLEX : Complexity.MODERATE;
 
-export const getSummaryFallback = (facts = {}) => {
-  const age = facts.age || 'Patient';
-  const reason = facts.reason || 'Routine consultation';
   return {
-    oneLine: `${facts.patientName || 'Patient'} (${age}y) presents for ${reason}.`,
-    source: 'template_fallback'
+    departmentId,
+    visitType,
+    complexity,
+    urgencySuggested: 'routine',
+    clinicalLevel: ClinicalLevel.ROUTINE,
+    followUpQuestion: 'How long have you had these symptoms?'
   };
-};
+}
