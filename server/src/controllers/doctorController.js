@@ -1,5 +1,6 @@
 import { assertDbConnected } from '../config/firebase.js';
-import { generateAvailableSlots } from '../services/slotGenerator.js';
+import { AppError, formatSuccessResponse } from '../utils/errors.js';
+import { generateSlotsForDoctorDate } from '../domain/slots.js';
 
 /**
  * List all active medical departments
@@ -7,17 +8,14 @@ import { generateAvailableSlots } from '../services/slotGenerator.js';
 export const getDepartments = async (req, res, next) => {
   try {
     const db = assertDbConnected();
-    const snapshot = await db.collection('departments').where('active', '==', true).get();
+    const snapshot = await db.collection('departments').get();
     
     const departments = snapshot.docs.map((doc) => ({
       id: doc.id,
       ...doc.data()
     }));
 
-    res.status(200).json({
-      success: true,
-      data: departments
-    });
+    res.status(200).json(formatSuccessResponse(departments));
   } catch (error) {
     next(error);
   }
@@ -28,157 +26,195 @@ export const getDepartments = async (req, res, next) => {
  */
 export const createDepartment = async (req, res, next) => {
   try {
-    const { name, code, description = '' } = req.body;
-    if (!name || !code) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation Error: Department Name and Code are required.'
-      });
+    const { name, letter, code, description = '', defaultDurationsMin } = req.body;
+    if (!name || (!letter && !code)) {
+      throw new AppError('VALIDATION_ERROR', 'Department Name and Letter/Code are required.', 400);
     }
 
     const db = assertDbConnected();
-    const id = `dept-${code.toLowerCase()}`;
+    const deptLetter = (letter || code || 'G').toUpperCase().substring(0, 1);
+    const id = req.body.id || `dept-${deptLetter.toLowerCase()}`;
+
     const deptData = {
       id,
       name,
-      code: code.toUpperCase(),
+      letter: deptLetter,
+      code: (code || deptLetter).toUpperCase(),
       description,
+      defaultDurationsMin: defaultDurationsMin || {
+        new: { simple: 10, moderate: 20, complex: 30 },
+        followup: { simple: 10, moderate: 15, complex: 20 },
+        report_review: { simple: 10 },
+        procedure: { simple: 30 }
+      },
       active: true,
-      createdAt: new Date()
+      createdAt: new Date(),
+      updatedAt: new Date()
     };
 
     await db.collection('departments').doc(id).set(deptData, { merge: true });
 
-    res.status(201).json({
-      success: true,
-      message: 'Department created successfully.',
-      data: deptData
-    });
+    res.status(201).json(formatSuccessResponse(deptData));
   } catch (error) {
     next(error);
   }
 };
 
 /**
- * List active doctors
+ * List active doctors, filterable by departmentId query param
  */
 export const getDoctors = async (req, res, next) => {
   try {
+    const { departmentId } = req.query;
     const db = assertDbConnected();
-    const snapshot = await db.collection('doctors').get();
+
+    let query = db.collection('doctors');
+    if (departmentId) {
+      query = query.where('departmentId', '==', departmentId);
+    }
+
+    const snapshot = await query.get();
     
     const doctors = snapshot.docs.map((doc) => ({
       id: doc.id,
       ...doc.data()
     }));
 
-    res.status(200).json({
-      success: true,
-      data: doctors
-    });
+    res.status(200).json(formatSuccessResponse(doctors));
   } catch (error) {
     next(error);
   }
 };
 
 /**
- * Configure/Update Doctor Working Schedule
+ * Get Doctor Details by ID (UID or doctorId)
+ */
+export const getDoctorById = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const db = assertDbConnected();
+
+    let docSnap = await db.collection('doctors').doc(id).get();
+    if (!docSnap.exists) {
+      const qSnap = await db.collection('doctors').where('doctorId', '==', id).limit(1).get();
+      if (!qSnap.empty) {
+        docSnap = qSnap.docs[0];
+      }
+    }
+
+    if (!docSnap || !docSnap.exists) {
+      throw new AppError('NOT_FOUND', `Doctor '${id}' not found.`, 404);
+    }
+
+    const doctorData = {
+      id: docSnap.id,
+      ...docSnap.data()
+    };
+
+    // Attach department information if available
+    if (doctorData.departmentId) {
+      const deptSnap = await db.collection('departments').doc(doctorData.departmentId).get();
+      if (deptSnap.exists) {
+        doctorData.department = deptSnap.data();
+      }
+    }
+
+    res.status(200).json(formatSuccessResponse(doctorData));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Configure/Update Doctor Working Schedule (Admin or Doctor)
  */
 export const saveDoctorSchedule = async (req, res, next) => {
   try {
-    const { doctorUid } = req.user;
+    const doctorId = req.params.id || req.user.doctorUid || req.user.uid;
     const {
-      workingDays = [1, 2, 3, 4, 5],
-      workingHours = { start: '09:00', end: '17:00' },
-      slotDurationMinutes = 15,
-      breakTimes = [{ start: '13:00', end: '14:00' }],
-      leaves = []
+      slotMinutes = 10,
+      bufferEverySlots = 6,
+      weekly = [],
+      lunch = { start: '13:00', end: '14:00' },
+      maxBookedPerSession
     } = req.body;
 
     const db = assertDbConnected();
 
-    // Verify doctor record exists
-    const docDoc = await db.collection('doctors').doc(doctorUid).get();
-    const doctorId = docDoc.exists ? docDoc.data().doctorId : 'DOC-001';
-
-    const scheduleData = {
-      id: `sched-${doctorUid}`,
-      doctorUid,
-      doctorId,
-      workingDays,
-      workingHours,
-      slotDurationMinutes,
-      breakTimes,
-      leaves,
-      updatedAt: new Date()
-    };
-
-    await db.collection('doctorSchedules').doc(`sched-${doctorUid}`).set(scheduleData, { merge: true });
-
-    res.status(200).json({
-      success: true,
-      message: 'Doctor working schedule configured successfully.',
-      data: scheduleData
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * Get available slots for a doctor on a specific date
- */
-export const getDoctorAvailableSlots = async (req, res, next) => {
-  try {
-    const { doctorUid } = req.params;
-    const { date } = req.query;
-
-    if (!date) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation Error: Date parameter (YYYY-MM-DD) is required.'
-      });
+    let doctorRef = db.collection('doctors').doc(doctorId);
+    let docSnap = await doctorRef.get();
+    if (!docSnap.exists) {
+      const qSnap = await db.collection('doctors').where('doctorId', '==', doctorId).limit(1).get();
+      if (!qSnap.empty) {
+        doctorRef = qSnap.docs[0].ref;
+        docSnap = qSnap.docs[0];
+      }
     }
 
-    const db = assertDbConnected();
+    if (!docSnap.exists) {
+      throw new AppError('NOT_FOUND', `Doctor record '${doctorId}' not found.`, 404);
+    }
 
-    // 1. Fetch Doctor Schedule
-    const schedDoc = await db.collection('doctorSchedules').doc(`sched-${doctorUid}`).get();
-    
-    // Default fallback schedule if doctor has not customized schedule yet
-    const schedule = schedDoc.exists
-      ? schedDoc.data()
-      : {
-          doctorUid,
-          workingDays: [1, 2, 3, 4, 5],
-          workingHours: { start: '09:00', end: '17:00' },
-          slotDurationMinutes: 15,
-          breakTimes: [{ start: '13:00', end: '14:00' }],
-          leaves: []
-        };
+    const scheduleObj = {
+      slotMinutes: Number(slotMinutes) || 10,
+      bufferEverySlots: Number(bufferEverySlots) || 6,
+      weekly: Array.isArray(weekly) && weekly.length > 0 ? weekly : [
+        { dayOfWeek: 1, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] },
+        { dayOfWeek: 2, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] },
+        { dayOfWeek: 3, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] },
+        { dayOfWeek: 4, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] },
+        { dayOfWeek: 5, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] }
+      ],
+      lunch: lunch || { start: '13:00', end: '14:00' },
+      maxBookedPerSession: maxBookedPerSession || null
+    };
 
-    // 2. Fetch Existing Appointments for doctor on target date
-    const apptsSnapshot = await db
-      .collection('appointments')
-      .where('doctorUid', '==', doctorUid)
-      .where('date', '==', date)
-      .get();
-
-    const existingAppointments = apptsSnapshot.docs.map((d) => d.data());
-
-    // 3. Generate slots using deterministic engine
-    const availableSlots = generateAvailableSlots({
-      schedule,
-      existingAppointments,
-      targetDateStr: date
+    await doctorRef.update({
+      schedule: scheduleObj,
+      updatedAt: new Date()
     });
 
-    res.status(200).json({
-      success: true,
-      date,
-      doctorUid,
-      data: availableSlots
-    });
+    // Re-generate future slots for next 14 days with updated schedule
+    const targetDoctorId = docSnap.data().doctorId || docSnap.id;
+    const leavesSnap = await db.collection('leaves').where('doctorId', '==', targetDoctorId).get();
+    const leaves = leavesSnap.docs.map((d) => d.data());
+
+    const today = new Date();
+    for (let i = 0; i < 14; i++) {
+      const d = new Date(today);
+      d.setDate(today.getDate() + i);
+      const dateStr = d.toISOString().split('T')[0];
+
+      const existingSnap = await db
+        .collection('slots')
+        .where('doctorId', '==', targetDoctorId)
+        .where('date', '==', dateStr)
+        .get();
+
+      const existingSlots = existingSnap.docs.map((s) => ({ id: s.id, ...s.data() }));
+
+      const generated = generateSlotsForDoctorDate({
+        doctorId: targetDoctorId,
+        date: dateStr,
+        schedule: scheduleObj,
+        leaves,
+        existingSlots
+      });
+
+      if (generated.length > 0) {
+        const batch = db.batch();
+        generated.forEach((s) => {
+          batch.set(db.collection('slots').doc(s.id), { ...s, updatedAt: new Date() }, { merge: true });
+        });
+        await batch.commit();
+      }
+    }
+
+    res.status(200).json(formatSuccessResponse({
+      message: 'Doctor schedule updated and slots regenerated successfully.',
+      doctorId: targetDoctorId,
+      schedule: scheduleObj
+    }));
   } catch (error) {
     next(error);
   }

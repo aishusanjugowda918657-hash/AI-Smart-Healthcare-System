@@ -25,6 +25,7 @@ import notificationRoutes from './routes/notification.routes.js';
 import aiRoutes from './routes/ai.routes.js';
 import adminRoutes from './routes/admin.routes.js';
 import patientAgentRoutes from './routes/patientAgent.routes.js';
+import slotRoutes from './routes/slot.routes.js';
 
 const app = express();
 
@@ -89,6 +90,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/patient-agent', patientAgentRoutes);
+app.use('/api/slots', slotRoutes);
 
 // Error handling middleware
 app.use(errorHandler);
