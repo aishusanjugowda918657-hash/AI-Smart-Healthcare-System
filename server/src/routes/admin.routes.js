@@ -1,5 +1,12 @@
 import express from 'express';
-import { getAdminAnalyticsOverview, setUserRole } from '../controllers/adminController.js';
+import {
+  getAdminAnalyticsOverview,
+  setUserRole,
+  getSystemSettings,
+  updateSystemSettings,
+  getAuditLogs,
+  getClinicalLists
+} from '../controllers/adminController.js';
 import { adminMergePatients } from '../controllers/patientController.js';
 import { saveDoctorSchedule } from '../controllers/doctorController.js';
 import { adminGenerateSlots, adminCreateLeave, adminDeleteLeave } from '../controllers/slotController.js';
@@ -10,6 +17,11 @@ import { requireRole } from '../middleware/roleMiddleware.js';
 const router = express.Router();
 
 router.get('/analytics/overview', requireAuth, requireRole('admin'), getAdminAnalyticsOverview);
+router.get('/settings', requireAuth, requireRole('admin'), getSystemSettings);
+router.put('/settings', requireAuth, requireRole('admin'), updateSystemSettings);
+router.get('/audit-logs', requireAuth, requireRole('admin'), getAuditLogs);
+router.get('/clinical-lists', requireAuth, requireRole('admin'), getClinicalLists);
+
 router.post('/users/:uid/role', requireAuth, requireRole('admin'), setUserRole);
 router.post('/patients/merge', requireAuth, requireRole('admin'), adminMergePatients);
 
