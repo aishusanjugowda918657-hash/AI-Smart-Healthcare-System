@@ -10,6 +10,8 @@ import { formatSuccessResponse, formatErrorResponse } from './utils/errors.js';
 import { requireAuth } from './middleware/authMiddleware.js';
 import { requireRole } from './middleware/roleMiddleware.js';
 import { staffPatientLookup, acceptCaregiverInvite } from './controllers/patientController.js';
+import { registerDeviceToken, removeDeviceToken } from './controllers/notificationController.js';
+import { runSchedulerJobs } from './jobs/scheduler.js';
 
 import authRoutes from './routes/auth.routes.js';
 import patientRoutes from './routes/patient.routes.js';
@@ -57,22 +59,35 @@ app.get('/api/health', (req, res) => {
   }));
 });
 
-// Protected Internal Tick Endpoint
-app.post('/api/internal/tick', (req, res) => {
+// Protected Internal Tick Endpoint (PRD Section 7, 3.5)
+// Runs all scheduler jobs once — safe for external pingers (cron-job.org)
+app.post('/api/internal/tick', async (req, res) => {
   const secretHeader = req.headers['x-tick-secret'];
   if (secretHeader !== env.INTERNAL_TICK_SECRET) {
     return res.status(403).json(formatErrorResponse('FORBIDDEN', 'Invalid internal tick secret'));
   }
 
-  return res.status(200).json(formatSuccessResponse({
-    ticked: true,
-    at: new Date().toISOString()
-  }));
+  try {
+    const results = await runSchedulerJobs();
+    return res.status(200).json(formatSuccessResponse({
+      ticked: true,
+      at: new Date().toISOString(),
+      results
+    }));
+  } catch (err) {
+    // Never crash — log and respond
+    console.error('❌ Internal tick error:', err.message);
+    return res.status(200).json(formatSuccessResponse({ ticked: true, at: new Date().toISOString(), error: err.message }));
+  }
 });
 
 // Staff Lookup & Invites Endpoints (PRD F1)
 app.get('/api/staff/patients/lookup', requireAuth, requireRole('doctor', 'nurse', 'reception', 'admin'), staffPatientLookup);
 app.post('/api/invites/:healthId/accept', requireAuth, acceptCaregiverInvite);
+
+// Device token management (PRD F8 — client registers FCM token after permission granted)
+app.post('/api/me/devices', requireAuth, registerDeviceToken);
+app.delete('/api/me/devices', requireAuth, removeDeviceToken);
 
 // Rate limiting
 app.use('/api/', apiRateLimiter);

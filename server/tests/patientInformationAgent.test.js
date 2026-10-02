@@ -1,11 +1,67 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import app from '../src/app.js';
 import * as geminiService from '../src/services/geminiService.js';
+import { assertDbConnected } from '../src/config/firebase.js';
 
 import { fallbackParseQuestion } from '../src/services/patientAgentService.js';
 
+// Seeded patient IDs for cleanup
+const SEEDED_IDS = ['test-john-doe-001', 'test-uncle-bob-001', 'test-uncle-bob-002', 'test-kavita-patel-001'];
+
 describe('Phase 17 - Natural-Language Patient Information Agent API', () => {
+  beforeAll(async () => {
+    const db = assertDbConnected();
+    const batch = db.batch();
+
+    // Single patient: John Doe
+    batch.set(db.collection('patients').doc('test-john-doe-001'), {
+      id: 'test-john-doe-001',
+      fullName: 'John Doe',
+      nameLower: 'john doe',
+      age: 35,
+      conditions: ['Hypertension', 'Type 2 Diabetes'],
+      createdAt: new Date()
+    });
+
+    // Duplicate patient: Uncle Bob (×2)
+    batch.set(db.collection('patients').doc('test-uncle-bob-001'), {
+      id: 'test-uncle-bob-001',
+      fullName: 'Uncle Bob',
+      nameLower: 'uncle bob',
+      age: 55,
+      conditions: ['Arthritis'],
+      createdAt: new Date()
+    });
+    batch.set(db.collection('patients').doc('test-uncle-bob-002'), {
+      id: 'test-uncle-bob-002',
+      fullName: 'Uncle Bob',
+      nameLower: 'uncle bob',
+      age: 62,
+      conditions: ['Hypertension'],
+      createdAt: new Date()
+    });
+
+    // Patient with no prescriptions/followups: Kavita Patel
+    batch.set(db.collection('patients').doc('test-kavita-patel-001'), {
+      id: 'test-kavita-patel-001',
+      fullName: 'Kavita Patel',
+      nameLower: 'kavita patel',
+      age: 45,
+      conditions: [],
+      createdAt: new Date()
+    });
+
+    await batch.commit();
+  });
+
+  afterAll(async () => {
+    const db = assertDbConnected();
+    const batch = db.batch();
+    SEEDED_IDS.forEach((id) => batch.delete(db.collection('patients').doc(id)));
+    await batch.commit();
+  });
+
   beforeEach(() => {
     vi.spyOn(geminiService, 'generateText').mockImplementation(async (prompt) => {
       if (prompt.includes('NLP parsing engine')) {
@@ -15,6 +71,7 @@ describe('Phase 17 - Natural-Language Patient Information Agent API', () => {
         let name = '';
         if (/John Doe/i.test(q)) name = 'John Doe';
         if (/Uncle Bob/i.test(q)) name = 'Uncle Bob';
+        if (/Kavita Patel/i.test(q)) name = 'Kavita Patel';
         return JSON.stringify({ patientName: name, intent: parsed.intent });
       }
       throw new Error('Fallback to deterministic answer formatter in test');

@@ -10,7 +10,16 @@ let firebaseInitialized = false;
 
 try {
   if (admin.apps.length === 0) {
-    if (process.env.FIREBASE_SERVICE_ACCOUNT_PATH && fs.existsSync(process.env.FIREBASE_SERVICE_ACCOUNT_PATH)) {
+    const isEmulator = !!process.env.FIRESTORE_EMULATOR_HOST;
+
+    if (isEmulator) {
+      // When running against the local emulator, use a plain project-ID init.
+      // firebase-admin automatically detects FIRESTORE_EMULATOR_HOST at this point.
+      admin.initializeApp({
+        projectId: process.env.GCLOUD_PROJECT || process.env.VITE_FIREBASE_PROJECT_ID || 'demo-project',
+      });
+      firebaseInitialized = true;
+    } else if (process.env.FIREBASE_SERVICE_ACCOUNT_PATH && fs.existsSync(process.env.FIREBASE_SERVICE_ACCOUNT_PATH)) {
       const serviceAccount = JSON.parse(fs.readFileSync(process.env.FIREBASE_SERVICE_ACCOUNT_PATH, 'utf8'));
       admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
@@ -26,7 +35,7 @@ try {
         })
       });
       firebaseInitialized = true;
-    } else if (process.env.FIRESTORE_EMULATOR_HOST || process.env.VITE_FIREBASE_PROJECT_ID) {
+    } else if (process.env.VITE_FIREBASE_PROJECT_ID) {
       admin.initializeApp({
         projectId: process.env.VITE_FIREBASE_PROJECT_ID || 'demo-project'
       });
@@ -35,6 +44,7 @@ try {
   } else {
     firebaseInitialized = true;
   }
+
 
   if (firebaseInitialized) {
     db = admin.firestore();

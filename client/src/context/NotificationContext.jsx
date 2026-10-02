@@ -1,50 +1,53 @@
-import React, { createContext, useContext, useState } from 'react';
+/**
+ * Updated NotificationContext (PRD F8)
+ *
+ * Wraps the useNotifications hook to provide global notification state
+ * to any component in the tree, including the NotificationBell in the Navbar.
+ *
+ * Backward-compatibility aliases:
+ *  - markAsRead(id)  → markRead(id)
+ *  - n.message       → n.body (the API uses 'body'; Navbar uses 'message')
+ */
 
-const NotificationContext = createContext();
+import React, { createContext, useContext } from 'react';
+import { useNotifications as useNotificationsHook } from '../hooks/useNotifications.js';
+
+const NotificationContext = createContext(null);
 
 export const NotificationProvider = ({ children }) => {
-  const [notifications, setNotifications] = useState([
-    {
-      id: 'notif-1',
-      title: 'Welcome to AI Smart Healthcare',
-      message: 'Your Patient Health Account has been activated.',
-      type: 'system',
-      read: false,
-      createdAt: new Date().toISOString()
-    }
-  ]);
+  const state = useNotificationsHook();
 
-  const addNotification = (notif) => {
-    setNotifications((prev) => [
-      {
-        id: `notif-${Date.now()}`,
-        read: false,
-        createdAt: new Date().toISOString(),
-        ...notif
-      },
-      ...prev
-    ]);
+  // Normalise notification objects so both old and new field names work
+  const normalised = (state.notifications || []).map((n) => ({
+    ...n,
+    // Old code reads n.message; new API returns n.body
+    message: n.body || n.message || '',
+  }));
+
+  const value = {
+    ...state,
+    notifications: normalised,
+    // Backward-compat alias for Navbar
+    markAsRead: state.markRead,
+    // Maintain old clearAll for any existing consumers
+    clearAll: () => state.markAllRead(),
+    addNotification: () => {}, // no-op: server is source of truth now
   };
-
-  const markAsRead = (id) => {
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, read: true } : n))
-    );
-  };
-
-  const clearAll = () => {
-    setNotifications([]);
-  };
-
-  const unreadCount = notifications.filter((n) => !n.read).length;
 
   return (
-    <NotificationContext.Provider
-      value={{ notifications, addNotification, markAsRead, clearAll, unreadCount }}
-    >
+    <NotificationContext.Provider value={value}>
       {children}
     </NotificationContext.Provider>
   );
 };
 
-export const useNotifications = () => useContext(NotificationContext);
+export const useNotificationContext = () => {
+  const ctx = useContext(NotificationContext);
+  if (!ctx) throw new Error('useNotificationContext must be used within NotificationProvider');
+  return ctx;
+};
+
+// Named export used by Navbar and other components
+export const useNotifications = () => useNotificationContext();
+
+export default NotificationContext;

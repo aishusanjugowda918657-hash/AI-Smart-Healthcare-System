@@ -26,6 +26,7 @@ import DoctorDashboard from './pages/DoctorDashboard';
 import AdminDashboard from './pages/AdminDashboard';
 import ChatbotPage from './pages/ChatbotPage';
 import NotFound from './pages/NotFound';
+import NotificationsPage from './pages/NotificationsPage';
 import AppointmentBookingForm from './components/patient/AppointmentBookingForm';
 import LiveQueueTracker from './components/patient/LiveQueueTracker';
 import HealthIdCard from './components/patient/HealthIdCard';
@@ -90,6 +91,7 @@ export const App = () => {
                       <Route path="/medical-history" element={<HealthIdCard />} />
                       <Route path="/prescriptions" element={<PrescriptionViewer />} />
                       <Route path="/medicine-reminders" element={<MedicineTracker />} />
+                      <Route path="/notifications" element={<NotificationsPage />} />
                       <Route path="/ai-chat" element={<ChatbotPage />} />
                     </Route>
 

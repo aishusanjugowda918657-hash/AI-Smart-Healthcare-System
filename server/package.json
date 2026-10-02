@@ -11,7 +11,9 @@
     "seed:doctors": "node scripts/seedDemoDoctors.js",
     "seed:patients": "node scripts/seedDemoPatients.js",
     "backfill:name-lower": "node scripts/backfillNameLower.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:emu": "firebase emulators:exec --only firestore,auth \"vitest run\" --project demo-project"
+
   },
   "dependencies": {
     "@google/genai": "^2.23.0",
