@@ -20,6 +20,9 @@ import { SlotStatus } from '../domain/constants.js';
 import { clock } from '../utils/clock.js';
 import { notify } from '../services/notify.js';
 import { recalculateQueue } from '../services/queueService.js';
+import { processRemindersJob } from './processReminders.js';
+import { followupSweepJob } from './followupSweep.js';
+import { dailyDoctorAlertsJob } from './dailyDoctorAlerts.js';
 
 // ─────────────────────────────────────────────────────────────
 // PHASE 2 / 3 JOBS (preserved from Phase 3–6)
@@ -709,6 +712,8 @@ export async function runSchedulerJobs() {
   await run('fairnessBump', fairnessBumpJob);
   await run('escalateTriageAlerts', escalateTriageAlertsJob);
   await run('processReminders', processRemindersJob);
+  await run('followupSweep', followupSweepJob);
+  await run('dailyDoctorAlerts', dailyDoctorAlertsJob);
 
   results.timestamp = clock.now().toISOString();
   return results;

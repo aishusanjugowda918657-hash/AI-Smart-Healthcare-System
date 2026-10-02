@@ -1,6 +1,7 @@
 import { assertDbConnected } from '../config/firebase.js';
 import { AppError, formatSuccessResponse } from '../utils/errors.js';
 import { generateSlotsForDoctorDate } from '../domain/slots.js';
+import { notify } from '../services/notify.js';
 
 /**
  * List all active medical departments
@@ -9,7 +10,7 @@ export const getDepartments = async (req, res, next) => {
   try {
     const db = assertDbConnected();
     const snapshot = await db.collection('departments').get();
-    
+
     const departments = snapshot.docs.map((doc) => ({
       id: doc.id,
       ...doc.data()
@@ -74,7 +75,7 @@ export const getDoctors = async (req, res, next) => {
     }
 
     const snapshot = await query.get();
-    
+
     const doctors = snapshot.docs.map((doc) => ({
       id: doc.id,
       ...doc.data()
@@ -111,7 +112,6 @@ export const getDoctorById = async (req, res, next) => {
       ...docSnap.data()
     };
 
-    // Attach department information if available
     if (doctorData.departmentId) {
       const deptSnap = await db.collection('departments').doc(doctorData.departmentId).get();
       if (deptSnap.exists) {
@@ -174,7 +174,6 @@ export const saveDoctorSchedule = async (req, res, next) => {
       updatedAt: new Date()
     });
 
-    // Re-generate future slots for next 14 days with updated schedule
     const targetDoctorId = docSnap.data().doctorId || docSnap.id;
     const leavesSnap = await db.collection('leaves').where('doctorId', '==', targetDoctorId).get();
     const leaves = leavesSnap.docs.map((d) => d.data());
@@ -215,6 +214,118 @@ export const saveDoctorSchedule = async (req, res, next) => {
       doctorId: targetDoctorId,
       schedule: scheduleObj
     }));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get Doctor Alerts (Patients Needing Attention) (PRD F13)
+ */
+export const getDoctorAlerts = async (req, res, next) => {
+  try {
+    const doctorUid = req.user.doctorUid || req.user.uid;
+    const db = assertDbConnected();
+
+    const snapshot = await db
+      .collection('doctorAlerts')
+      .where('doctorUid', '==', doctorUid)
+      .get();
+
+    let alerts = snapshot.docs.map((d) => d.data());
+    alerts = alerts.filter((a) => a.status === 'open');
+
+    // Risk sorting: high -> medium -> low
+    const riskRank = { high: 1, medium: 2, low: 3 };
+    alerts.sort((a, b) => (riskRank[a.riskLevel] || 3) - (riskRank[b.riskLevel] || 3));
+
+    res.status(200).json(formatSuccessResponse(alerts));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Resolve Doctor Alert
+ */
+export const resolveDoctorAlert = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { resolutionNotes = 'Marked as resolved by physician' } = req.body;
+    const { uid: doctorUid } = req.user;
+
+    const db = assertDbConnected();
+    await db.collection('doctorAlerts').doc(id).set(
+      {
+        id,
+        status: 'RESOLVED',
+        resolutionNotes,
+        resolvedByUid: doctorUid,
+        resolvedAt: new Date(),
+        updatedAt: new Date()
+      },
+      { merge: true }
+    );
+
+    res.status(200).json(formatSuccessResponse({ id, status: 'RESOLVED' }));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Snooze Doctor Alert (3 Days)
+ */
+export const snoozeDoctorAlert = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const now = new Date();
+    const snoozedUntil = new Date(now);
+    snoozedUntil.setDate(snoozedUntil.getDate() + 3);
+
+    const db = assertDbConnected();
+    await db.collection('doctorAlerts').doc(id).set(
+      {
+        id,
+        status: 'snoozed',
+        snoozedUntil: snoozedUntil.toISOString(),
+        updatedAt: now
+      },
+      { merge: true }
+    );
+
+    res.status(200).json(formatSuccessResponse({ id, status: 'snoozed', snoozedUntil: snoozedUntil.toISOString() }));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Send Patient Reminder Alert Action
+ */
+export const sendPatientReminderAlert = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const db = assertDbConnected();
+
+    const doc = await db.collection('doctorAlerts').doc(id).get();
+    if (!doc.exists) {
+      throw new AppError('NOT_FOUND', 'Alert record not found', 404);
+    }
+
+    const alertData = doc.data();
+
+    // Trigger push notification to patient
+    await notify({
+      uids: [alertData.patientUid || alertData.patientHealthId],
+      title: 'Doctor Reminder Notice',
+      body: `Your doctor has sent a reminder: ${alertData.message}`,
+      privacyBody: 'Reminder notice from your physician.',
+      type: 'doctor_direct_reminder',
+      urgent: true
+    });
+
+    res.status(200).json(formatSuccessResponse({ message: 'Direct patient reminder sent successfully.' }));
   } catch (error) {
     next(error);
   }

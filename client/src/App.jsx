@@ -37,6 +37,7 @@ import TodayQueueList from './components/doctor/TodayQueueList';
 import ConsultationWorkspace from './components/doctor/ConsultationWorkspace';
 import ScheduleConfigurator from './components/doctor/ScheduleConfigurator';
 import FollowUpList from './components/doctor/FollowUpList';
+import PatientsNeedingAttention from './components/doctor/PatientsNeedingAttention';
 
 import PharmacyVerifyPage from './pages/PharmacyVerifyPage';
 import PatientHistoryTimelinePage from './pages/PatientHistoryTimelinePage';
@@ -113,6 +114,8 @@ export const App = () => {
                       <Route path="/schedule-config" element={<ScheduleConfigurator />} />
                       <Route path="/followups" element={<FollowUpList />} />
                       <Route path="/follow-ups" element={<FollowUpList />} />
+                      <Route path="/patients-needing-attention" element={<PatientsNeedingAttention />} />
+                      <Route path="/doctor-alerts" element={<PatientsNeedingAttention />} />
                     </Route>
 
                     {/* Admin Routes */}
