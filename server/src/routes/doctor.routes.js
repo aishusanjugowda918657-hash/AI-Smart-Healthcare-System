@@ -10,6 +10,7 @@ import {
   snoozeDoctorAlert,
   sendPatientReminderAlert
 } from '../controllers/doctorController.js';
+import { getAppointmentPreConsultationSummary } from '../controllers/aiController.js';
 import { requireAuth } from '../middleware/authMiddleware.js';
 import { requireRole } from '../middleware/roleMiddleware.js';
 
@@ -21,6 +22,9 @@ router.get('/patients-needing-attention', requireAuth, requireRole('doctor', 'ad
 router.post('/alerts/:id/resolve', requireAuth, requireRole('doctor', 'admin'), resolveDoctorAlert);
 router.post('/alerts/:id/snooze', requireAuth, requireRole('doctor', 'admin'), snoozeDoctorAlert);
 router.post('/alerts/:id/send-reminder', requireAuth, requireRole('doctor', 'admin'), sendPatientReminderAlert);
+
+// Pre-consultation summary endpoint (PRD F15)
+router.get('/appointments/:id/summary', requireAuth, requireRole('doctor', 'admin'), getAppointmentPreConsultationSummary);
 
 router.get('/:id', getDoctorById);
 router.put('/:id/schedule', requireAuth, requireRole('doctor', 'admin'), saveDoctorSchedule);

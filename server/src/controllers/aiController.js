@@ -1,80 +1,406 @@
-import { generateText } from '../services/geminiService.js';
+/**
+ * AI Controller (PRD F14 & F15)
+ * Handles Patient Chatbot with Tool Actions & Confirmation Flow,
+ * Doctor AI Agent with Same-Name Disambiguation & Audit Logged Tools,
+ * and Pre-Consultation Summary Card with Database Flags and Post-Check Guards.
+ */
+import { generateText, generateJson, runWithTools } from '../ai/geminiClient.js';
+import { checkEmergencyKeywords, getEmergencyResponse, checkQuickChipIntent, validateSummaryFacts } from '../ai/guards.js';
+import { getChatFallback, getDoctorAgentFallback, getSummaryFallback } from '../ai/fallbacks.js';
+import { buildChatSystemPrompt } from '../ai/prompts/chat.js';
+import { buildDoctorAgentSystemPrompt } from '../ai/prompts/doctorAgent.js';
+import { buildSummaryPrompt } from '../ai/prompts/summary.js';
+import {
+  PATIENT_CHAT_TOOL_DECLARATIONS,
+  executePatientChatTool,
+  DOCTOR_AGENT_TOOL_DECLARATIONS,
+  executeDoctorAgentTool,
+  consumeConfirmToken
+} from '../ai/tools.js';
 import { assertDbConnected } from '../config/firebase.js';
-import { AI_DISCLAIMER_TEXT } from '../../../client/src/utils/constants.js';
+import { createAppointment } from './bookingController.js';
+import { cancelAppointment } from './appointmentController.js';
 import { evaluatePrescriptionSafety } from '../domain/safety.js';
 import flags from '../config/flags.js';
 
-const SYSTEM_GUARDRAIL_PROMPT = `
-You are the SmartCare AI Health Assistant, a safety-guarded AI support assistant.
-
-STRICT MEDICAL BOUNDARY RULES:
-1. You MUST NOT provide a medical diagnosis for symptoms.
-2. You MUST NOT prescribe medications or modify dosage instructions.
-3. You MUST NOT alter or overwrite doctor clinical records or prescriptions.
-4. You MUST NOT assign or modify emergency queue priority.
-5. You MUST clearly distinguish general health info/workflow assistance from professional medical advice.
-6. In case of emergency symptoms (e.g. severe chest pain, shortness of breath), instruct the user to immediately call emergency services (112/911).
-
-Always append the standard medical disclaimer to your response.
-`;
-
 /**
- * Gemini AI Patient Support Chatbot with strict safety guardrails & fallback
+ * ----------------------------------------------------
+ * PATIENT CHATBOT (F14)
+ * ----------------------------------------------------
  */
 export const aiChat = async (req, res, next) => {
   try {
-    const { message } = req.body;
+    const { message = '', language = 'en', patientHealthId, history = [] } = req.body;
     const { uid } = req.user || {};
 
-    if (!message) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation Error: Message prompt is required.'
+    if (!message || !message.trim()) {
+      return res.status(400).json({ success: false, message: 'Message is required.' });
+    }
+
+    if (message.length > 500) {
+      return res.status(400).json({ success: false, message: 'Message length exceeds 500 characters limit.' });
+    }
+
+    // Selected patient health ID defaults to logged-in user or provided healthId
+    const selectedPatientHealthId = patientHealthId || uid;
+
+    // 1. RULE PRE-CHECK: Emergency Keywords (4 languages)
+    if (checkEmergencyKeywords(message)) {
+      return res.status(200).json(getEmergencyResponse(language));
+    }
+
+    // 2. RULE PRE-CHECK: Quick-Chip Intents (4 languages) -> NO Gemini Call
+    const quickIntent = checkQuickChipIntent(message);
+    if (quickIntent) {
+      const db = assertDbConnected();
+      switch (quickIntent) {
+        case 'BOOK_APPOINTMENT':
+          return res.status(200).json({
+            success: true,
+            language,
+            message: 'You can book an appointment with our available doctors below. Please select a department or doctor.',
+            quickChips: [
+              { label: 'General Medicine', action: 'SELECT_DEPT_gen' },
+              { label: 'Cardiology', action: 'SELECT_DEPT_card' },
+              { label: 'Pediatrics', action: 'SELECT_DEPT_ped' }
+            ]
+          });
+
+        case 'TOKEN_STATUS': {
+          const result = await executePatientChatTool('get_token_status', {}, { userId: uid, selectedPatientHealthId });
+          return res.status(200).json({
+            success: true,
+            language,
+            message: result.status === 'no_appointment_today'
+              ? result.message
+              : `Your token number is ${result.tokenNumber}. Estimated wait time: ${result.estimatedWaitMinutes} minutes.`,
+            tokenData: result
+          });
+        }
+
+        case 'DOCTOR_TIMINGS': {
+          const result = await executePatientChatTool('get_doctor_timings', {}, { userId: uid, selectedPatientHealthId });
+          return res.status(200).json({
+            success: true,
+            language,
+            message: `${result.doctorName} OPD Timings: ${result.timings}. Lunch break: ${result.lunchBreak}.`
+          });
+        }
+
+        case 'TALK_TO_STAFF': {
+          const result = await executePatientChatTool('escalate_to_staff', {}, { userId: uid, selectedPatientHealthId });
+          return res.status(200).json({
+            success: true,
+            language,
+            message: result.message
+          });
+        }
+      }
+    }
+
+    // 3. GEMINI FUNCTION CALLING LOOP (runWithTools)
+    const trimmedHistory = (history || []).slice(-6); // Limit to last 6 messages
+    const systemPrompt = buildChatSystemPrompt(language);
+
+    const result = await runWithTools({
+      system: systemPrompt,
+      messages: trimmedHistory.concat([{ role: 'user', content: message }]),
+      tools: PATIENT_CHAT_TOOL_DECLARATIONS,
+      toolHandler: executePatientChatTool,
+      context: { userId: uid, selectedPatientHealthId },
+      maxRounds: 5
+    });
+
+    if (!result) {
+      const fallback = getChatFallback(language);
+      return res.status(200).json({
+        ...fallback,
+        response: fallback.message + ' Disclaimer: This is AI generated content.',
+        language
       });
     }
 
-    let aiResponseText;
-
-    try {
-      const fullPrompt = `${SYSTEM_GUARDRAIL_PROMPT}\n\nUser Question: ${message}`;
-      aiResponseText = await generateText(fullPrompt);
-    } catch (geminiErr) {
-      console.warn('⚠️ Gemini API execution error, switching to safe fallback:', geminiErr.message);
-      aiResponseText = `Here is general information regarding your query: "${message}". Please note that for specific medical symptoms, you should consult a licensed physician. ${AI_DISCLAIMER_TEXT}`;
-    }
-
-    // Append standard disclaimer if not already present
-    if (!aiResponseText.includes('Disclaimer:')) {
-      aiResponseText += `\n\n${AI_DISCLAIMER_TEXT}`;
-    }
-
-    // Log AI interaction metadata
-    try {
-      const db = assertDbConnected();
-      if (db && uid) {
-        await db.collection('aiInteractions').add({
-          userId: uid,
-          requestType: 'CHATBOT',
-          promptLength: message.length,
-          timestamp: new Date(),
-          success: true
-        });
-      }
-    } catch (logErr) {
-      console.warn('AI interaction log warning:', logErr.message);
-    }
+    const textMsg = result.text || 'How else can I assist you today?';
+    const textWithDisclaimer = textMsg.includes('Disclaimer:') ? textMsg : `${textMsg}\n\nDisclaimer: This is AI generated content.`;
 
     res.status(200).json({
       success: true,
-      response: aiResponseText
+      language,
+      message: textWithDisclaimer,
+      response: textWithDisclaimer,
+      confirmToken: result.confirmToken || null,
+      actionRequired: result.actionRequired || null,
+      summary: result.summary || null,
+      sources: result.sources || []
     });
+
+  } catch (error) {
+    console.warn('⚠️ aiChat error:', error.message);
+    res.status(200).json({
+      ...getChatFallback(req.body?.language || 'en'),
+      language: req.body?.language || 'en'
+    });
+  }
+};
+
+/**
+ * Confirm Chat Actions (POST /api/ai/chat/confirm)
+ */
+export const aiChatConfirm = async (req, res, next) => {
+  try {
+    const { confirmToken, disclaimerAccepted = true } = req.body;
+
+    if (!confirmToken) {
+      return res.status(400).json({ success: false, message: 'confirmToken is required.' });
+    }
+
+    const tokenData = consumeConfirmToken(confirmToken);
+    if (!tokenData) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired confirmation token.' });
+    }
+
+    if (!disclaimerAccepted) {
+      return res.status(400).json({ success: false, message: 'Booking requires health disclaimer acceptance.' });
+    }
+
+    if (tokenData.type === 'BOOKING') {
+      const appointment = await createAppointment({
+        userId: tokenData.userId,
+        patientHealthId: tokenData.patientHealthId,
+        doctorId: tokenData.doctorId,
+        date: tokenData.date,
+        timeSlot: tokenData.timeSlot,
+        disclaimerAccepted: true
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Appointment confirmed and booked successfully.',
+        appointment
+      });
+    }
+
+    if (tokenData.type === 'CANCEL') {
+      const result = await cancelAppointment({
+        appointmentId: tokenData.appointmentId,
+        userId: tokenData.userId,
+        reason: 'Cancelled via AI Chatbot'
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Appointment cancelled successfully.',
+        result
+      });
+    }
+
+    res.status(400).json({ success: false, message: 'Unknown confirmation token action.' });
+
   } catch (error) {
     next(error);
   }
 };
 
 /**
- * AI Smart Slot Recommendation helper among valid open slots
+ * ----------------------------------------------------
+ * DOCTOR AI AGENT (F15)
+ * ----------------------------------------------------
+ */
+export const aiDoctorAsk = async (req, res, next) => {
+  try {
+    const { question = '', selectedHealthId = null, history = [] } = req.body;
+    const doctorUid = req.user?.uid || req.user?.id;
+
+    if (!question || !question.trim()) {
+      return res.status(400).json({ success: false, message: 'Question is required.' });
+    }
+
+    const systemPrompt = buildDoctorAgentSystemPrompt();
+    const trimmedHistory = (history || []).slice(-6);
+
+    let promptWithContext = question;
+    if (selectedHealthId) {
+      promptWithContext += ` (Context Health ID: ${selectedHealthId})`;
+    }
+
+    const result = await runWithTools({
+      system: systemPrompt,
+      messages: trimmedHistory.concat([{ role: 'user', content: promptWithContext }]),
+      tools: DOCTOR_AGENT_TOOL_DECLARATIONS,
+      toolHandler: executeDoctorAgentTool,
+      context: { doctorUid, selectedHealthId },
+      maxRounds: 5
+    });
+
+    if (!result) {
+      return res.status(200).json(getDoctorAgentFallback());
+    }
+
+    if (result.choices && result.choices.length > 0) {
+      return res.status(200).json({
+        success: true,
+        status: 'CHOICES_REQUIRED',
+        message: result.text,
+        choices: result.choices,
+        sources: result.sources || []
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      answer: result.text,
+      sources: result.sources || []
+    });
+
+  } catch (error) {
+    console.warn('⚠️ aiDoctorAsk error:', error.message);
+    res.status(200).json(getDoctorAgentFallback());
+  }
+};
+
+/**
+ * ----------------------------------------------------
+ * PRE-CONSULTATION SUMMARY (F15)
+ * ----------------------------------------------------
+ */
+export const getAppointmentPreConsultationSummary = async (req, res, next) => {
+  try {
+    const { id: appointmentId } = req.params;
+    const db = assertDbConnected();
+
+    const apptDoc = await db.collection('appointments').doc(appointmentId).get();
+    if (!apptDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Appointment not found.' });
+    }
+
+    const appt = apptDoc.data();
+    const patientHealthId = appt.patientHealthId || appt.patientId;
+
+    // Fetch Patient Details
+    let patient = { fullName: appt.patientName || 'Patient', age: 40, gender: 'Male', allergies: [] };
+    const pSnap = await db.collection('users').where('patientHealthId', '==', patientHealthId).limit(1).get();
+    if (!pSnap.empty) {
+      patient = pSnap.docs[0].data();
+    }
+
+    // 1. Database-Derived Flags (Not from AI)
+    const flagsList = [];
+
+    // Allergy flag (red)
+    if (patient.allergies && patient.allergies.length > 0 && patient.allergies[0] !== 'None') {
+      flagsList.push({ type: 'allergy', label: `Allergies: ${patient.allergies.join(', ')}`, color: 'red' });
+    }
+
+    // Urgent/Emergency flag (red)
+    if (['urgent', 'emergency'].includes((appt.urgencySuggested || appt.clinicalLevel || '').toLowerCase())) {
+      flagsList.push({ type: 'urgent_level', label: 'Urgent Urgency Level', color: 'red' });
+    }
+
+    // Check overdue follow-up (amber)
+    const followSnap = await db.collection('followups')
+      .where('patientHealthId', '==', patientHealthId)
+      .where('status', '==', 'PENDING')
+      .get();
+    const isOverdue = followSnap.docs.some(d => new Date(d.data().targetDate) < new Date());
+    if (isOverdue) {
+      flagsList.push({ type: 'followup_overdue', label: 'Follow-up Overdue', color: 'amber' });
+    }
+
+    // Check low adherence (amber)
+    const remSnap = await db.collection('reminders').where('patientHealthId', '==', patientHealthId).get();
+    if (!remSnap.empty) {
+      const taken = remSnap.docs.filter(d => d.data().status === 'TAKEN').length;
+      const pct = (taken / remSnap.docs.length) * 100;
+      if (pct < 70) {
+        flagsList.push({ type: 'low_adherence', label: `Low Adherence (${Math.round(pct)}%)`, color: 'amber' });
+      }
+    }
+
+    // Check first visit (blue)
+    const pastVisitsSnap = await db.collection('visits').where('patientHealthId', '==', patientHealthId).get();
+    if (pastVisitsSnap.empty) {
+      flagsList.push({ type: 'first_visit', label: 'First Visit', color: 'blue' });
+    }
+
+    // Caregiver note (grey)
+    if (appt.caregiverNote || appt.isGuardianBooked) {
+      flagsList.push({ type: 'caregiver', label: 'Accompanied by Caregiver', color: 'grey' });
+    }
+
+    // Check cached summary on appointment
+    if (appt.summary && appt.summary.text) {
+      return res.status(200).json({
+        success: true,
+        summary: appt.summary,
+        appointment: {
+          id: appointmentId,
+          patientName: patient.fullName || patient.name || appt.patientName,
+          age: patient.age || 40,
+          patientHealthId
+        }
+      });
+    }
+
+    // 2. Prepare Facts for One-Line Text Generation
+    const facts = {
+      age: patient.age || 40,
+      gender: patient.gender || 'Male',
+      reason: appt.reasonForVisit || appt.chiefComplaint || 'Consultation',
+      allergies: patient.allergies || [],
+      currentMedicines: appt.currentMedicines || [],
+      caregiverNote: appt.caregiverNote || null
+    };
+
+    // 3. Generate One-Line Text via Gemini JSON or Fallback
+    let oneLine = null;
+    try {
+      const jsonRes = await generateJson({
+        system: 'Write a concise one-line clinical summary from facts only.',
+        prompt: buildSummaryPrompt(facts)
+      });
+      if (jsonRes && jsonRes.oneLine) {
+        if (validateSummaryFacts(jsonRes.oneLine, facts)) {
+          oneLine = jsonRes.oneLine;
+        }
+      }
+    } catch (e) {
+      console.warn('Summary generation warning:', e.message);
+    }
+
+    if (!oneLine) {
+      oneLine = getSummaryFallback(facts).oneLine;
+    }
+
+    const summaryData = {
+      text: oneLine,
+      generatedAt: new Date().toISOString(),
+      flags: flagsList,
+      sourceRefs: pastVisitsSnap.docs.slice(0, 3).map(d => ({ visitId: d.id, date: d.data().visitDate || 'Recent' }))
+    };
+
+    // Cache summary on appointment
+    await db.collection('appointments').doc(appointmentId).set({
+      summary: summaryData
+    }, { merge: true });
+
+    res.status(200).json({
+      success: true,
+      summary: summaryData,
+      appointment: {
+        id: appointmentId,
+        patientName: patient.fullName || patient.name || appt.patientName,
+        age: patient.age || 40,
+        patientHealthId
+      }
+    });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * AI Smart Slot Recommendation helper
  */
 export const aiSmartSlotRecommendation = async (req, res, next) => {
   try {
@@ -88,9 +414,7 @@ export const aiSmartSlotRecommendation = async (req, res, next) => {
       });
     }
 
-    // Filter only valid available slots
     const validSlots = availableSlots.filter((s) => s.available);
-
     if (validSlots.length === 0) {
       return res.status(200).json({
         success: true,
@@ -99,7 +423,6 @@ export const aiSmartSlotRecommendation = async (req, res, next) => {
       });
     }
 
-    // Recommend slot based on user preference (morning vs afternoon)
     let recommended = validSlots[0];
     if (userPreference === 'afternoon') {
       const afternoonSlot = validSlots.find((s) => parseInt(s.timeSlot.split(':')[0], 10) >= 12);
@@ -117,17 +440,13 @@ export const aiSmartSlotRecommendation = async (req, res, next) => {
 };
 
 /**
- * Doctor Dictation Draft Parsing (PRD F10 with Clinical Safety Post-Check)
+ * Doctor Dictation Draft Parsing (PRD F10)
  */
 export const aiDictate = async (req, res, next) => {
   try {
     const { dictationText = '', patientHealthId } = req.body;
-
     if (!dictationText) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation Error: dictationText is required.'
-      });
+      return res.status(400).json({ success: false, message: 'dictationText is required.' });
     }
 
     let draft = {
@@ -141,45 +460,38 @@ export const aiDictate = async (req, res, next) => {
       doctorAdvice: 'Rest well and stay hydrated.'
     };
 
-    // If AI feature flag enabled, attempt Gemini parsing
     if (flags.ai) {
       try {
-        const prompt = `You are a clinical AI scribe. Extract structured JSON from this doctor dictation:
-Dictation: "${dictationText}"
-Return valid JSON with keys: symptoms (array), diagnosisNotes (string), proposedMedicines (array of {name, dosage, frequency, durationDays, timing}), followUpDays (number), doctorAdvice (string).`;
-        const text = await generateText(prompt);
-        const parsed = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] || '{}');
-        if (parsed.proposedMedicines) {
-          draft = parsed;
+        const text = await generateText({
+          system: 'Extract structured prescription JSON from dictation text.',
+          prompt: `Dictation: "${dictationText}"`
+        });
+        if (text) {
+          const parsed = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] || '{}');
+          if (parsed.proposedMedicines) draft = parsed;
         }
       } catch (err) {
-        console.warn('Gemini dictation parsing fallback:', err.message);
+        console.warn('Dictation parsing fallback:', err.message);
       }
     }
 
-    // Run Clinical Safety Engine Post-Check on AI-Generated Draft
     let safetyResult = { safe: true, severity: 'green', alerts: [], overrideRequired: false };
     if (patientHealthId) {
       try {
         const db = assertDbConnected();
         let patientAllergies = [];
         const pSnap = await db.collection('patients').where('patientHealthId', '==', patientHealthId).limit(1).get();
-        if (!pSnap.empty) {
-          patientAllergies = pSnap.docs[0].data().allergies || [];
-        }
-        safetyResult = evaluatePrescriptionSafety({
-          candidateMedicines: draft.proposedMedicines || [],
-          patientAllergies
-        });
+        if (!pSnap.empty) patientAllergies = pSnap.docs[0].data().allergies || [];
+        safetyResult = evaluatePrescriptionSafety({ candidateMedicines: draft.proposedMedicines || [], patientAllergies });
       } catch (e) {
-        console.warn('Safety check error during dictation:', e.message);
+        console.warn('Safety check error:', e.message);
       }
     }
 
     res.status(200).json({
       success: true,
-      verifiedByDoctor: false, // MANDATORY: Draft state requiring doctor review & confirmation
-      notice: 'This is an AI-generated draft. Mandatory doctor verification and signature required before official issuance.',
+      verifiedByDoctor: false,
+      notice: 'This is an AI-generated draft. Mandatory doctor verification required before official issuance.',
       draft,
       safetyResult
     });
@@ -189,7 +501,7 @@ Return valid JSON with keys: symptoms (array), diagnosisNotes (string), proposed
 };
 
 /**
- * Extract Paper Prescription / Image Description (PRD F10 with Clinical Safety Post-Check)
+ * Extract Paper Prescription
  */
 export const aiExtractPaper = async (req, res, next) => {
   try {
@@ -197,10 +509,7 @@ export const aiExtractPaper = async (req, res, next) => {
     const textInput = rawText || imageDescription;
 
     if (!textInput) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation Error: rawText or imageDescription is required.'
-      });
+      return res.status(400).json({ success: false, message: 'rawText or imageDescription is required.' });
     }
 
     let draftMedicines = [
@@ -209,14 +518,16 @@ export const aiExtractPaper = async (req, res, next) => {
 
     if (flags.ai) {
       try {
-        const prompt = `Parse the following paper prescription text into a JSON list of medicines: "${textInput}". Return JSON array with objects containing: name, dosage, frequency, durationDays, timing.`;
-        const text = await generateText(prompt);
-        const parsed = JSON.parse(text.match(/\[[\s\S]*\]|\{[\s\S]*\}/)?.[0] || '[]');
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          draftMedicines = parsed;
+        const text = await generateText({
+          system: 'Extract prescription medicine list as JSON.',
+          prompt: `Text: "${textInput}"`
+        });
+        if (text) {
+          const parsed = JSON.parse(text.match(/\[[\s\S]*\]|\{[\s\S]*\}/)?.[0] || '[]');
+          if (Array.isArray(parsed) && parsed.length > 0) draftMedicines = parsed;
         }
       } catch (err) {
-        console.warn('Gemini paper extraction fallback:', err.message);
+        console.warn('Paper extraction fallback:', err.message);
       }
     }
 
@@ -226,21 +537,16 @@ export const aiExtractPaper = async (req, res, next) => {
         const db = assertDbConnected();
         let patientAllergies = [];
         const pSnap = await db.collection('patients').where('patientHealthId', '==', patientHealthId).limit(1).get();
-        if (!pSnap.empty) {
-          patientAllergies = pSnap.docs[0].data().allergies || [];
-        }
-        safetyResult = evaluatePrescriptionSafety({
-          candidateMedicines: draftMedicines,
-          patientAllergies
-        });
+        if (!pSnap.empty) patientAllergies = pSnap.docs[0].data().allergies || [];
+        safetyResult = evaluatePrescriptionSafety({ candidateMedicines: draftMedicines, patientAllergies });
       } catch (e) {
-        console.warn('Safety check error during paper extraction:', e.message);
+        console.warn('Safety check error:', e.message);
       }
     }
 
     res.status(200).json({
       success: true,
-      verifiedByDoctor: false, // MANDATORY: Draft state requiring doctor review & confirmation
+      verifiedByDoctor: false,
       notice: 'This is an AI-extracted paper draft. Mandatory doctor verification required before official issuance.',
       draftMedicines,
       safetyResult

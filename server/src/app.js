@@ -98,6 +98,7 @@ app.use('/api/ai', aiRateLimiter);
 app.use('/api/auth', authRoutes);
 app.use('/api/patients', patientRoutes);
 app.use('/api/doctors', doctorRoutes);
+app.use('/api/doctor', doctorRoutes);
 app.use('/api/departments', departmentRoutes);
 app.use('/api/appointments', appointmentRoutes);
 app.use('/api/tokens', tokenRoutes);
