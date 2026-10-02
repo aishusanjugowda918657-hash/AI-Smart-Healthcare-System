@@ -94,6 +94,9 @@ app.delete('/api/me/devices', requireAuth, removeDeviceToken);
 app.use('/api/', apiRateLimiter);
 app.use('/api/ai', aiRateLimiter);
 
+import waitlistRoutes from './routes/waitlist.routes.js';
+import offerRoutes from './routes/offer.routes.js';
+
 // API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/patients', patientRoutes);
@@ -117,6 +120,8 @@ app.use('/api/checkin', checkinRoutes);
 app.use('/api/queue', queueRoutes);
 app.use('/api/display', queueRoutes);
 app.use('/api/reports', reportRoutes);
+app.use('/api/waitlist', waitlistRoutes);
+app.use('/api/offers', offerRoutes);
 
 // Error handling middleware
 app.use(errorHandler);

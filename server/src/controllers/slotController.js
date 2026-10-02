@@ -343,17 +343,22 @@ export const adminGenerateSlots = async (req, res, next) => {
  */
 export const adminCreateLeave = async (req, res, next) => {
   try {
-    const { doctorId, fromAt, toAt, reason = '', status = 'planned' } = req.body;
+    let { doctorId, fromAt, toAt, date, reason = '', status = 'planned' } = req.body;
+
+    if (!fromAt && date) fromAt = `${date}T00:00:00Z`;
+    if (!toAt && date) toAt = `${date}T23:59:59Z`;
 
     if (!doctorId || !fromAt || !toAt) {
-      throw new AppError('VALIDATION_ERROR', 'doctorId, fromAt, and toAt are required.', 400);
+      throw new AppError('VALIDATION_ERROR', 'doctorId, and date (or fromAt and toAt) are required.', 400);
     }
 
+    const leaveDate = date || fromAt.split('T')[0];
     const db = assertDbConnected();
     const leaveId = `leave_${Date.now()}`;
     const leaveDoc = {
       id: leaveId,
       doctorId,
+      date: leaveDate,
       fromAt,
       toAt,
       reason,
