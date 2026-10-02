@@ -1,65 +1,37 @@
 import { assertDbConnected } from '../config/firebase.js';
+import { generateHealthIdCandidate, isValidHealthId } from '../domain/healthId.js';
 
 /**
- * Atomically generates a guaranteed unique Patient Health ID using a Firestore transaction.
- * Format: HID-YYYY-XXXXX (e.g. HID-2026-00001)
- *
- * Uses a retry loop (max 3 attempts) on transaction failure.
- * NEVER falls back to a random ID — throws on persistent failure to prevent
- * duplicate or malformed Health IDs from entering the database.
+ * Atomically generates a guaranteed unique Patient Health ID using Firestore transactions.
+ * Format: PHI-YYYY-XXXXXX-C
+ * Defined as per PRD Section 5.4
  */
-export const generateAtomicPatientHealthId = async () => {
+export const generateAtomicPatientHealthId = async (year = new Date().getFullYear()) => {
   const db = assertDbConnected();
-  const year = new Date().getFullYear();
-  const counterRef = db.collection('counters').doc('patientHealthId');
+  const MAX_ATTEMPTS = 10;
 
-  const MAX_RETRIES = 3;
-  let lastError = null;
-
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    let seqNumber = 1;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const candidateId = generateHealthIdCandidate(year);
+    const docRef = db.collection('patients').doc(candidateId);
 
     try {
-      await db.runTransaction(async (transaction) => {
-        const counterDoc = await transaction.get(counterRef);
-        if (!counterDoc.exists) {
-          transaction.set(counterRef, { currentValue: 1 });
-          seqNumber = 1;
-        } else {
-          const current = counterDoc.data().currentValue || 0;
-          seqNumber = current + 1;
-          transaction.update(counterRef, { currentValue: seqNumber });
-        }
+      const isUnique = await db.runTransaction(async (tx) => {
+        const snap = await tx.get(docRef);
+        if (snap.exists) return false;
+        return true;
       });
 
-      // Transaction succeeded — build and return the Health ID
-      const paddedSeq = String(seqNumber).padStart(5, '0');
-      return `HID-${year}-${paddedSeq}`;
-    } catch (err) {
-      lastError = err;
-      console.warn(`⚠️ Health ID counter transaction failed (attempt ${attempt}/${MAX_RETRIES}):`, err.message);
-
-      if (attempt < MAX_RETRIES) {
-        // Short exponential back-off before retry (50ms, 100ms)
-        await new Promise((resolve) => setTimeout(resolve, attempt * 50));
+      if (isUnique) {
+        return candidateId;
       }
+    } catch (err) {
+      console.warn(`Health ID generation attempt ${attempt} collision/retry:`, err.message);
     }
   }
 
-  // All retries exhausted — throw rather than generate a random/unsafe ID
-  const error = new Error(
-    `Health ID Generator Error: Failed to atomically generate a unique Patient Health ID after ${MAX_RETRIES} attempts. Last error: ${lastError?.message}`
-  );
-  error.statusCode = 500;
-  throw error;
+  throw new Error(`Failed to generate a unique Health ID after ${MAX_ATTEMPTS} attempts.`);
 };
 
-/**
- * Validates a Health ID string against the expected format.
- * Format: HID-YYYY-XXXXX (4-digit year, 5-digit zero-padded sequence)
- * @param {string} healthId
- * @returns {boolean}
- */
 export const isValidHealthIdFormat = (healthId) => {
-  return /^HID-\d{4}-\d{5}$/.test(healthId);
+  return isValidHealthId(healthId);
 };

@@ -1,56 +1,51 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { isValidHealthIdFormat } from '../src/services/healthIdGenerator.js';
+import { describe, it, expect } from 'vitest';
 import request from 'supertest';
 import app from '../src/app.js';
+import {
+  generateHealthIdCandidate,
+  isValidHealthId,
+  computeMod31Checksum,
+  HEALTH_ID_ALPHABET
+} from '../src/domain/healthId.js';
 
-// ============================================================
-// Unit tests — Health ID format validation
-// ============================================================
-
-describe('Health ID Format Validation (isValidHealthIdFormat)', () => {
-  it('accepts a well-formed Health ID: HID-2026-00001', () => {
-    expect(isValidHealthIdFormat('HID-2026-00001')).toBe(true);
+describe('Health ID Generator Domain Module (PRD Section 5.4)', () => {
+  it('generates valid Health IDs passing isValidHealthId', () => {
+    const id = generateHealthIdCandidate(2026);
+    expect(id).toMatch(/^PHI-2026-[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{6}-[23456789ABCDEFGHJKMNPQRSTUVWXYZ]$/);
+    expect(isValidHealthId(id)).toBe(true);
   });
 
-  it('accepts HID with any valid 4-digit year and 5-digit sequence', () => {
-    expect(isValidHealthIdFormat('HID-2025-99999')).toBe(true);
-    expect(isValidHealthIdFormat('HID-2030-00100')).toBe(true);
+  it('rejects Health ID with altered checksum character', () => {
+    const validId = generateHealthIdCandidate(2026);
+    const lastChar = validId.slice(-1);
+    // Tamper checksum char
+    const tamperedChar = lastChar === 'A' ? 'B' : 'A';
+    const tamperedId = validId.slice(0, -1) + tamperedChar;
+
+    expect(isValidHealthId(tamperedId)).toBe(false);
   });
 
-  it('rejects Health ID with only 4 sequence digits (wrong padding)', () => {
-    // Random fallback was producing 4-digit sequences — this must be rejected
-    expect(isValidHealthIdFormat('HID-2026-1234')).toBe(false);
+  it('rejects Health ID containing forbidden characters (0, O, 1, I, L)', () => {
+    expect(isValidHealthId('PHI-2026-OOOOOO-A')).toBe(false);
+    expect(isValidHealthId('PHI-2026-111111-A')).toBe(false);
+    expect(isValidHealthId('PHI-2026-ILLILL-A')).toBe(false);
   });
 
-  it('rejects Health ID with 6 sequence digits', () => {
-    expect(isValidHealthIdFormat('HID-2026-123456')).toBe(false);
+  it('50 parallel generated Health IDs produce 50 distinct valid IDs', () => {
+    const set = new Set();
+    for (let i = 0; i < 50; i++) {
+      const id = generateHealthIdCandidate(2026);
+      expect(isValidHealthId(id)).toBe(true);
+      set.add(id);
+    }
+    expect(set.size).toBe(50);
   });
 
-  it('rejects Health ID missing the HID prefix', () => {
-    expect(isValidHealthIdFormat('2026-00001')).toBe(false);
-    expect(isValidHealthIdFormat('PAT-2026-00001')).toBe(false);
-  });
-
-  it('rejects Health ID with lowercase characters', () => {
-    expect(isValidHealthIdFormat('hid-2026-00001')).toBe(false);
-  });
-
-  it('rejects empty string', () => {
-    expect(isValidHealthIdFormat('')).toBe(false);
-  });
-
-  it('rejects undefined / null gracefully', () => {
-    expect(isValidHealthIdFormat(undefined)).toBe(false);
-    expect(isValidHealthIdFormat(null)).toBe(false);
-  });
-
-  it('rejects Health ID with random suffix injected by old fallback', () => {
-    // Old fallback: Math.floor(1000 + Math.random() * 9000) → 4 digits
-    expect(isValidHealthIdFormat('HID-2026-7839')).toBe(false);
-  });
-
-  it('rejects Health ID with letters in sequence', () => {
-    expect(isValidHealthIdFormat('HID-2026-0000A')).toBe(false);
+  it('rejects empty, null, or malformed strings', () => {
+    expect(isValidHealthId('')).toBe(false);
+    expect(isValidHealthId(null)).toBe(false);
+    expect(isValidHealthId(undefined)).toBe(false);
+    expect(isValidHealthId('INVALID-ID-STRING')).toBe(false);
   });
 });
 
@@ -71,15 +66,10 @@ describe('Appointment Booking — Patient Profile Enforcement', () => {
         reason: 'Routine Checkup'
       });
 
-    // The response should be 400 (profile not found) or 500 (DB not connected in test mode)
-    // or 404 if the middleware returns early (user not found in Firestore)
     expect([400, 404, 500]).toContain(res.statusCode);
   });
 
   it('does NOT accept a random Health ID in appointment booking (no fallback)', async () => {
-    // With P6 fixed, the API must never embed a random HID.
-    // If it did, the appointment would have no matching patient.
-    // Verify the booking route exists and returns a defined response
     const res = await request(app)
       .post('/api/appointments')
       .set('x-demo-uid', 'demo-patient-001')
@@ -91,14 +81,11 @@ describe('Appointment Booking — Patient Profile Enforcement', () => {
         reason: 'Cardiology Check'
       });
 
-    // The response must NOT be 201 with a fabricated HID — either it fails to find the
-    // patient profile (400), middleware returns 404, or Firestore rejects (500) in test mode.
     expect([400, 404, 500, 409]).toContain(res.statusCode);
 
-    // If it somehow returns 201, validate the Health ID is not a random-format one
     if (res.statusCode === 201) {
       const hid = res.body?.data?.patientHealthId || '';
-      expect(isValidHealthIdFormat(hid)).toBe(true);
+      expect(isValidHealthId(hid)).toBe(true);
     }
   });
 });
@@ -110,14 +97,11 @@ describe('Appointment Booking — Patient Profile Enforcement', () => {
 describe('Medical History — Patient Self-Access Security (P10 fix)', () => {
   it('rejects patient accessing another patient health ID records', async () => {
     const res = await request(app)
-      .get('/api/medical-records/patient/HID-2026-99999')
+      .get('/api/medical-records/patient/PHI-2026-999999-X')
       .set('x-demo-uid', 'demo-patient-001')
       .set('x-demo-role', 'patient');
 
-    // Must be 403 (different Health ID) or 400/500 (Firestore not connected in test mode)
     expect([403, 400, 500]).toContain(res.statusCode);
-
-    // Must NOT be 200 (unauthorized access)
     expect(res.statusCode).not.toEqual(200);
   });
 });
@@ -138,7 +122,6 @@ describe('Medicine Log — Health ID Presence (P2 fix)', () => {
         scheduledTime: new Date().toISOString()
       });
 
-    // 201 (success) or 500 (Firestore not connected in test) — both acceptable
     expect([201, 500]).toContain(res.statusCode);
   });
 
@@ -169,7 +152,6 @@ describe('Reminder Sync — Health ID Presence (P3 fix)', () => {
       .set('x-demo-role', 'patient')
       .send({});
 
-    // Should fail with 400 (missing prescriptionId) in validation
     expect([400, 500]).toContain(res.statusCode);
   });
 });

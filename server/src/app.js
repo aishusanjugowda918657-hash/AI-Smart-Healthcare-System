@@ -7,6 +7,9 @@ import requestIdMiddleware from './middleware/requestId.js';
 import { apiRateLimiter, aiRateLimiter } from './middleware/rateLimit.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { formatSuccessResponse, formatErrorResponse } from './utils/errors.js';
+import { requireAuth } from './middleware/authMiddleware.js';
+import { requireRole } from './middleware/roleMiddleware.js';
+import { staffPatientLookup, acceptCaregiverInvite } from './controllers/patientController.js';
 
 import authRoutes from './routes/auth.routes.js';
 import patientRoutes from './routes/patient.routes.js';
@@ -50,7 +53,7 @@ app.get('/api/health', (req, res) => {
   }));
 });
 
-// Protected Internal Tick Endpoint (PRD Section 7 & 10)
+// Protected Internal Tick Endpoint
 app.post('/api/internal/tick', (req, res) => {
   const secretHeader = req.headers['x-tick-secret'];
   if (secretHeader !== env.INTERNAL_TICK_SECRET) {
@@ -62,6 +65,10 @@ app.post('/api/internal/tick', (req, res) => {
     at: new Date().toISOString()
   }));
 });
+
+// Staff Lookup & Invites Endpoints (PRD F1)
+app.get('/api/staff/patients/lookup', requireAuth, requireRole('doctor', 'nurse', 'reception', 'admin'), staffPatientLookup);
+app.post('/api/invites/:healthId/accept', requireAuth, acceptCaregiverInvite);
 
 // Rate limiting
 app.use('/api/', apiRateLimiter);

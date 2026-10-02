@@ -5,6 +5,7 @@ server/node_modules/
 
 # Environment files
 .env
+.env.*
 .env.local
 .env.development.local
 .env.test.local
@@ -16,6 +17,11 @@ server/.env
 client/dist/
 client/build/
 server/dist/
+dist/
+
+# Emulator & Local Data
+firebase-export/
+.firebase/
 
 # Logs
 npm-debug.log*

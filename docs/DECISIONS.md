@@ -23,3 +23,10 @@ This document records key engineering choices, ambiguities resolved, and archite
 * **Decision:** Enforce isolation of core algorithms (`priority.js`, `waitTime.js`, `slots.js`, `triage.js`, `healthId.js`, `safety.js`, `reminders.js`) into `server/src/domain/` without Express or Firestore dependencies.
 * **Rationale:** Ensures high-speed unit testing capability and total feature flag independence (`FLAG_AI=false`, `FLAG_PUSH=false`, `FLAG_SCHEDULER=false`).
 * **Status:** Approved.
+
+### 4. Health ID Specification Transition to PRD Section 5.4 Format (`PHI-YYYY-XXXXXX-C`)
+* **Date:** 2 Oct 2026
+* **Decision:** Updated Health ID generator and format validation tests to support `PHI-YYYY-XXXXXX-C` (Year, 6 Base31 chars from `23456789ABCDEFGHJKMNPQRSTUVWXYZ`, 1 Mod-31 checksum character). Legacy `HID-YYYY-XXXXX` format patient IDs are preserved for backwards compatibility and pass dual-format validation rules in API endpoints.
+* **Rationale:** Aligns Health ID generation strictly with PRD Section 5.4 specification while ensuring zero disruption to existing Phase 1 patient records.
+* **Status:** Approved.
+

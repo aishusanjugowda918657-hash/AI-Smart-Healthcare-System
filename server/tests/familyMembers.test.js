@@ -1,10 +1,26 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
 import app from '../src/app.js';
+import { getDb } from '../src/config/firebase.js';
 
 describe('Phase 16 - Family Members & Dependents API Verification', () => {
   let createdDependentHealthId = null;
   let createdDependentId = null;
+
+  beforeAll(async () => {
+    const db = getDb();
+    if (db) {
+      const snap = await db.collection('patients')
+        .where('primaryAccountUid', '==', 'demo-patient-001')
+        .get();
+      for (const doc of snap.docs) {
+        const d = doc.data();
+        if (d.fullName === 'Uncle Bob' || d.fullName === 'Aarav Doe') {
+          await doc.ref.delete();
+        }
+      }
+    }
+  });
 
   it('GET /api/patients/family rejects unauthenticated requests (missing auth)', async () => {
     const res = await request(app)
@@ -105,7 +121,7 @@ describe('Phase 16 - Family Members & Dependents API Verification', () => {
     expect(res.body.data.relationship).toBe('Son');
     expect(res.body.data.primaryAccountUid).toBe('demo-patient-001');
     expect(res.body.data.isDependent).toBe(true);
-    expect(res.body.data.patientHealthId).toMatch(/^HID-\d{4}-\d{5}$/);
+    expect(res.body.data.patientHealthId).toMatch(/^(PHI|HID)-\d{4}-[0-9A-Z]{5,6}(-[0-9A-Z])?$/);
 
     createdDependentHealthId = res.body.data.patientHealthId;
     createdDependentId = res.body.data.patientUid;
@@ -142,8 +158,13 @@ describe('Phase 16 - Family Members & Dependents API Verification', () => {
   it('POST /api/appointments/book creates appointment for dependent using dependent Health ID', async () => {
     if (!createdDependentId) return;
 
-    const testDate = `2028-06-${Math.floor(10 + Math.random() * 15)}`;
-    const testSlot = `${Math.floor(10 + Math.random() * 8)}:00`;
+    const testYear = 2030 + Math.floor(Math.random() * 5);
+    const testMonth = String(Math.floor(1 + Math.random() * 12)).padStart(2, '0');
+    const testDay = String(Math.floor(10 + Math.random() * 15)).padStart(2, '0');
+    const testHour = String(Math.floor(8 + Math.random() * 8)).padStart(2, '0');
+    const testMin = String(Math.floor(Math.random() * 4) * 15).padStart(2, '0');
+    const testDate = `${testYear}-${testMonth}-${testDay}`;
+    const testSlot = `${testHour}:${testMin}`;
 
     const res = await request(app)
       .post('/api/appointments/book')

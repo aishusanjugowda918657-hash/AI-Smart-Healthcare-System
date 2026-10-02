@@ -1,5 +1,7 @@
-import { assertDbConnected } from '../config/firebase.js';
+import { assertDbConnected, getDb } from '../config/firebase.js';
 import { generateAtomicPatientHealthId } from '../services/healthIdGenerator.js';
+import { formatSuccessResponse, formatErrorResponse } from '../utils/errors.js';
+import { writeAuditLog } from '../utils/audit.js';
 
 export const calculateAge = (dobString) => {
   if (!dobString) return null;
@@ -15,7 +17,7 @@ export const calculateAge = (dobString) => {
 };
 
 /**
- * Create or update patient profile & generate Unique Patient Health ID
+ * Create or update patient profile (backward compatibility)
  */
 export const createOrUpdatePatientProfile = async (req, res, next) => {
   try {
@@ -35,10 +37,7 @@ export const createOrUpdatePatientProfile = async (req, res, next) => {
     } = req.body;
 
     if (!fullName || !phone || !dob || !address || !gender) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation Error: Full Name, Mobile Number, Date of Birth, Gender, and Address are required.'
-      });
+      return res.status(400).json(formatErrorResponse('VALIDATION_ERROR', 'Validation Error: Full Name, Mobile Number, Date of Birth, Gender, and Address are required.'));
     }
 
     const db = assertDbConnected();
@@ -49,7 +48,7 @@ export const createOrUpdatePatientProfile = async (req, res, next) => {
     let createdAt = new Date();
 
     if (patientDoc.exists) {
-      patientHealthId = patientDoc.data().patientHealthId;
+      patientHealthId = patientDoc.data().patientHealthId || patientDoc.data().healthId;
       createdAt = patientDoc.data().createdAt || new Date();
     } else {
       patientHealthId = await generateAtomicPatientHealthId();
@@ -73,12 +72,17 @@ export const createOrUpdatePatientProfile = async (req, res, next) => {
       ? existingConditions.split(',').map((s) => s.trim()).filter(Boolean)
       : [];
 
-    // Store Date of Birth as the source of truth (no independently editable age field saved)
     const profileData = {
       patientUid: uid,
       patientHealthId,
+      healthId: patientHealthId,
+      ownerUid: uid,
+      relation: 'self',
+      isTemporary: false,
       fullName,
-      nameLower: fullName.trim().toLowerCase(),   // ← Patient Lookup Agent index field
+      name: fullName,
+      nameLower: fullName.trim().toLowerCase(),
+      searchName: fullName.trim().toLowerCase(),
       phone,
       dob,
       gender,
@@ -87,6 +91,11 @@ export const createOrUpdatePatientProfile = async (req, res, next) => {
       emergencyContact,
       allergies: parsedAllergies,
       existingConditions: parsedConditions,
+      conditions: parsedConditions,
+      flags: { pregnant: false, disability: false },
+      accessList: {},
+      emergencyQrEnabled: false,
+      qrVersion: 1,
       profileCompleted: true,
       consentStatus: true,
       createdAt,
@@ -95,25 +104,20 @@ export const createOrUpdatePatientProfile = async (req, res, next) => {
 
     await patientRef.set(profileData, { merge: true });
 
-    // Also update users collection for role consistency
     await db.collection('users').doc(uid).set({
       fullName,
+      displayName: fullName,
       patientHealthId,
       updatedAt: new Date()
     }, { merge: true });
 
-    // Dynamically calculate current age attribute from DOB
     const computedYears = calculateAge(dob);
     const ageAttr = computedYears !== null ? `${computedYears} years` : '';
 
-    res.status(200).json({
-      success: true,
-      message: 'Patient profile created/updated successfully.',
-      data: {
-        ...profileData,
-        age: ageAttr
-      }
-    });
+    return res.status(200).json(formatSuccessResponse({
+      ...profileData,
+      age: ageAttr
+    }));
   } catch (error) {
     next(error);
   }
@@ -129,20 +133,14 @@ export const getMyPatientProfile = async (req, res, next) => {
 
     const patientDoc = await db.collection('patients').doc(uid).get();
     if (!patientDoc.exists) {
-      return res.status(404).json({
-        success: false,
-        message: 'Patient profile not found. Please complete profile registration.'
-      });
+      return res.status(404).json(formatErrorResponse('NOT_FOUND', 'Patient profile not found. Please complete profile registration.'));
     }
 
     const data = patientDoc.data();
     const computedYears = calculateAge(data.dob);
     data.age = computedYears !== null ? `${computedYears} years` : '';
 
-    res.status(200).json({
-      success: true,
-      data
-    });
+    return res.status(200).json(formatSuccessResponse(data));
   } catch (error) {
     next(error);
   }
@@ -156,137 +154,38 @@ export const getPatientByHealthId = async (req, res, next) => {
     const { healthId } = req.params;
     const db = assertDbConnected();
 
-    const snapshot = await db.collection('patients').where('patientHealthId', '==', healthId).limit(1).get();
-
-    if (snapshot.empty) {
-      return res.status(404).json({
-        success: false,
-        message: `Patient with Health ID '${healthId}' not found.`
-      });
+    let snapshot = await db.collection('patients').doc(healthId).get();
+    if (!snapshot.exists) {
+      const qSnap = await db.collection('patients').where('patientHealthId', '==', healthId).limit(1).get();
+      if (!qSnap.empty) {
+        snapshot = qSnap.docs[0];
+      }
     }
 
-    const patientData = snapshot.docs[0].data();
+    if (!snapshot || !snapshot.exists) {
+      return res.status(404).json(formatErrorResponse('NOT_FOUND', `Patient with Health ID '${healthId}' not found.`));
+    }
+
+    const patientData = snapshot.data();
     const computedYears = calculateAge(patientData.dob);
     patientData.age = computedYears !== null ? `${computedYears} years` : '';
 
-    res.status(200).json({
-      success: true,
-      data: patientData
-    });
+    return res.status(200).json(formatSuccessResponse(patientData));
   } catch (error) {
     next(error);
   }
 };
 
 /**
- * Add a Family Member / Dependent for the authenticated patient
- */
-export const addFamilyMember = async (req, res, next) => {
-  try {
-    const { uid } = req.user;
-    const {
-      fullName,
-      dob,
-      gender,
-      relationship,
-      customRelationship = '',
-      relationshipOther = ''
-    } = req.body;
-
-    const allowedRelationships = [
-      'Father', 'Mother', 'Husband', 'Wife',
-      'Son', 'Daughter', 'Brother', 'Sister',
-      'Grandfather', 'Grandmother', 'Other'
-    ];
-
-    if (!fullName || !fullName.trim() || !dob || !gender || !relationship) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation Error: Full Name, Date of Birth, Gender, and Relationship are required.'
-      });
-    }
-
-    if (!allowedRelationships.includes(relationship)) {
-      return res.status(400).json({
-        success: false,
-        message: `Validation Error: Invalid relationship '${relationship}'.`
-      });
-    }
-
-    const customText = (customRelationship || relationshipOther || '').trim();
-
-    if (relationship === 'Other' && !customText) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation Error: Please specify the relationship when selecting "Other".'
-      });
-    }
-
-    const finalRelationship = relationship === 'Other' ? customText : relationship;
-
-    const db = assertDbConnected();
-
-    // Generate atomic unique Patient Health ID for dependent
-    const patientHealthId = await generateAtomicPatientHealthId();
-
-    const dependentRef = db.collection('patients').doc();
-    const dependentId = dependentRef.id;
-
-    const dependentData = {
-      patientUid: dependentId,
-      patientHealthId,
-      fullName: fullName.trim(),
-      nameLower: fullName.trim().toLowerCase(),   // ← Patient Lookup Agent index field
-      dob,
-      gender,
-      relationship: finalRelationship,
-      relationshipOther: relationship === 'Other' ? customText : null,
-      primaryAccountUid: uid,
-      isDependent: true,
-      profileCompleted: true,
-      consentStatus: true,
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
-
-    const computedYears = calculateAge(dob);
-    dependentData.age = computedYears !== null ? `${computedYears} years` : '';
-
-    await dependentRef.set(dependentData);
-
-    // Audit log
-    await db.collection('auditLogs').add({
-      userId: uid,
-      userRole: req.user.role || 'patient',
-      action: 'ADD_FAMILY_MEMBER',
-      resourceType: 'patient',
-      resourceId: dependentId,
-      patientHealthId,
-      timestamp: new Date()
-    });
-
-    res.status(201).json({
-      success: true,
-      message: `Family member ${fullName} added successfully with Health ID ${patientHealthId}.`,
-      data: dependentData
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * Get all family members / dependents for the authenticated patient
+ * Get family profiles owned by account or permitted via accessList
  */
 export const getFamilyMembers = async (req, res, next) => {
   try {
     const { uid } = req.user;
     const db = assertDbConnected();
 
-    const snapshot = await db
-      .collection('patients')
+    const snapshot = await db.collection('patients')
       .where('primaryAccountUid', '==', uid)
-      .where('isDependent', '==', true)
       .get();
 
     const familyMembers = snapshot.docs.map((d) => {
@@ -298,21 +197,173 @@ export const getFamilyMembers = async (req, res, next) => {
       };
     });
 
-    res.status(200).json({
-      success: true,
-      data: familyMembers
+    return res.status(200).json(formatSuccessResponse(familyMembers));
+  } catch (error) {
+    next(error);
+  }
+};
+
+const ALLOWED_RELATIONSHIPS = [
+  'Father', 'Mother', 'Husband', 'Wife',
+  'Son', 'Daughter', 'Brother', 'Sister',
+  'Grandfather', 'Grandmother', 'Other',
+  'self', 'child', 'spouse', 'other'
+];
+
+/**
+ * Add a Family Member / Dependent with Duplicate Check
+ */
+export const addFamilyMember = async (req, res, next) => {
+  try {
+    const { uid } = req.user;
+    const {
+      name,
+      fullName,
+      dob,
+      gender,
+      relation = 'child',
+      relationship,
+      customRelationship = '',
+      relationshipOther = '',
+      bloodGroup = '',
+      allergies = [],
+      conditions = [],
+      flags = { pregnant: false, disability: false },
+      confirmDuplicate = false
+    } = req.body;
+
+    const nameToUse = name || fullName;
+    const relationRaw = relationship || relation || 'child';
+
+    if (!nameToUse || !nameToUse.trim() || !dob || !gender || !relationRaw) {
+      return res.status(400).json(formatErrorResponse('VALIDATION_ERROR', 'Validation Error: Full Name, Date of Birth, Gender, and Relationship are required.'));
+    }
+
+    if (!ALLOWED_RELATIONSHIPS.includes(relationRaw)) {
+      return res.status(400).json(formatErrorResponse('VALIDATION_ERROR', `Validation Error: Invalid relationship '${relationRaw}'.`));
+    }
+
+    const customText = (customRelationship || relationshipOther || '').trim();
+
+    if (relationRaw === 'Other' && !customText) {
+      return res.status(400).json(formatErrorResponse('VALIDATION_ERROR', 'Validation Error: Please specify the relationship when selecting "Other".'));
+    }
+
+    const finalRelationship = relationRaw === 'Other' ? customText : relationRaw;
+    const searchName = nameToUse.trim().toLowerCase();
+    const db = assertDbConnected();
+
+    if (!confirmDuplicate) {
+      const dupQuery = await db.collection('patients')
+        .where('ownerUid', '==', uid)
+        .where('searchName', '==', searchName)
+        .where('dob', '==', dob)
+        .get();
+
+      if (!dupQuery.empty) {
+        const matches = dupQuery.docs.map((d) => d.data());
+        return res.status(409).json(formatErrorResponse('POSSIBLE_DUPLICATE', 'A family member with similar name and date of birth already exists.', { matches }));
+      }
+    }
+
+    const healthId = await generateAtomicPatientHealthId();
+
+    const patientDoc = {
+      patientUid: healthId,
+      patientHealthId: healthId,
+      healthId,
+      ownerUid: uid,
+      primaryAccountUid: uid,
+      relation: finalRelationship,
+      relationship: finalRelationship,
+      relationshipOther: relationRaw === 'Other' ? customText : null,
+      isDependent: true,
+      isTemporary: false,
+      fullName: nameToUse.trim(),
+      name: nameToUse.trim(),
+      nameLower: searchName,
+      searchName,
+      dob,
+      gender,
+      bloodGroup,
+      allergies: Array.isArray(allergies) ? allergies : [],
+      conditions: Array.isArray(conditions) ? conditions : [],
+      flags: {
+        pregnant: !!flags.pregnant,
+        disability: !!flags.disability
+      },
+      accessList: {},
+      emergencyQrEnabled: false,
+      qrVersion: 1,
+      profileCompleted: true,
+      consentStatus: true,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    await db.collection('patients').doc(healthId).set(patientDoc);
+
+    await writeAuditLog({
+      actorUid: uid,
+      actorRole: req.user.role || 'patient',
+      action: 'ADD_FAMILY_MEMBER',
+      targetType: 'patient',
+      targetId: healthId,
+      healthId,
+      requestId: req.requestId
     });
+
+    const computedYears = calculateAge(dob);
+    patientDoc.age = computedYears !== null ? `${computedYears} years` : '';
+
+    return res.status(201).json(formatSuccessResponse(patientDoc));
   } catch (error) {
     next(error);
   }
 };
 
 /**
- * Delete a family member / dependent
+ * Update family member profile
+ */
+export const updateFamilyMember = async (req, res, next) => {
+  try {
+    const { healthId } = req.params;
+    const { uid } = req.user;
+    const db = assertDbConnected();
+
+    const docRef = db.collection('patients').doc(healthId);
+    const doc = await docRef.get();
+
+    if (!doc.exists) {
+      return res.status(404).json(formatErrorResponse('NOT_FOUND', 'Patient record not found.'));
+    }
+
+    if (doc.data().ownerUid !== uid && doc.data().primaryAccountUid !== uid) {
+      return res.status(403).json(formatErrorResponse('FORBIDDEN', 'Only the profile owner can update family member details.'));
+    }
+
+    const updateData = {
+      ...req.body,
+      updatedAt: new Date()
+    };
+    if (req.body.name) {
+      updateData.searchName = req.body.name.trim().toLowerCase();
+    }
+
+    await docRef.set(updateData, { merge: true });
+
+    return res.status(200).json(formatSuccessResponse({ message: 'Family member profile updated successfully.' }));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Delete family member profile
  */
 export const deleteFamilyMember = async (req, res, next) => {
   try {
-    const { id } = req.params;
+    const id = req.params.healthId || req.params.id;
     const { uid } = req.user;
     const db = assertDbConnected();
 
@@ -320,29 +371,421 @@ export const deleteFamilyMember = async (req, res, next) => {
     const dependentDoc = await dependentRef.get();
 
     if (!dependentDoc.exists) {
-      return res.status(404).json({
-        success: false,
-        message: 'Family member record not found.'
-      });
+      return res.status(404).json(formatErrorResponse('NOT_FOUND', 'Family member record not found.'));
     }
 
     const data = dependentDoc.data();
-    if (data.primaryAccountUid !== uid) {
-      return res.status(403).json({
-        success: false,
-        message: 'Security Error: You are only authorized to delete your own family members.'
-      });
+    if (data.ownerUid !== uid && data.primaryAccountUid !== uid) {
+      return res.status(403).json(formatErrorResponse('FORBIDDEN', 'Security Error: You are only authorized to delete your own family members.'));
     }
 
     await dependentRef.delete();
 
-    res.status(200).json({
-      success: true,
-      message: 'Family member removed successfully.'
-    });
+    return res.status(200).json(formatSuccessResponse({ message: 'Family member removed successfully.' }));
   } catch (error) {
     next(error);
   }
 };
 
+/**
+ * Create temporary patient profile ("Someone else")
+ */
+export const createTemporaryPatient = async (req, res, next) => {
+  try {
+    const { uid } = req.user;
+    const { name, dob, age, gender, phone } = req.body;
 
+    if (!name) {
+      return res.status(400).json(formatErrorResponse('VALIDATION_ERROR', 'Patient name is required for temporary profile.'));
+    }
+
+    const healthId = await generateAtomicPatientHealthId();
+    const db = assertDbConnected();
+
+    const tempDoc = {
+      healthId,
+      patientHealthId: healthId,
+      ownerUid: uid,
+      relation: 'other',
+      isTemporary: true,
+      name: name.trim(),
+      fullName: name.trim(),
+      searchName: name.trim().toLowerCase(),
+      dob: dob || '1995-01-01',
+      gender: gender || 'other',
+      phone: phone || '',
+      allergies: [],
+      conditions: [],
+      flags: { pregnant: false, disability: false },
+      accessList: {},
+      emergencyQrEnabled: false,
+      qrVersion: 1,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    await db.collection('patients').doc(healthId).set(tempDoc);
+
+    return res.status(201).json(formatSuccessResponse(tempDoc));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Convert temporary patient to saved family member
+ */
+export const convertTemporaryPatient = async (req, res, next) => {
+  try {
+    const { healthId } = req.params;
+    const { relation = 'other' } = req.body;
+    const { uid } = req.user;
+    const db = assertDbConnected();
+
+    const docRef = db.collection('patients').doc(healthId);
+    const doc = await docRef.get();
+
+    if (!doc.exists) {
+      return res.status(404).json(formatErrorResponse('NOT_FOUND', 'Temporary patient record not found.'));
+    }
+
+    if (doc.data().ownerUid !== uid) {
+      return res.status(403).json(formatErrorResponse('FORBIDDEN', 'Only the creator can convert temporary profiles.'));
+    }
+
+    await docRef.update({
+      isTemporary: false,
+      relation,
+      updatedAt: new Date()
+    });
+
+    return res.status(200).json(formatSuccessResponse({ message: 'Profile converted to saved family member.' }));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Add / Invite Caregiver
+ */
+export const addCaregiver = async (req, res, next) => {
+  try {
+    const { healthId } = req.params;
+    const { email, role = 'caregiver', permissions = {}, isPrimary = false } = req.body;
+    const { uid } = req.user;
+
+    if (!email) {
+      return res.status(400).json(formatErrorResponse('VALIDATION_ERROR', 'Caregiver email is required.'));
+    }
+
+    const db = assertDbConnected();
+    const docRef = db.collection('patients').doc(healthId);
+    const doc = await docRef.get();
+
+    if (!doc.exists) {
+      return res.status(404).json(formatErrorResponse('NOT_FOUND', 'Patient record not found.'));
+    }
+
+    if (doc.data().ownerUid !== uid) {
+      return res.status(403).json(formatErrorResponse('FORBIDDEN', 'Only owner can manage caregivers.'));
+    }
+
+    const userQuery = await db.collection('users').where('email', '==', email.trim()).limit(1).get();
+    if (userQuery.empty) {
+      return res.status(404).json(formatErrorResponse('NOT_FOUND', `User with email '${email}' not found.`));
+    }
+
+    const caregiverUid = userQuery.docs[0].id;
+    const defaultPermissions = {
+      book: true,
+      cancel: true,
+      checkin: true,
+      medicines: true,
+      viewRecords: role === 'guardian'
+    };
+
+    const accessEntry = {
+      role,
+      status: 'pending',
+      isPrimary: !!isPrimary,
+      permissions: { ...defaultPermissions, ...permissions },
+      invitedAt: new Date().toISOString()
+    };
+
+    const accessList = doc.data().accessList || {};
+    accessList[caregiverUid] = accessEntry;
+
+    await docRef.update({ accessList, updatedAt: new Date() });
+
+    await writeAuditLog({
+      actorUid: uid,
+      actorRole: req.user.role || 'patient',
+      action: 'INVITE_CAREGIVER',
+      targetType: 'patient',
+      targetId: healthId,
+      healthId,
+      requestId: req.requestId
+    });
+
+    return res.status(200).json(formatSuccessResponse({ message: 'Caregiver invitation sent.', inviteId: caregiverUid }));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Accept Caregiver Invitation
+ */
+export const acceptCaregiverInvite = async (req, res, next) => {
+  try {
+    const { healthId } = req.params;
+    const { uid } = req.user;
+    const db = assertDbConnected();
+
+    const docRef = db.collection('patients').doc(healthId);
+    const doc = await docRef.get();
+
+    if (!doc.exists) {
+      return res.status(404).json(formatErrorResponse('NOT_FOUND', 'Patient record not found.'));
+    }
+
+    const accessList = doc.data().accessList || {};
+    if (!accessList[uid]) {
+      return res.status(404).json(formatErrorResponse('NOT_FOUND', 'Caregiver invite not found.'));
+    }
+
+    accessList[uid].status = 'active';
+    accessList[uid].acceptedAt = new Date().toISOString();
+
+    await docRef.update({ accessList, updatedAt: new Date() });
+
+    await writeAuditLog({
+      actorUid: uid,
+      actorRole: req.user.role || 'patient',
+      action: 'ACCEPT_CAREGIVER_INVITE',
+      targetType: 'patient',
+      targetId: healthId,
+      healthId,
+      requestId: req.requestId
+    });
+
+    return res.status(200).json(formatSuccessResponse({ message: 'Caregiver invitation accepted.' }));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Update / Remove Caregiver Permissions
+ */
+export const updateCaregiver = async (req, res, next) => {
+  try {
+    const { healthId, caregiverUid } = req.params;
+    const { role, permissions, isPrimary } = req.body;
+    const { uid } = req.user;
+    const db = assertDbConnected();
+
+    const docRef = db.collection('patients').doc(healthId);
+    const doc = await docRef.get();
+
+    if (!doc.exists || doc.data().ownerUid !== uid) {
+      return res.status(403).json(formatErrorResponse('FORBIDDEN', 'Forbidden. Only owner can modify caregiver settings.'));
+    }
+
+    const accessList = doc.data().accessList || {};
+    if (!accessList[caregiverUid]) {
+      return res.status(404).json(formatErrorResponse('NOT_FOUND', 'Caregiver record not found.'));
+    }
+
+    if (role) accessList[caregiverUid].role = role;
+    if (typeof isPrimary === 'boolean') accessList[caregiverUid].isPrimary = isPrimary;
+    if (permissions) accessList[caregiverUid].permissions = { ...accessList[caregiverUid].permissions, ...permissions };
+
+    await docRef.update({ accessList, updatedAt: new Date() });
+    return res.status(200).json(formatSuccessResponse({ message: 'Caregiver permissions updated.' }));
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const removeCaregiver = async (req, res, next) => {
+  try {
+    const { healthId, caregiverUid } = req.params;
+    const { uid } = req.user;
+    const db = assertDbConnected();
+
+    const docRef = db.collection('patients').doc(healthId);
+    const doc = await docRef.get();
+
+    if (!doc.exists || doc.data().ownerUid !== uid) {
+      return res.status(403).json(formatErrorResponse('FORBIDDEN', 'Forbidden. Only owner can remove caregivers.'));
+    }
+
+    const accessList = doc.data().accessList || {};
+    delete accessList[caregiverUid];
+
+    await docRef.update({ accessList, updatedAt: new Date() });
+    return res.status(200).json(formatSuccessResponse({ message: 'Caregiver removed.' }));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Health ID Card Endpoint
+ */
+export const getHealthIdCard = async (req, res, next) => {
+  try {
+    const { healthId } = req.params;
+    const db = assertDbConnected();
+
+    const doc = await db.collection('patients').doc(healthId).get();
+    if (!doc.exists) {
+      return res.status(404).json(formatErrorResponse('NOT_FOUND', 'Patient record not found.'));
+    }
+
+    const data = doc.data();
+    const qrVersion = data.qrVersion || 1;
+    const qrPayload = `PHI:${healthId}:${qrVersion}`;
+
+    return res.status(200).json(formatSuccessResponse({
+      healthId: data.healthId || data.patientHealthId,
+      name: data.name || data.fullName,
+      dob: data.dob,
+      gender: data.gender,
+      bloodGroup: data.bloodGroup || '',
+      qrPayload,
+      qrVersion,
+      emergencyQrEnabled: !!data.emergencyQrEnabled,
+      emergencyContact: data.emergencyQrEnabled ? data.emergencyContact : null,
+      allergies: data.emergencyQrEnabled ? data.allergies : []
+    }));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Refresh QR Code
+ */
+export const refreshHealthIdQr = async (req, res, next) => {
+  try {
+    const { healthId } = req.params;
+    const db = assertDbConnected();
+
+    const docRef = db.collection('patients').doc(healthId);
+    const doc = await docRef.get();
+    if (!doc.exists) {
+      return res.status(404).json(formatErrorResponse('NOT_FOUND', 'Patient record not found.'));
+    }
+
+    const newVersion = (doc.data().qrVersion || 1) + 1;
+    await docRef.update({ qrVersion: newVersion, updatedAt: new Date() });
+
+    return res.status(200).json(formatSuccessResponse({
+      qrVersion: newVersion,
+      qrPayload: `PHI:${healthId}:${newVersion}`
+    }));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Staff Patient Lookup with Audit Logging
+ */
+export const staffPatientLookup = async (req, res, next) => {
+  try {
+    const { query } = req.query;
+    if (!query) {
+      return res.status(400).json(formatErrorResponse('VALIDATION_ERROR', 'Search query (Health ID, phone, or name prefix) is required.'));
+    }
+
+    const db = assertDbConnected();
+    const qLower = query.trim().toLowerCase();
+
+    const snap = await db.collection('patients')
+      .where('searchName', '>=', qLower)
+      .where('searchName', '<=', qLower + '\uf8ff')
+      .limit(10)
+      .get();
+
+    const results = snap.docs.map((d) => d.data());
+
+    await writeAuditLog({
+      actorUid: req.user.uid,
+      actorRole: req.user.role,
+      action: 'STAFF_PATIENT_LOOKUP',
+      targetType: 'patient_search',
+      targetId: query,
+      requestId: req.requestId
+    });
+
+    return res.status(200).json(formatSuccessResponse(results));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Admin Patient Profile Merge
+ */
+export const adminMergePatients = async (req, res, next) => {
+  try {
+    const { sourceHealthId, targetHealthId } = req.body;
+    if (!sourceHealthId || !targetHealthId) {
+      return res.status(400).json(formatErrorResponse('VALIDATION_ERROR', 'sourceHealthId and targetHealthId are required.'));
+    }
+
+    const db = assertDbConnected();
+    const sourceRef = db.collection('patients').doc(sourceHealthId);
+    const targetRef = db.collection('patients').doc(targetHealthId);
+
+    const [sourceSnap, targetSnap] = await Promise.all([sourceRef.get(), targetRef.get()]);
+
+    if (!sourceSnap.exists || !targetSnap.exists) {
+      return res.status(404).json(formatErrorResponse('NOT_FOUND', 'Source or target patient profile not found.'));
+    }
+
+    await sourceRef.update({
+      mergedInto: targetHealthId,
+      updatedAt: new Date()
+    });
+
+    await writeAuditLog({
+      actorUid: req.user.uid,
+      actorRole: req.user.role,
+      action: 'ADMIN_MERGE_PATIENTS',
+      targetType: 'patient',
+      targetId: sourceHealthId,
+      healthId: targetHealthId,
+      requestId: req.requestId
+    });
+
+    return res.status(200).json(formatSuccessResponse({
+      message: `Patient profile ${sourceHealthId} successfully merged into ${targetHealthId}.`
+    }));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Caregiver Activity History
+ */
+export const getPatientActivityHistory = async (req, res, next) => {
+  try {
+    const { healthId } = req.params;
+    const db = assertDbConnected();
+
+    const logsSnap = await db.collection('auditLogs')
+      .where('healthId', '==', healthId)
+      .limit(50)
+      .get();
+
+    const activity = logsSnap.docs.map((d) => d.data());
+    return res.status(200).json(formatSuccessResponse(activity));
+  } catch (error) {
+    next(error);
+  }
+};
