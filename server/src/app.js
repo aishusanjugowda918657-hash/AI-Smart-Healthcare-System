@@ -28,6 +28,7 @@ import patientAgentRoutes from './routes/patientAgent.routes.js';
 import slotRoutes from './routes/slot.routes.js';
 import bookingRoutes from './routes/booking.routes.js';
 import checkinRoutes from './routes/checkin.routes.js';
+import queueRoutes from './routes/queue.routes.js';
 
 const app = express();
 
@@ -96,6 +97,8 @@ app.use('/api/slots', slotRoutes);
 app.use('/api/booking', bookingRoutes);
 app.use('/api/triage', bookingRoutes);
 app.use('/api/checkin', checkinRoutes);
+app.use('/api/queue', queueRoutes);
+app.use('/api/display', queueRoutes);
 
 // Error handling middleware
 app.use(errorHandler);

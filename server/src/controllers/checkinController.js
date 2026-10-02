@@ -4,6 +4,7 @@ import { assertTransition } from '../domain/status.js';
 import { AppError, formatSuccessResponse } from '../utils/errors.js';
 import { clock } from '../utils/clock.js';
 import { writeAuditLog } from '../utils/audit.js';
+import { recalculateQueue } from '../services/queueService.js';
 
 /**
  * POST /api/checkin/scan
@@ -80,6 +81,10 @@ export const scanCheckIn = async (req, res, next) => {
       predictedWaitAtCheckin,
       updatedAt: now
     });
+
+    if (apt.doctorId && apt.date) {
+      await recalculateQueue(apt.doctorId, apt.date);
+    }
 
     await writeAuditLog({
       action: 'APPOINTMENT_CHECKED_IN_QR',
@@ -177,6 +182,10 @@ export const manualCheckIn = async (req, res, next) => {
       predictedWaitAtCheckin,
       updatedAt: now
     });
+
+    if (targetDoc.doctorId && targetDoc.date) {
+      await recalculateQueue(targetDoc.doctorId, targetDoc.date);
+    }
 
     await writeAuditLog({
       action: 'APPOINTMENT_CHECKED_IN_MANUAL',

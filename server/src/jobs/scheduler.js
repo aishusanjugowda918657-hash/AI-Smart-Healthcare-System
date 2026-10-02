@@ -321,6 +321,74 @@ export async function appointmentRemindersJob({ nowOverride } = {}) {
 }
 
 /**
+ * Fairness Bump Job (PRD F6 & Section 5.1)
+ * Raises routine patients (clinicalLevel=1) delayed >= 30 min to urgent rank
+ * and sends fairness notification.
+ */
+export async function fairnessBumpJob() {
+  try {
+    const db = assertDbConnected();
+    const now = clock.now();
+    const todayStr = now.toISOString().split('T')[0];
+
+    const checkedInSnap = await db
+      .collection('appointments')
+      .where('date', '==', todayStr)
+      .where('status', 'in', ['checked_in', 'rejoined'])
+      .get();
+
+    if (checkedInSnap.empty) {
+      return { success: true, bumpedCount: 0 };
+    }
+
+    let bumpedCount = 0;
+    const affectedDoctors = new Set();
+
+    for (const doc of checkedInSnap.docs) {
+      const apt = doc.data();
+      if ((apt.clinicalLevel || 1) === 1 && apt.bookedStartAt) {
+        const bookedMs = new Date(apt.bookedStartAt).getTime();
+        const lateMin = (now.getTime() - bookedMs) / (60 * 1000);
+
+        if (lateMin >= 30 && !apt.fairnessBumpApplied) {
+          await doc.ref.update({
+            fairnessBumpApplied: true,
+            fairnessBumpedAt: now.toISOString(),
+            updatedAt: now
+          });
+
+          // Send in-app notification
+          await db.collection('notifications').add({
+            uid: apt.ownerUid || apt.patientUid || apt.patientId,
+            title: 'Queue Position Update',
+            body: 'Your turn is earlier because of your waiting time.',
+            privacyBody: 'Your queue position was updated.',
+            type: 'FAIRNESS_BUMP',
+            data: { appointmentId: doc.id },
+            read: false,
+            createdAt: now
+          });
+
+          bumpedCount++;
+          if (apt.doctorId) affectedDoctors.add(apt.doctorId);
+        }
+      }
+    }
+
+    // Recalculate affected queues
+    for (const docId of affectedDoctors) {
+      const { recalculateQueue } = await import('../services/queueService.js');
+      await recalculateQueue(docId, todayStr);
+    }
+
+    return { success: true, bumpedCount };
+  } catch (error) {
+    console.error('❌ fairnessBumpJob error:', error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
  * Main Scheduler wiring entry point
  */
 export async function runSchedulerJobs() {
@@ -328,12 +396,14 @@ export async function runSchedulerJobs() {
   const noShowResult = await noShowSweepJob();
   const releaseResult = await releaseCancelledSlotsJob();
   const remindersResult = await appointmentRemindersJob();
+  const fairnessResult = await fairnessBumpJob();
 
   return {
     holds: holdsResult,
     noShow: noShowResult,
     release: releaseResult,
     reminders: remindersResult,
+    fairness: fairnessResult,
     timestamp: clock.now().toISOString()
   };
 }

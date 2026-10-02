@@ -5,6 +5,7 @@ import { AppError, formatSuccessResponse } from '../utils/errors.js';
 import { clock } from '../utils/clock.js';
 import { SlotStatus } from '../domain/constants.js';
 import { writeAuditLog } from '../utils/audit.js';
+import { recalculateQueue } from '../services/queueService.js';
 
 /**
  * POST /api/appointments/:id/confirm
