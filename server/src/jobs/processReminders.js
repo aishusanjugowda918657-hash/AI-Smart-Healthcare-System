@@ -231,19 +231,16 @@ export async function processRemindersJob({ nowOverride } = {}) {
         // 1. Attempt to stamp this reminder with our jobId.
         //    If another job already changed status, the re-read will show it.
         try {
-          await reminderDoc.ref.update({
-            status: 'sending',
-            claimedBy: jobId,
-            claimedAt: now
+          await db.runTransaction(async (t) => {
+            const freshSnap = await t.get(reminderDoc.ref);
+            if (freshSnap.exists && freshSnap.data().status === 'pending') {
+              t.update(reminderDoc.ref, { status: 'sending', claimedBy: jobId, claimedAt: now });
+            } else {
+              throw new Error('Already claimed');
+            }
           });
-        } catch {
-          continue; // doc deleted or update failed
-        }
-
-        // 2. Re-read to confirm we won the claim
-        const freshSnap = await reminderDoc.ref.get();
-        if (!freshSnap.exists || freshSnap.data().claimedBy !== jobId) {
-          // Another job overwrote our claim — skip
+        } catch (e) {
+          // Transaction failed (e.g. contention or already claimed), consider it lost
           continue;
         }
 

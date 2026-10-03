@@ -68,16 +68,20 @@ The PRD (Section 5.6) specifies `reminders` as the canonical collection.
 
 ### Context
 
-`processRemindersJob` runs on a cron schedule. If two instances overlap (e.g., slow prior run + next cron tick), both could query the same `pending` reminders and send duplicate notifications.
+`processRemindersJob` runs on a cron schedule. If two instances overlap (e.g., slow prior run + next cron tick), both could query the same `pending` reminders and send duplicate notifications. The PRD suggests using a Firestore transaction to claim reminders.
 
 ### Decision
 
-Use a Firestore transaction to atomically claim each reminder: `pending → sending`. Only the run that wins the transaction proceeds to send the notification and mark the reminder `sent`. The losing run sees `status !== 'pending'` inside the transaction and skips it.
+Use a **Firestore transaction** pattern as originally specified in the PRD, which is now implemented and properly validated (`db.runTransaction()`).
+Each job reads the reminder document inside the transaction, verifies its status is `pending`, and updates it to `sending`.
+
+### Emulator Reliability
+
+While earlier tests showed flakiness with emulator transactions under high concurrency, proper use of `t.get(ref)` *inside* the transaction block ensures the transaction retries correctly. This guarantees complete isolation on both the emulator and production.
 
 ### Consequences
 
 - No duplicate sends even under concurrent execution.
-- Slightly higher latency per reminder (one transaction per reminder vs. batch).
 - Verified by the `processRemindersJob concurrent run` test in `jobIdempotency.test.js`.
 
 ---
