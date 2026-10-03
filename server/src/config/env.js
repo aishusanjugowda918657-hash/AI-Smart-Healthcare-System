@@ -22,7 +22,7 @@ const envSchema = z.object({
   ACTION_TOKEN_SECRET: z.string().default('dev_action_secret'),
   FLAG_AI: z.enum(['true', 'false']).default('true').transform((val) => val === 'true'),
   FLAG_PUSH: z.enum(['true', 'false']).default('true').transform((val) => val === 'true'),
-  FLAG_SCHEDULER: z.enum(['true', 'false']).default('true').transform((val) => val === 'true')
+  FLAG_SCHEDULER: z.enum(['true', 'false']).default('false').transform((val) => val === 'true')
 });
 
 let parsedEnv;

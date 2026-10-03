@@ -1,4 +1,5 @@
 import { assertDbConnected, auth } from '../src/config/firebase.js';
+import { generateSlotsJob } from '../src/jobs/scheduler.js';
 
 const DEMO_DOCTORS = [
   {
@@ -26,6 +27,19 @@ const DEMO_DOCTORS = [
     specialization: 'General Medicine',
     qualification: 'MBBS, MD',
     experience: '7 years'
+  },
+  {
+    doctorId: 'DOC-006',
+    name: 'Dr. Vikram Patel',
+    email: 'vikram.patel@smartcare-demo.com',
+    password: 'SmartCare@128',
+    phone: '9000000106',
+    departmentName: 'General Medicine',
+    deptId: 'dept-gen',
+    deptCode: 'GEN',
+    specialization: 'General Medicine',
+    qualification: 'MBBS, MD (Gen Med)',
+    experience: '10 years'
   },
   {
     doctorId: 'DOC-003',
@@ -205,6 +219,15 @@ export const seedDemoDoctors = async () => {
       status: 'ACTIVE',
       actionStatus: accountStatus
     });
+  }
+
+  // Step E: Trigger automatic slot generation for all doctors
+  console.log('\n📅 Step 3: Generating Bookable Slots for Next 14 Days...');
+  try {
+    const slotGenResult = await generateSlotsJob(14);
+    console.log(`   + Slot generation complete: ${slotGenResult.totalSlots || 0} slots created/verified.`);
+  } catch (slotErr) {
+    console.warn('   ⚠️ Slot generation warning:', slotErr.message);
   }
 
   console.log('\n' + '='.repeat(60));

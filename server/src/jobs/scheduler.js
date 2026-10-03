@@ -26,6 +26,13 @@ import { dailyDoctorAlertsJob } from './dailyDoctorAlerts.js';
 import { leaveRescheduleJob } from './leaveReschedule.js';
 import { expireWaitlistOffersJob } from '../services/waitlistService.js';
 
+// Re-export sub-job modules so tests can import them from the single scheduler entry-point
+export { processRemindersJob } from './processReminders.js';
+export { followupSweepJob } from './followupSweep.js';
+export { dailyDoctorAlertsJob } from './dailyDoctorAlerts.js';
+export { leaveRescheduleJob } from './leaveReschedule.js';
+export { expireWaitlistOffersJob } from '../services/waitlistService.js';
+
 // ─────────────────────────────────────────────────────────────
 // PHASE 2 / 3 JOBS (preserved from Phase 3–6)
 // ─────────────────────────────────────────────────────────────
@@ -586,107 +593,6 @@ export async function escalateTriageAlertsJob({ nowOverride } = {}) {
   }
 }
 
-/**
- * Job: Process due reminders — claim and send (PRD F11, Section 5.6, Section 10)
- *
- * Uses the claim pattern to prevent double-sending.
- * Retry logic: failed reminders go back to 'pending' with retryAfter;
- * after 3 attempts → 'failed'.
- */
-export async function processRemindersJob({ nowOverride } = {}) {
-  try {
-    const db = assertDbConnected();
-    const now = nowOverride ? new Date(nowOverride) : clock.now();
-
-    // Simple query without compound index — filter by status only
-    const allPendingSnap = await db
-      .collection('reminders')
-      .where('status', '==', 'pending')
-      .limit(200)
-      .get();
-
-    // Filter due items client-side (avoids compound index on status+dueAt)
-    const dueSnap = {
-      empty: true,
-      size: 0,
-      docs: allPendingSnap.docs.filter((doc) => {
-        const d = doc.data();
-        if (!d.dueAt) return false;
-        const dueAt = d.dueAt?.toDate?.() || new Date(d.dueAt);
-        return dueAt <= now;
-      })
-    };
-    dueSnap.size = dueSnap.docs.length;
-    dueSnap.empty = dueSnap.size === 0;
-
-    if (dueSnap.empty) {
-      return { success: true, processed: 0, sent: 0, failed: 0 };
-    }
-
-    let sent = 0;
-    let failed = 0;
-
-    for (const doc of dueSnap.docs) {
-      // Claim in a transaction (prevents double-send)
-      let claimed = false;
-      try {
-        await db.runTransaction(async (tx) => {
-          const snap = await tx.get(doc.ref);
-          if (!snap.exists || snap.data().status !== 'pending') return;
-          tx.update(doc.ref, {
-            status: 'sending',
-            attempts: (snap.data().attempts || 0) + 1,
-            updatedAt: now
-          });
-          claimed = true;
-        });
-      } catch {
-        continue; // Another runner claimed it
-      }
-
-      if (!claimed) continue;
-
-      const reminder = doc.data();
-      const receiverUids = reminder.receiverUids || [];
-      const attempts = (reminder.attempts || 0) + 1;
-
-      try {
-        // Send notification via F8 notify service
-        if (receiverUids.length > 0) {
-          await notify({
-            uids: receiverUids,
-            title: reminder.title || 'Reminder',
-            body: reminder.body || '',
-            privacyBody: reminder.privacyBody || reminder.body || '',
-            type: reminder.type || 'medicine',
-            data: { reminderId: doc.id, appointmentId: reminder.appointmentId || '' },
-            groupKey: reminder.groupKey,
-            urgent: reminder.type === 'medicine'
-          });
-        }
-
-        await doc.ref.update({ status: 'sent', sentAt: now, updatedAt: now });
-        sent++;
-      } catch (sendErr) {
-        console.error(`processReminders: send failed for ${doc.id}:`, sendErr.message);
-        if (attempts >= 3) {
-          await doc.ref.update({ status: 'failed', lastError: sendErr.message, updatedAt: now });
-          failed++;
-        } else {
-          // Retry after exponential backoff
-          const retryAfter = new Date(now.getTime() + 30_000 * Math.pow(2, attempts - 1));
-          await doc.ref.update({ status: 'pending', retryAfter, lastError: sendErr.message, updatedAt: now });
-        }
-      }
-    }
-
-    return { success: true, processed: dueSnap.size, sent, failed };
-  } catch (error) {
-    console.error('❌ processRemindersJob error:', error.message);
-    return { success: false, error: error.message };
-  }
-}
-
 // ─────────────────────────────────────────────────────────────
 // MAIN SCHEDULER ENTRY POINT
 // ─────────────────────────────────────────────────────────────
@@ -732,31 +638,41 @@ export async function startScheduler() {
     // Dynamic import to avoid pulling node-cron into test bundles
     const { default: cron } = await import('node-cron');
 
+    // Only log non-trivial results to reduce noise
     const safeRun = (name, fn) => async () => {
       try {
         const r = await fn();
-        console.log(`✅ [cron] ${name}:`, JSON.stringify(r));
+        const hasWork = Object.values(r || {}).some(
+          (v) => typeof v === 'number' && v > 0
+        );
+        if (hasWork) console.log(`✅ [cron] ${name}:`, JSON.stringify(r));
       } catch (err) {
         console.error(`❌ [cron] ${name} error:`, err.message);
       }
     };
 
-    // Every minute
-    cron.schedule('* * * * *', safeRun('expireHolds', expireHoldsJob));
-    cron.schedule('* * * * *', safeRun('noShowSweep', noShowSweepJob));
-    cron.schedule('* * * * *', safeRun('releaseCancelledSlots', releaseCancelledSlotsJob));
-    cron.schedule('* * * * *', safeRun('fairnessBump', fairnessBumpJob));
-    cron.schedule('* * * * *', safeRun('escalateTriageAlerts', escalateTriageAlertsJob));
-    cron.schedule('* * * * *', safeRun('processReminders', processRemindersJob));
+    // Every 2 minutes — real-time slot / no-show / escalation sweeps (PRD §10)
+    cron.schedule('*/2 * * * *', safeRun('expireHolds', expireHoldsJob));
+    cron.schedule('*/2 * * * *', safeRun('noShowSweep', noShowSweepJob));
+    cron.schedule('*/2 * * * *', safeRun('escalateTriageAlerts', escalateTriageAlertsJob));
+    cron.schedule('*/2 * * * *', safeRun('processReminders', processRemindersJob));
 
-    // Every 5 minutes
+    // Every 5 minutes — lower-urgency maintenance (PRD §10)
+    cron.schedule('*/5 * * * *', safeRun('releaseCancelledSlots', releaseCancelledSlotsJob));
+    cron.schedule('*/5 * * * *', safeRun('fairnessBump', fairnessBumpJob));
     cron.schedule('*/5 * * * *', safeRun('appointmentReminders', appointmentRemindersJob));
 
-    // Daily jobs
-    cron.schedule('0 1 * * *', safeRun('generateSlots', () => generateSlotsJob(14)));  // 01:00
-    cron.schedule('0 3 * * *', safeRun('cleanup', cleanupJob));                         // 03:00
+    // Hourly — time-sensitive offer expiry & leave handling
+    cron.schedule('0 * * * *', safeRun('leaveReschedule', leaveRescheduleJob));
+    cron.schedule('0 * * * *', safeRun('expireWaitlistOffers', expireWaitlistOffersJob));
 
-    console.log('✅ Scheduler started (node-cron)');
+    // Daily jobs (hospital-time)
+    cron.schedule('0 6 * * *',  safeRun('followupSweep', followupSweepJob));        // 06:00
+    cron.schedule('30 6 * * *', safeRun('dailyDoctorAlerts', dailyDoctorAlertsJob)); // 06:30
+    cron.schedule('0 1 * * *',  safeRun('generateSlots', () => generateSlotsJob(14)));  // 01:00
+    cron.schedule('0 3 * * *',  safeRun('cleanup', cleanupJob));                        // 03:00
+
+    console.log('✅ Scheduler started (node-cron). Intervals: 2min sweeps, 5min maintenance, hourly offers, daily batch.');
   } catch (err) {
     console.error('❌ Failed to start scheduler:', err.message);
   }

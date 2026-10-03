@@ -10,6 +10,8 @@
       "emergencyMessage": "CRITICAL EMERGENCY ALERT: Severe chest pain or suspected cardiac distress detected. Please go to the nearest Emergency Room immediately or dial 108 / Emergency Services.",
       "patterns": [
         "chest pain",
+        "sever chest pain",
+        "severe chest pain",
         "chest tightness",
         "chest pressure",
         "heart attack",
@@ -19,7 +21,10 @@
         "nenju vali",
         "nenjil vali",
         "edeyalli novu",
-        "hrudayaagatha"
+        "hrudayaagatha",
+        "chhati me tej dard",
+        "nenjil kadum vali",
+        "edeyalli teevra novu"
       ]
     },
     {
@@ -31,14 +36,17 @@
       "emergencyMessage": "CRITICAL EMERGENCY ALERT: Severe breathing difficulty detected. Seek immediate emergency medical care.",
       "patterns": [
         "cannot breathe",
-        "shortness of breath",
+        "breathing difficulty",
         "difficulty breathing",
+        "shortness of breath",
         "gasping for air",
         "breathlessness",
         "saans lene me takleef",
         "saans phoolna",
         "usiru kattuvike",
-        "moochu thinaral"
+        "moochu thinaral",
+        "svaasakosha takleef",
+        "saans nahi aa rahi"
       ]
     },
     {
@@ -58,7 +66,27 @@
         "behosh",
         "lakwa",
         "svabodhina",
-        "fainting"
+        "fainting",
+        "mayakkam"
+      ]
+    },
+    {
+      "id": "hemorrhage_severe",
+      "name": "Severe Uncontrolled Bleeding",
+      "level": 3,
+      "urgencySuggested": "emergency",
+      "departmentId": "dept-gen",
+      "emergencyMessage": "CRITICAL EMERGENCY ALERT: Heavy uncontrolled bleeding detected. Apply pressure and seek immediate emergency care.",
+      "patterns": [
+        "heavy bleeding that will not stop",
+        "heavy bleeding",
+        "uncontrolled bleeding",
+        "bleeding that will not stop",
+        "tez khoon behna",
+        "teevra rakthasrava",
+        "raka srava",
+        "rathasravam",
+        "kadu ratha pokku"
       ]
     },
     {

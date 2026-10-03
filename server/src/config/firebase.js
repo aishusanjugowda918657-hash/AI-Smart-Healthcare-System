@@ -7,11 +7,10 @@ dotenv.config();
 let db = null;
 let auth = null;
 let firebaseInitialized = false;
+const isEmulator = !!process.env.FIRESTORE_EMULATOR_HOST;
 
 try {
   if (admin.apps.length === 0) {
-    const isEmulator = !!process.env.FIRESTORE_EMULATOR_HOST;
-
     if (isEmulator) {
       // When running against the local emulator, use a plain project-ID init.
       // firebase-admin automatically detects FIRESTORE_EMULATOR_HOST at this point.
@@ -49,9 +48,16 @@ try {
   if (firebaseInitialized) {
     db = admin.firestore();
     auth = admin.auth();
+    // Task 4: print one line so developers immediately know which backend they hit.
+    const projectId = admin.app().options?.projectId || process.env.VITE_FIREBASE_PROJECT_ID || 'unknown';
+    if (isEmulator) {
+      console.log('[Firestore] EMULATOR (project=' + projectId + ') -- no quota, safe for local dev');
+    } else {
+      console.log('[Firestore] REAL PROJECT "' + projectId + '" -- Spark plan quota applies. Use npm run dev:emulator for local dev.');
+    }
   }
 } catch (error) {
-  console.error('⚠️ Firebase Admin SDK Initialization Error:', error.message);
+  console.error('Warning: Firebase Admin SDK Initialization Error:', error.message);
   db = null;
   auth = null;
 }
@@ -68,4 +74,4 @@ export const assertDbConnected = () => {
   return db;
 };
 
-export { admin, db, auth, firebaseInitialized };
+export { admin, db, auth, firebaseInitialized, isEmulator };

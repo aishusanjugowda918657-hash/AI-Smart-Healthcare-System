@@ -1,32 +1,32 @@
 import React, { useState, useEffect } from 'react';
-import {
-  User, CheckCircle, AlertTriangle, ShieldCheck, Clock, Calendar,
-  Stethoscope, ArrowRight, ArrowLeft, Navigation, MapPin, QrCode
-} from 'lucide-react';
-import API from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
-import SlotPickerList from './SlotPickerList';
+import API from '../../services/api';
+import {
+  Calendar, Clock, User, ShieldCheck, AlertTriangle, ArrowRight, ArrowLeft,
+  CheckCircle, Stethoscope, Compass, RefreshCw
+} from 'lucide-react';
 import QRCode from 'qrcode';
 
-/**
- * 7-Step Smart Appointment Booking Form (PRD F3 & F4)
- * Step 1: Who is the patient? (Me, family member, someone else)
- * Step 2: Reason for visit (chips + text + follow-up questions)
- * Step 3: Urgent-symptom triage check (POST /booking/triage)
- * Step 4: Choose doctor ("Your usual doctor" badge)
- * Step 5: Choose slot (3 smart suggestion cards + full list + travel time)
- * Step 6: Confirm booking (FULL DISCLAIMER + "I understand" tick)
- * Step 7: Appointment details (token label, QR Code, SHORT DISCLAIMER)
- */
-export const AppointmentBookingForm = () => {
-  return <AppointmentBookingFormContent />;
+const DEPARTMENT_NAMES = {
+  'dept-gen': 'General Medicine',
+  'DEPT-GEN': 'General Medicine',
+  'dept-card': 'Cardiology',
+  'DEPT-CARD': 'Cardiology',
+  'dept-ped': 'Pediatrics',
+  'dept-peds': 'Pediatrics',
+  'DEPT-PED': 'Pediatrics',
+  'dept-ortho': 'Orthopedics',
+  'DEPT-ORTHO': 'Orthopedics',
+  'dept-derm': 'Dermatology',
+  'DEPT-DERM': 'Dermatology'
 };
 
-export default function AppointmentBookingFormMain() {
-  return <AppointmentBookingFormContent />;
-}
+const formatDepartmentName = (deptId) => {
+  if (!deptId) return 'General Medicine';
+  return DEPARTMENT_NAMES[deptId] || DEPARTMENT_NAMES[deptId.toLowerCase()] || deptId;
+};
 
-function AppointmentBookingFormContent() {
+export const AppointmentBookingForm = () => {
   const { currentUser, patientProfile } = useAuth();
   const [currentStep, setCurrentStep] = useState(1);
 
@@ -51,6 +51,7 @@ function AppointmentBookingFormContent() {
   const [doctorOptions, setDoctorOptions] = useState([]);
   const [selectedDoctorId, setSelectedDoctorId] = useState('');
   const [doctorsLoading, setDoctorsLoading] = useState(false);
+  const [doctorsError, setDoctorsError] = useState(null); // null | 'unavailable' | 'empty'
 
   // Step 5 State: Slot Selection
   const [appointmentDate, setAppointmentDate] = useState(new Date().toISOString().split('T')[0]);
@@ -107,7 +108,8 @@ function AppointmentBookingFormContent() {
         answers: {
           type: isFollowup === 'yes' ? 'followup' : 'new',
           duration: symptomDays,
-          severity: isSevereRightNow
+          severity: isSevereRightNow,
+          isSevereRightNow: isSevereRightNow === 'yes'
         }
       });
 
@@ -115,13 +117,15 @@ function AppointmentBookingFormContent() {
       setTriageData(data);
       setCurrentStep(3);
     } catch (err) {
-      console.warn('Triage API error, using default:', err.message);
+      console.warn('Triage API error:', err.message);
       setTriageData({
         departmentId: 'dept-gen',
         visitType: 'new',
         complexity: 'moderate',
-        urgencySuggested: 'routine',
-        redFlag: false,
+        urgencySuggested: 'urgent',
+        isError: true,
+        // Preserve the severe flag so renderStep3 shows the correct safety message
+        isSevereRightNowError: isSevereRightNow === 'yes',
         expectedDurationMin: 15
       });
       setCurrentStep(3);
@@ -133,6 +137,7 @@ function AppointmentBookingFormContent() {
   // Step 3 -> Step 4: Fetch Doctor Options for Suggested Department
   const handleProceedToDoctors = async () => {
     setDoctorsLoading(true);
+    setDoctorsError(null);
     const deptId = triageData?.departmentId || 'dept-gen';
 
     try {
@@ -141,10 +146,24 @@ function AppointmentBookingFormContent() {
       setDoctorOptions(options);
       if (options.length > 0) {
         setSelectedDoctorId(options[0].doctorId || options[0].id);
+        setDoctorsError(null);
+      } else {
+        setSelectedDoctorId('');
+        setDoctorsError('empty');
       }
       setCurrentStep(4);
     } catch (err) {
       console.warn('Doctor options fetch error:', err.message);
+      // Distinguish transient DB outage (503 FIRESTORE_UNAVAILABLE) from empty results
+      const errCode = err?.response?.data?.error?.code;
+      const status  = err?.response?.status;
+      if (status === 503 || errCode === 'FIRESTORE_UNAVAILABLE') {
+        setDoctorsError('unavailable');
+      } else {
+        setDoctorsError('empty');
+      }
+      setDoctorOptions([]);
+      setSelectedDoctorId('');
       setCurrentStep(4);
     } finally {
       setDoctorsLoading(false);
@@ -170,7 +189,7 @@ function AppointmentBookingFormContent() {
     }
   };
 
-  // Step 6: Submit Booking Transaction (PRD 5.5)
+  // Step 6: Submit Booking Transaction
   const handleFinalBooking = async () => {
     if (!disclaimerTicked) return;
     setBookingSubmitting(true);
@@ -211,7 +230,6 @@ function AppointmentBookingFormContent() {
       const appt = res.data?.data || res.data;
       setBookedAppointment(appt);
 
-      // Generate Check-in QR Code Data URL
       if (appt.qrPayload) {
         const qrUrl = await QRCode.toDataURL(appt.qrPayload, { margin: 2, width: 220 });
         setQrCodeDataUrl(qrUrl);
@@ -219,119 +237,108 @@ function AppointmentBookingFormContent() {
 
       setCurrentStep(7);
     } catch (err) {
-      setBookingError(err.response?.data?.message || err.message || 'Failed to book appointment');
+      console.error('Booking failed:', err);
+      setBookingError(err.response?.data?.message || err.message || 'Failed to complete appointment booking.');
     } finally {
       setBookingSubmitting(false);
     }
   };
 
-  // Render Step 1: Who is the Patient?
+  // Render Step 1: Patient Selection
   const renderStep1 = () => {
     const isNextDisabled =
       (patientType === 'family' && !selectedFamilyId) ||
-      (patientType === 'temp' && (!tempPatient.name || !tempPatient.phone));
+      (patientType === 'temp' && !tempPatient.name.trim());
 
     return (
       <div className="space-y-6">
         <div>
-          <h3 className="text-xl font-bold text-slate-100">Step 1: Who is the patient?</h3>
-          <p className="text-xs text-slate-400 mt-1">Select who this appointment is being booked for.</p>
+          <h3 className="text-xl font-bold text-slate-100">Step 1: Who is this appointment for?</h3>
+          <p className="text-xs text-slate-400 mt-1">Book for yourself, a registered family member, or a temporary dependent.</p>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <button
-            type="button"
+          <div
             onClick={() => setPatientType('me')}
-            className={`p-4 rounded-2xl border text-left transition-all ${
+            className={`p-4 rounded-2xl border cursor-pointer transition-all ${
               patientType === 'me'
-                ? 'bg-teal-500/10 border-teal-500 text-teal-300 ring-2 ring-teal-500/30'
+                ? 'bg-teal-500/10 border-teal-500 text-slate-100 ring-2 ring-teal-500/30'
                 : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:border-slate-600'
             }`}
           >
-            <div className="flex items-center gap-2 mb-1">
-              <User className="w-5 h-5 text-teal-400" />
-              <span className="font-bold text-sm">Myself (Me)</span>
-            </div>
-            <p className="text-[11px] text-slate-400">
-              {patientProfile?.fullName || currentUser?.displayName || 'My Profile'}
+            <User className="w-6 h-6 text-teal-400 mb-2" />
+            <h4 className="font-bold text-sm">Myself</h4>
+            <p className="text-[11px] text-slate-400 mt-1">
+              {patientProfile?.fullName || currentUser?.displayName || 'Primary Account Holder'}
             </p>
-          </button>
+          </div>
 
-          <button
-            type="button"
+          <div
             onClick={() => setPatientType('family')}
-            className={`p-4 rounded-2xl border text-left transition-all ${
+            className={`p-4 rounded-2xl border cursor-pointer transition-all ${
               patientType === 'family'
-                ? 'bg-teal-500/10 border-teal-500 text-teal-300 ring-2 ring-teal-500/30'
+                ? 'bg-teal-500/10 border-teal-500 text-slate-100 ring-2 ring-teal-500/30'
                 : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:border-slate-600'
             }`}
           >
-            <div className="flex items-center gap-2 mb-1">
-              <User className="w-5 h-5 text-indigo-400" />
-              <span className="font-bold text-sm">Family Member</span>
-            </div>
-            <p className="text-[11px] text-slate-400">Select from saved dependents</p>
-          </button>
+            <User className="w-6 h-6 text-indigo-400 mb-2" />
+            <h4 className="font-bold text-sm">Family Member</h4>
+            <p className="text-[11px] text-slate-400 mt-1">Registered dependents & relatives</p>
+          </div>
 
-          <button
-            type="button"
+          <div
             onClick={() => setPatientType('temp')}
-            className={`p-4 rounded-2xl border text-left transition-all ${
+            className={`p-4 rounded-2xl border cursor-pointer transition-all ${
               patientType === 'temp'
-                ? 'bg-teal-500/10 border-teal-500 text-teal-300 ring-2 ring-teal-500/30'
+                ? 'bg-teal-500/10 border-teal-500 text-slate-100 ring-2 ring-teal-500/30'
                 : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:border-slate-600'
             }`}
           >
-            <div className="flex items-center gap-2 mb-1">
-              <User className="w-5 h-5 text-amber-400" />
-              <span className="font-bold text-sm">Someone Else</span>
-            </div>
-            <p className="text-[11px] text-slate-400">Temporary guest profile</p>
-          </button>
+            <User className="w-6 h-6 text-purple-400 mb-2" />
+            <h4 className="font-bold text-sm">Guest / Temporary</h4>
+            <p className="text-[11px] text-slate-400 mt-1">One-time appointment entry</p>
+          </div>
         </div>
 
         {patientType === 'family' && (
-          <div className="bg-slate-800/60 p-4 rounded-xl border border-slate-700 space-y-3">
-            <label className="block text-xs font-semibold text-slate-300">Select Family Member</label>
+          <div className="bg-slate-800/50 p-4 rounded-2xl border border-slate-700 space-y-3">
+            <label className="block text-xs font-semibold text-slate-300">Select Family Member Profile</label>
             {familyMembers.length > 0 ? (
               <select
                 value={selectedFamilyId}
                 onChange={(e) => setSelectedFamilyId(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100"
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-teal-500"
               >
-                <option value="">-- Choose a family member --</option>
+                <option value="">-- Choose Dependent --</option>
                 {familyMembers.map((m) => (
                   <option key={m.patientUid || m.id} value={m.patientUid || m.id}>
-                    {m.fullName || m.name} ({m.relation})
+                    {m.fullName || m.name} ({m.relationship || 'Dependent'}) - {m.patientHealthId || m.healthId}
                   </option>
                 ))}
               </select>
             ) : (
-              <p className="text-xs text-amber-400">No saved family members found. Please use 'Someone Else' or add family member first.</p>
+              <p className="text-xs text-amber-400 italic">No family member profiles linked yet. Add family members in your profile settings.</p>
             )}
           </div>
         )}
 
         {patientType === 'temp' && (
-          <div className="bg-slate-800/60 p-4 rounded-xl border border-slate-700 grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1">Patient Full Name</label>
+          <div className="bg-slate-800/50 p-4 rounded-2xl border border-slate-700 space-y-3">
+            <label className="block text-xs font-semibold text-slate-300">Temporary Dependent Details</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <input
                 type="text"
+                placeholder="Full Name"
                 value={tempPatient.name}
                 onChange={(e) => setTempPatient({ ...tempPatient, name: e.target.value })}
-                placeholder="e.g. Ramesh Kumar"
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100"
+                className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100"
               />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1">Contact Phone</label>
               <input
-                type="tel"
+                type="text"
+                placeholder="Phone Number"
                 value={tempPatient.phone}
                 onChange={(e) => setTempPatient({ ...tempPatient, phone: e.target.value })}
-                placeholder="e.g. 9876543210"
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100"
+                className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100"
               />
             </div>
           </div>
@@ -389,7 +396,7 @@ function AppointmentBookingFormContent() {
           rows={3}
           value={reasonText}
           onChange={(e) => setReasonText(e.target.value)}
-          placeholder="e.g. Fever since yesterday, mild headache, cough..."
+          placeholder="e.g. Severe chest pain from morning, shortness of breath..."
           className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-sm text-slate-100 focus:outline-none focus:border-teal-500"
         />
       </div>
@@ -463,7 +470,42 @@ function AppointmentBookingFormContent() {
         <p className="text-xs text-slate-400 mt-1">Automated safety check results for your symptoms.</p>
       </div>
 
-      {triageData?.redFlag ? (
+      {triageData?.isError ? (
+        <div className={`border-2 rounded-2xl p-5 space-y-3 ${triageData.isSevereRightNowError ? 'bg-rose-950/40 border-rose-500/80' : 'bg-amber-950/40 border-amber-500/80'}`}>
+          <div className="flex items-start gap-3">
+            <AlertTriangle className={`w-6 h-6 shrink-0 mt-0.5 ${triageData.isSevereRightNowError ? 'text-rose-400 animate-bounce' : 'text-amber-400'}`} />
+            <div>
+              <h4 className={`text-sm font-bold ${triageData.isSevereRightNowError ? 'text-rose-300' : 'text-amber-300'}`}>
+                {triageData.isSevereRightNowError
+                  ? 'SAFETY CHECK FAILED — Severe Symptoms Reported'
+                  : 'Safety Check System Warning'}
+              </h4>
+              <p className={`text-xs mt-1 ${triageData.isSevereRightNowError ? 'text-rose-200/90' : 'text-amber-200/90'}`}>
+                {triageData.isSevereRightNowError
+                  ? 'You reported severe symptoms right now but our safety check could not complete. If you have chest pain, difficulty breathing, or feel very unwell — go to the Emergency department or call 108 immediately.'
+                  : 'We could not complete the safety check. If you feel very unwell, go to the Emergency department now.'}
+              </p>
+            </div>
+          </div>
+          {triageData.isSevereRightNowError && (
+            <a
+              href="tel:108"
+              className="block w-full text-center px-5 py-3 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow-lg"
+            >
+              🚨 Call Emergency (108)
+            </a>
+          )}
+          <div className="flex gap-3 pt-2">
+            <button
+              type="button"
+              onClick={handleProceedToDoctors}
+              className={`px-4 py-2 font-bold text-xs rounded-xl ${triageData.isSevereRightNowError ? 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700' : 'bg-amber-600 hover:bg-amber-500 text-slate-950'}`}
+            >
+              Continue Booking
+            </button>
+          </div>
+        </div>
+      ) : triageData?.redFlag ? (
         <div className="bg-rose-950/40 border-2 border-rose-500/80 rounded-2xl p-6 space-y-4 shadow-xl">
           <div className="flex items-start gap-3">
             <AlertTriangle className="w-8 h-8 text-rose-400 shrink-0 mt-0.5 animate-bounce" />
@@ -498,7 +540,7 @@ function AppointmentBookingFormContent() {
             <h4 className="text-sm font-bold text-emerald-300">No Emergency Symptoms Flagged</h4>
           </div>
           <p className="text-xs text-slate-300">
-            Suggested Department: <span className="font-bold text-slate-100 uppercase">{triageData?.departmentId}</span> • Urgency: <span className="font-bold text-emerald-400 uppercase">{triageData?.urgencySuggested}</span>
+            Suggested Department: <span className="font-bold text-slate-100 uppercase">{formatDepartmentName(triageData?.departmentId)}</span> • Urgency: <span className="font-bold text-emerald-400 uppercase">{triageData?.urgencySuggested}</span>
           </p>
           <p className="text-xs text-slate-400 italic">
             "{triageData?.followUpQuestion || 'No additional urgent symptoms detected.'}"
@@ -532,7 +574,7 @@ function AppointmentBookingFormContent() {
     <div className="space-y-6">
       <div>
         <h3 className="text-xl font-bold text-slate-100">Step 4: Choose Doctor</h3>
-        <p className="text-xs text-slate-400 mt-1">Select a doctor for {triageData?.departmentId || 'General Medicine'}.</p>
+        <p className="text-xs text-slate-400 mt-1">Select a doctor for {formatDepartmentName(triageData?.departmentId)}.</p>
       </div>
 
       {doctorsLoading ? (
@@ -573,8 +615,29 @@ function AppointmentBookingFormContent() {
             );
           })}
         </div>
+      ) : doctorsError === 'unavailable' ? (
+        <div className="p-6 bg-slate-800/60 rounded-2xl border border-amber-700/50 space-y-3 text-center">
+          <p className="text-sm font-semibold text-amber-300">Doctor lookup is temporarily unavailable.</p>
+          <p className="text-xs text-slate-400">The scheduling database is momentarily overloaded. Please wait a moment and try again.</p>
+          <button
+            type="button"
+            onClick={handleProceedToDoctors}
+            className="px-4 py-2 bg-teal-700 hover:bg-teal-600 text-slate-100 text-xs font-bold rounded-xl flex items-center gap-2 mx-auto"
+          >
+            <RefreshCw className="w-3.5 h-3.5" /> Try Again
+          </button>
+        </div>
       ) : (
-        <div className="p-6 bg-slate-800/60 rounded-xl text-slate-400 text-xs">No doctors found for this department.</div>
+        <div className="p-6 bg-slate-800/60 rounded-2xl border border-slate-700 text-slate-300 space-y-3 text-center">
+          <p className="text-sm font-semibold text-amber-300">No doctors available for this department yet.</p>
+          <button
+            type="button"
+            onClick={() => setCurrentStep(2)}
+            className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-100 text-xs font-bold rounded-xl"
+          >
+            Choose another department
+          </button>
+        </div>
       )}
 
       <div className="flex items-center justify-between pt-4 border-t border-slate-800">
@@ -588,8 +651,9 @@ function AppointmentBookingFormContent() {
 
         <button
           type="button"
+          disabled={!selectedDoctorId || doctorOptions.length === 0}
           onClick={handleProceedToSlots}
-          className="flex items-center gap-2 px-6 py-3 bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold text-sm rounded-xl transition-all shadow-lg shadow-teal-500/20"
+          className="flex items-center gap-2 px-6 py-3 bg-teal-500 hover:bg-teal-400 disabled:opacity-40 text-slate-950 font-bold text-sm rounded-xl transition-all shadow-lg shadow-teal-500/20"
         >
           <span>Choose Slot</span>
           <ArrowRight className="w-4 h-4" />
@@ -620,45 +684,75 @@ function AppointmentBookingFormContent() {
           <label className="block text-xs font-semibold text-slate-300 mb-1">Travel Time (Minutes - Optional)</label>
           <input
             type="number"
+            placeholder="e.g. 20"
             value={travelMinutes}
             onChange={(e) => setTravelMinutes(e.target.value)}
-            placeholder="e.g. 25"
             className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100"
           />
         </div>
       </div>
 
-      {/* Smart Suggestion Cards */}
-      {slotsData.cards && slotsData.cards.length > 0 && (
-        <div className="space-y-2">
-          <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">★ Smart Slot Suggestions</h4>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {slotsData.cards.map((card) => (
-              <div
-                key={card.slotId}
-                onClick={() => setSelectedSlotId(card.slotId)}
-                className={`p-3.5 rounded-xl border cursor-pointer transition-all ${
-                  selectedSlotId === card.slotId
-                    ? 'bg-teal-500/20 border-teal-400 text-teal-200 ring-2 ring-teal-500/30'
-                    : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:border-slate-600'
-                }`}
-              >
-                <span className="text-[10px] uppercase font-bold text-teal-400">{card.label}</span>
-                <p className="text-lg font-bold font-mono text-slate-100 mt-1">{card.startAt}</p>
-                <p className="text-[11px] text-slate-400 mt-0.5">{card.reason}</p>
+      {slotsLoading ? (
+        <div className="p-8 text-center text-slate-400 text-sm">Fetching smart slot options...</div>
+      ) : (
+        <div className="space-y-4">
+          {slotsData.cards && slotsData.cards.length > 0 && (
+            <div className="space-y-2">
+              <label className="block text-xs font-bold text-teal-400 uppercase tracking-wider">Smart Suggestions</label>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {slotsData.cards.map((card, idx) => (
+                  <div
+                    key={idx}
+                    onClick={() => setSelectedSlotId(card.slotId)}
+                    className={`p-3 rounded-2xl border cursor-pointer transition-all ${
+                      selectedSlotId === card.slotId
+                        ? 'bg-teal-500/10 border-teal-500 text-slate-100 ring-2 ring-teal-500/30'
+                        : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:border-slate-600'
+                    }`}
+                  >
+                    <span className="inline-block px-2 py-0.5 bg-teal-500/20 text-teal-300 rounded-md text-[10px] font-bold mb-1">
+                      {card.label}
+                    </span>
+                    <h5 className="font-bold text-sm text-slate-100">{card.timeStr}</h5>
+                    <p className="text-[10px] text-slate-400 mt-0.5">{card.reason}</p>
+                  </div>
+                ))}
               </div>
-            ))}
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <label className="block text-xs font-bold text-slate-300">All Bookable Slots</label>
+            {slotsData.fullList && slotsData.fullList.length > 0 ? (
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                {slotsData.fullList.map((slot) => {
+                  const isSelected = selectedSlotId === slot.id;
+                  const isAvailable = slot.status === 'free';
+                  return (
+                    <button
+                      key={slot.id}
+                      type="button"
+                      disabled={!isAvailable}
+                      onClick={() => setSelectedSlotId(slot.id)}
+                      className={`p-2 rounded-xl text-xs font-mono font-bold transition-all ${
+                        isSelected
+                          ? 'bg-teal-500 text-slate-950 shadow-md shadow-teal-500/20'
+                          : isAvailable
+                          ? 'bg-slate-800 text-slate-200 border border-slate-700 hover:border-slate-500'
+                          : 'bg-slate-900 text-slate-600 border border-slate-800 cursor-not-allowed line-through'
+                      }`}
+                    >
+                      {slot.startAt}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="p-4 bg-slate-800/50 rounded-xl text-slate-400 text-xs">No available slots found for this date.</div>
+            )}
           </div>
         </div>
       )}
-
-      {/* Full Slot List Component */}
-      <SlotPickerList
-        slots={slotsData.fullList || []}
-        selectedSlotId={selectedSlotId}
-        onSelectSlot={(slot) => setSelectedSlotId(slot.id)}
-        loading={slotsLoading}
-      />
 
       <div className="flex items-center justify-between pt-4 border-t border-slate-800">
         <button
@@ -675,58 +769,58 @@ function AppointmentBookingFormContent() {
           onClick={() => setCurrentStep(6)}
           className="flex items-center gap-2 px-6 py-3 bg-teal-500 hover:bg-teal-400 disabled:opacity-40 text-slate-950 font-bold text-sm rounded-xl transition-all shadow-lg shadow-teal-500/20"
         >
-          <span>Next: Confirm Booking</span>
+          <span>Review & Confirm</span>
           <ArrowRight className="w-4 h-4" />
         </button>
       </div>
     </div>
   );
 
-  // Render Step 6: Confirm Booking (FULL DISCLAIMER + TICKBOX)
+  // Render Step 6: Confirmation & Disclaimer
   const renderStep6 = () => (
     <div className="space-y-6">
       <div>
-        <h3 className="text-xl font-bold text-slate-100">Step 6: Confirm Booking</h3>
-        <p className="text-xs text-slate-400 mt-1">Review appointment summary and acknowledge clinic disclaimer.</p>
+        <h3 className="text-xl font-bold text-slate-100">Step 6: Confirm Appointment</h3>
+        <p className="text-xs text-slate-400 mt-1">Review your booking details and accept the clinical disclaimer.</p>
+      </div>
+
+      <div className="bg-slate-800/80 p-5 rounded-2xl border border-slate-700 space-y-3 text-xs text-slate-300">
+        <div className="flex justify-between border-b border-slate-700 pb-2">
+          <span className="text-slate-400">Department</span>
+          <span className="font-bold text-slate-100 uppercase">{formatDepartmentName(triageData?.departmentId)}</span>
+        </div>
+        <div className="flex justify-between border-b border-slate-700 pb-2">
+          <span className="text-slate-400">Date & Slot</span>
+          <span className="font-bold text-slate-100">{appointmentDate}</span>
+        </div>
+        <div className="flex justify-between border-b border-slate-700 pb-2">
+          <span className="text-slate-400">Urgency Level</span>
+          <span className="font-bold text-teal-400 uppercase">{triageData?.urgencySuggested || 'ROUTINE'}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-slate-400">Reason</span>
+          <span className="font-semibold text-slate-200">{reasonText || reasonChips.join(', ') || 'Routine Consultation'}</span>
+        </div>
       </div>
 
       {bookingError && (
-        <div className="p-3.5 bg-rose-500/10 border border-rose-500/30 text-rose-400 rounded-xl text-xs font-medium">
+        <div className="p-3 bg-rose-950/60 border border-rose-500 text-rose-200 text-xs font-bold rounded-xl">
           ⚠️ {bookingError}
         </div>
       )}
 
-      <div className="bg-slate-800/80 border border-slate-700 rounded-2xl p-5 space-y-3">
-        <h4 className="text-sm font-bold text-slate-200">Appointment Summary</h4>
-        <div className="grid grid-cols-2 gap-3 text-xs">
-          <div>
-            <span className="text-slate-400">Doctor:</span>
-            <p className="font-semibold text-slate-100">{doctorOptions.find((d) => (d.doctorId || d.id) === selectedDoctorId)?.name || 'Doctor'}</p>
-          </div>
-          <div>
-            <span className="text-slate-400">Date & Slot:</span>
-            <p className="font-semibold text-slate-100 font-mono">{appointmentDate} at {slotsData.fullList?.find((s) => s.id === selectedSlotId)?.startAt || 'Selected Slot'}</p>
-          </div>
-        </div>
-      </div>
-
-      {/* FULL DISCLAIMER BOX (PRD F3) */}
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 space-y-4">
-        <h4 className="text-xs font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
-          <ShieldCheck className="w-4 h-4" /> Clinic Operational Disclaimer
-        </h4>
-        <p className="text-xs text-slate-300 leading-relaxed">
-          "Your appointment time is an estimate. Emergency and critical cases are always seen first, so your waiting time may vary. We will keep you updated in real time and offer options if your wait becomes longer."
-        </p>
-
-        <label className="flex items-center gap-3 cursor-pointer pt-2 border-t border-slate-800">
+      {/* Mandatory Disclaimer Tick Box */}
+      <div className="bg-amber-950/30 border border-amber-500/40 p-4 rounded-2xl space-y-2">
+        <label className="flex items-start gap-3 cursor-pointer">
           <input
             type="checkbox"
             checked={disclaimerTicked}
             onChange={(e) => setDisclaimerTicked(e.target.checked)}
-            className="w-4 h-4 rounded border-slate-700 bg-slate-800 text-teal-500 focus:ring-teal-500"
+            className="mt-1 w-4 h-4 rounded border-slate-700 text-teal-500 focus:ring-teal-500 bg-slate-900"
           />
-          <span className="text-xs font-semibold text-slate-200">I understand and acknowledge the clinic disclaimer.</span>
+          <span className="text-xs text-amber-200/90 leading-relaxed font-medium">
+            I understand that waiting time estimates are dynamic estimates. If my condition worsens or if I experience an immediate medical emergency, I will seek urgent emergency care at the nearest hospital or call 108 immediately.
+          </span>
         </label>
       </div>
 
@@ -743,45 +837,97 @@ function AppointmentBookingFormContent() {
           type="button"
           disabled={!disclaimerTicked || bookingSubmitting}
           onClick={handleFinalBooking}
-          className="flex items-center gap-2 px-8 py-3.5 bg-teal-500 hover:bg-teal-400 disabled:opacity-40 text-slate-950 font-bold text-sm rounded-xl transition-all shadow-xl shadow-teal-500/25"
+          className="flex items-center gap-2 px-6 py-3 bg-teal-500 hover:bg-teal-400 disabled:opacity-40 text-slate-950 font-bold text-sm rounded-xl transition-all shadow-lg shadow-teal-500/20"
         >
-          {bookingSubmitting ? 'Confirming Booking...' : 'Confirm Booking'}
+          {bookingSubmitting ? 'Confirming...' : 'Book Appointment'}
+          <CheckCircle className="w-4 h-4" />
         </button>
       </div>
     </div>
   );
 
-  // Render Step 7: Appointment Details Page (QR, SHORT DISCLAIMER)
+  // Render Step 7: Booking Confirmation & Token Card
   const renderStep7 = () => (
-    <div className="space-y-6">
-      <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-5 text-center space-y-2">
-        <CheckCircle className="w-12 h-12 text-emerald-400 mx-auto" />
-        <h3 className="text-xl font-bold text-slate-100">Appointment Confirmed!</h3>
-        <p className="text-xs text-emerald-300 font-mono">Token Label: <span className="text-lg font-bold text-slate-100">{bookedAppointment?.tokenLabel || 'G-014'}</span></p>
+    <div className="space-y-6 text-center">
+      <div className="inline-flex p-4 bg-emerald-500/20 text-emerald-400 rounded-full border border-emerald-500/30 mb-2">
+        <CheckCircle className="w-12 h-12 animate-pulse" />
       </div>
 
-      {/* Check-in QR Code Display (PRD F5) */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center space-y-4">
-        <h4 className="text-sm font-bold text-slate-200">Check-in QR Code</h4>
-        {qrCodeDataUrl ? (
-          <img src={qrCodeDataUrl} alt="Check-in QR Code" className="w-48 h-48 mx-auto border-4 border-white rounded-xl shadow-lg" />
-        ) : (
-          <div className="w-48 h-48 bg-slate-800 border rounded-xl flex items-center justify-center mx-auto text-slate-500 text-xs">Generating QR...</div>
-        )}
-        <p className="text-[11px] text-slate-400">Present this QR code at the clinic scanner upon arrival to check in.</p>
+      <div>
+        <h3 className="text-2xl font-bold text-slate-100">Appointment Confirmed!</h3>
+        <p className="text-xs text-slate-400 mt-1">Your token and dynamic check-in pass have been issued.</p>
       </div>
 
-      {/* SHORT DISCLAIMER NOTICE (PRD F3) */}
-      <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-3.5 text-center">
-        <p className="text-xs text-slate-400 italic">
-          "Emergency cases are seen first, so your waiting time may vary."
-        </p>
-      </div>
+      {bookedAppointment && (
+        <div className="bg-slate-800/90 border border-slate-700 rounded-3xl p-6 shadow-2xl max-w-md mx-auto space-y-4">
+          <div className="bg-teal-500/10 border border-teal-500/30 p-3 rounded-2xl">
+            <span className="text-[10px] font-bold text-teal-400 uppercase tracking-widest block">Queue Token Number</span>
+            <span className="text-3xl font-black font-mono text-teal-300">{bookedAppointment.tokenNumber || 'T-101'}</span>
+          </div>
+
+          {qrCodeDataUrl && (
+            <div className="p-3 bg-white rounded-2xl inline-block shadow-md">
+              <img src={qrCodeDataUrl} alt="Check-in QR Code" className="w-44 h-44 mx-auto" />
+            </div>
+          )}
+
+          <div className="text-xs text-slate-300 space-y-1.5 text-left border-t border-slate-700 pt-3">
+            <div className="flex justify-between">
+              <span className="text-slate-400">Patient:</span>
+              <span className="font-bold text-slate-100">{bookedAppointment.patientName}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400">Doctor:</span>
+              <span className="font-bold text-slate-100">{bookedAppointment.doctorName || 'Dr. SmartCare'}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400">Department:</span>
+              <span className="font-bold text-slate-100 uppercase">{formatDepartmentName(bookedAppointment.departmentId)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400">Appointment Date:</span>
+              <span className="font-bold text-teal-400">{bookedAppointment.date}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={() => {
+          setCurrentStep(1);
+          setBookedAppointment(null);
+          setTriageData(null);
+          setReasonChips([]);
+          setReasonText('');
+        }}
+        className="px-6 py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl transition-all"
+      >
+        Book Another Appointment
+      </button>
     </div>
   );
 
   return (
-    <div className="max-w-2xl mx-auto bg-slate-950 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6">
+    <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-8" id="booking-form-container">
+      {/* Step Progress Bar */}
+      <div className="flex justify-between items-center max-w-2xl mx-auto border-b border-slate-800 pb-4">
+        {[1, 2, 3, 4, 5, 6, 7].map((step) => (
+          <div
+            key={step}
+            className={`flex items-center justify-center w-8 h-8 rounded-full text-xs font-bold transition-all ${
+              currentStep === step
+                ? 'bg-teal-500 text-slate-950 ring-4 ring-teal-500/20 scale-110'
+                : currentStep > step
+                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                : 'bg-slate-800 text-slate-500'
+            }`}
+          >
+            {currentStep > step ? '✓' : step}
+          </div>
+        ))}
+      </div>
+
       {currentStep === 1 && renderStep1()}
       {currentStep === 2 && renderStep2()}
       {currentStep === 3 && renderStep3()}
@@ -792,3 +938,5 @@ function AppointmentBookingFormContent() {
     </div>
   );
 };
+
+export default AppointmentBookingForm;

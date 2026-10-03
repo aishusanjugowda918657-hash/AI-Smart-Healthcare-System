@@ -5,6 +5,15 @@ export default defineConfig({
     setupFiles: ['./tests/setupEnv.js'],
     testTimeout: 30000,
     environment: 'node',
+
+    // ── Parallelism ────────────────────────────────────────────────
+    // All integration tests share a single Firestore emulator instance.
+    // Sweep jobs (noShowSweep, releaseCancelledSlots, processReminders)
+    // query ALL documents across the emulator — running test files in
+    // parallel causes cross-contamination (one file's sweep mutates data
+    // seeded by another file).  Sequential file execution eliminates this.
+    fileParallelism: false,
+
     // Force ALL Firestore operations to the local emulator.
     // These are injected before any test file or module is loaded,
     // so firebase-admin picks them up at init time.

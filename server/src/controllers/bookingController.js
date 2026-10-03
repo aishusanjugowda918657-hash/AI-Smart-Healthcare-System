@@ -31,13 +31,18 @@ export const performTriage = async (req, res, next) => {
     // 3. Merge AI result with Rule result (CRITICAL SAFEGUARD: AI CAN NEVER LOWER RULE LEVEL)
     const mergedTriage = mergeAIWithRulesTriage(ruleResult, aiResult);
 
-    // 4. Fetch Department doc to get expected duration
+    // 4. Fetch Department doc to get expected duration (non-critical — wrapped so quota errors
+    //    cannot abort the safety-critical triage response that was already computed above).
     let departmentDoc = null;
-    if (mergedTriage.departmentId) {
-      const deptSnap = await db.collection('departments').doc(mergedTriage.departmentId).get();
-      if (deptSnap.exists) {
-        departmentDoc = deptSnap.data();
+    try {
+      if (mergedTriage.departmentId) {
+        const deptSnap = await db.collection('departments').doc(mergedTriage.departmentId).get();
+        if (deptSnap.exists) {
+          departmentDoc = deptSnap.data();
+        }
       }
+    } catch (deptErr) {
+      console.warn('⚠️ [triage] departments lookup failed (non-critical):', deptErr.message);
     }
 
     const expectedDurationMin = getExpectedDuration({
@@ -46,7 +51,11 @@ export const performTriage = async (req, res, next) => {
       complexity: mergedTriage.complexity
     });
 
-    // 5. If emergency red flag triggered, create urgent alert for triage nurses
+    // 5. If emergency red flag triggered, create urgent alert for triage nurses.
+    //    Retry up to 3 times (500 ms delay) so transient quota spikes don't lose alerts.
+    //    On final failure: log reqId + return alertStatus:'failed' — patient still gets
+    //    the emergency message, safety is never compromised.
+    let alertStatus = 'none';
     if (mergedTriage.redFlag) {
       const alertId = `alert_triage_${Date.now()}`;
       const alertDoc = {
@@ -59,12 +68,37 @@ export const performTriage = async (req, res, next) => {
         kind: 'urgent',
         createdAt: new Date()
       };
-      await db.collection('alerts').doc(alertId).set(alertDoc);
+
+      const MAX_ALERT_ATTEMPTS = 3;
+      const ALERT_RETRY_DELAY_MS = 500;
+      let alertWritten = false;
+
+      for (let attempt = 1; attempt <= MAX_ALERT_ATTEMPTS; attempt++) {
+        try {
+          await db.collection('alerts').doc(alertId).set(alertDoc);
+          alertWritten = true;
+          alertStatus = 'created';
+          break;
+        } catch (alertErr) {
+          if (attempt < MAX_ALERT_ATTEMPTS) {
+            await new Promise((r) => setTimeout(r, ALERT_RETRY_DELAY_MS * attempt));
+          } else {
+            const reqId = req.id || req.headers?.['x-request-id'] || 'unknown';
+            console.error(
+              `❌ [triage] alert write FAILED after ${MAX_ALERT_ATTEMPTS} attempts ` +
+              `[reqId=${reqId}] [alertId=${alertId}]:`,
+              alertErr.message
+            );
+            alertStatus = 'failed';
+          }
+        }
+      }
     }
 
     res.status(200).json(formatSuccessResponse({
       ...mergedTriage,
-      expectedDurationMin
+      expectedDurationMin,
+      alertStatus
     }));
   } catch (error) {
     next(error);
@@ -83,18 +117,69 @@ export const getDoctorOptions = async (req, res, next) => {
       throw new AppError('VALIDATION_ERROR', 'departmentId parameter is required.', 400);
     }
 
+    const canonicalDeptId = departmentId.toString().trim().toLowerCase();
     const db = assertDbConnected();
 
-    // Fetch doctors for department
-    const doctorsSnap = await db
-      .collection('doctors')
-      .where('departmentId', '==', departmentId)
-      .get();
+    // Fetch doctors for department. If Firestore is unavailable (e.g. quota
+    // exhausted) throw a 503 so the client shows "retry" not "no doctors found".
+    let doctorsSnap;
+    try {
+      doctorsSnap = await db
+        .collection('doctors')
+        .where('departmentId', '==', canonicalDeptId)
+        .get();
+    } catch (dbErr) {
+      const code = dbErr?.code;
+      if (code === 8 || dbErr.message?.includes('RESOURCE_EXHAUSTED') || dbErr.message?.includes('UNAVAILABLE')) {
+        throw new AppError(
+          'FIRESTORE_UNAVAILABLE',
+          'The database is temporarily unavailable. Please try again in a moment.',
+          503
+        );
+      }
+      throw dbErr;
+    }
 
-    const doctors = doctorsSnap.docs.map((d) => ({
+    let doctors = doctorsSnap.docs.map((d) => ({
       id: d.id,
       ...d.data()
     }));
+
+    if (doctors.length === 0) {
+      // Fallback 1: Query original departmentId string if different
+      const rawSnap = await db
+        .collection('doctors')
+        .where('departmentId', '==', departmentId)
+        .get();
+
+      doctors = rawSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    }
+
+    if (doctors.length === 0) {
+      // Fallback 2: Scan doctors collection and match normalized departmentId or deptId
+      const allDocsSnap = await db.collection('doctors').limit(100).get();
+      doctors = allDocsSnap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .filter((d) => {
+          const docDept = (d.departmentId || d.deptId || '').toString().toLowerCase();
+          return docDept === canonicalDeptId || docDept === departmentId.toString().toLowerCase();
+        });
+    }
+
+    if (doctors.length === 0) {
+      // Fallback 3: Check 'users' collection for doctors
+      const usersSnap = await db
+        .collection('users')
+        .where('role', '==', 'doctor')
+        .get();
+
+      doctors = usersSnap.docs
+        .map((d) => ({ id: d.id, ...d.data(), doctorId: d.data().doctorId || d.id }))
+        .filter((d) => {
+          const docDept = (d.departmentId || d.deptId || '').toString().toLowerCase();
+          return !docDept || docDept === canonicalDeptId;
+        });
+    }
 
     // Check if patient has visited any of these doctors previously
     let previousDoctorId = null;
@@ -117,16 +202,21 @@ export const getDoctorOptions = async (req, res, next) => {
         const docId = doc.doctorId || doc.id;
         const isPreviousDoctor = previousDoctorId === docId || previousDoctorId === doc.id;
 
-        // Fetch next free slot today or upcoming days
-        const slotsSnap = await db
-          .collection('slots')
-          .where('doctorId', '==', docId)
-          .where('date', '>=', todayStr)
-          .where('status', '==', SlotStatus.FREE)
-          .limit(1)
-          .get();
-
-        const nextFreeSlot = !slotsSnap.empty ? slotsSnap.docs[0].data() : null;
+        // Fetch next free slot today or upcoming days (non-critical — quota
+        // errors here must not abort the entire doctor list).
+        let nextFreeSlot = null;
+        try {
+          const slotsSnap = await db
+            .collection('slots')
+            .where('doctorId', '==', docId)
+            .where('date', '>=', todayStr)
+            .where('status', '==', SlotStatus.FREE)
+            .limit(1)
+            .get();
+          nextFreeSlot = !slotsSnap.empty ? slotsSnap.docs[0].data() : null;
+        } catch {
+          // Slot lookup failure is non-critical — show doctor without slot info
+        }
 
         return {
           ...doc,

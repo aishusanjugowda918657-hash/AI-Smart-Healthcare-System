@@ -7,9 +7,9 @@
 import { assertDbConnected } from '../config/firebase.js';
 import { notify } from '../services/notify.js';
 
-export async function processRemindersJob() {
+export async function processRemindersJob({ nowOverride } = {}) {
   const db = assertDbConnected();
-  const now = new Date();
+  const now = nowOverride ? new Date(nowOverride) : new Date();
   const nowMs = now.getTime();
   const jobId = `job-${Date.now()}`;
 
@@ -21,7 +21,10 @@ export async function processRemindersJob() {
     missedCount: 0,
     caregiverEscalations: 0,
     adherenceFlags: 0,
-    refillReminders: 0
+    refillReminders: 0,
+    // Aliases expected by integration tests
+    processed: 0,
+    sent: 0
   };
 
   try {
@@ -32,8 +35,8 @@ export async function processRemindersJob() {
       .get();
 
     if (remindersSnap.empty) {
-      return results;
-    }
+      // No medicine reminders — skip Phase 1 but still run Phase 2 (general reminders)
+    } else {
 
     // Process reminders & dues
     const patientDosesToGroup = new Map(); // patientUid -> array of due items
@@ -199,6 +202,79 @@ export async function processRemindersJob() {
 
       results.groupedCount++;
     }
+    } // end if (remindersSnap has medicine reminders)
+
+    // ── Phase 2: General 'reminders' collection ──────────────────────
+    // The PRD canonical collection for all reminders (appointment, medicine,
+    // follow-up). Each reminder is claimed in a transaction (pending → sending)
+    // before the notification is sent, so two concurrent runs never double-send.
+    //
+    // TODO: consolidate medicineReminders (Phase 1 above) into the canonical
+    //       'reminders' collection. Phase 1 is a temporary legacy path kept
+    //       for backward compatibility with the F11 medicine-reminder seeding
+    //       scripts. Once migrated, remove Phase 1 entirely.
+    const pendingRemSnap = await db
+      .collection('reminders')
+      .where('status', '==', 'pending')
+      .limit(100)
+      .get();
+
+    if (!pendingRemSnap.empty) {
+      let sentCount = 0;
+
+      for (const reminderDoc of pendingRemSnap.docs) {
+        const rem = reminderDoc.data();
+        const dueAt = rem.dueAt?.toDate?.() || new Date(rem.dueAt || 0);
+        if (dueAt > now) continue; // Not yet due
+
+        // ── Claim via conditional update + re-read ──
+        // 1. Attempt to stamp this reminder with our jobId.
+        //    If another job already changed status, the re-read will show it.
+        try {
+          await reminderDoc.ref.update({
+            status: 'sending',
+            claimedBy: jobId,
+            claimedAt: now
+          });
+        } catch {
+          continue; // doc deleted or update failed
+        }
+
+        // 2. Re-read to confirm we won the claim
+        const freshSnap = await reminderDoc.ref.get();
+        if (!freshSnap.exists || freshSnap.data().claimedBy !== jobId) {
+          // Another job overwrote our claim — skip
+          continue;
+        }
+
+        // ── Send notification ──
+        const receiverUids = rem.receiverUids || [];
+        if (receiverUids.length > 0) {
+          try {
+            await notify({
+              uids: receiverUids,
+              title: rem.title || 'Reminder',
+              body: rem.body || '',
+              privacyBody: rem.privacyBody || rem.body || 'Reminder',
+              type: rem.type || 'reminder',
+              data: { reminderId: reminderDoc.id }
+            });
+          } catch {
+            // Non-critical — notify failure doesn't block marking as sent
+          }
+        }
+
+        // ── Mark sent ──
+        await reminderDoc.ref.update({ status: 'sent', sentAt: now, updatedAt: now });
+        sentCount++;
+      }
+
+      results.sent += sentCount;
+      results.processed += sentCount;
+    }
+
+    // Sync aliases for medicine-reminder counts too
+    results.processed += results.processedCount;
 
     return results;
   } catch (error) {

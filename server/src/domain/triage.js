@@ -19,6 +19,72 @@ export function normalizeText(text) {
 }
 
 /**
+ * Levenshtein Distance for Typo Tolerance (edit-distance <= 1 for words > 4 chars)
+ */
+function editDistance(a, b) {
+  if (!a || !b) return (a || b).length;
+  if (Math.abs(a.length - b.length) > 1) return Math.abs(a.length - b.length);
+  const m = [];
+  for (let i = 0; i <= b.length; i++) m[i] = [i];
+  for (let j = 0; j <= a.length; j++) m[0][j] = j;
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        m[i][j] = m[i - 1][j - 1];
+      } else {
+        m[i][j] = Math.min(
+          m[i - 1][j - 1] + 1,
+          m[i][j - 1] + 1,
+          m[i - 1][j] + 1
+        );
+      }
+    }
+  }
+  return m[b.length][a.length];
+}
+
+function tokenMatchesWithTypo(inputWord, patternWord) {
+  if (inputWord === patternWord) return true;
+  if (patternWord.length > 4 && inputWord.length >= 4) {
+    return editDistance(inputWord, patternWord) <= 1;
+  }
+  return false;
+}
+
+/**
+ * Check if input text matches a pattern string with phrase or word-level typo tolerance
+ */
+export function matchPatternWithTypo(normalizedInput, pattern) {
+  const normPattern = normalizeText(pattern);
+  if (!normPattern || !normalizedInput) return false;
+
+  // Direct substring match
+  if (normalizedInput.includes(normPattern)) return true;
+
+  // Token sequence match with edit-distance tolerance
+  const inputWords = normalizedInput.split(' ');
+  const patternWords = normPattern.split(' ');
+
+  if (patternWords.length === 1) {
+    return inputWords.some(w => tokenMatchesWithTypo(w, patternWords[0]));
+  }
+
+  // Multi-word pattern sequence check
+  for (let i = 0; i <= inputWords.length - patternWords.length; i++) {
+    let match = true;
+    for (let j = 0; j < patternWords.length; j++) {
+      if (!tokenMatchesWithTypo(inputWords[i + j], patternWords[j])) {
+        match = false;
+        break;
+      }
+    }
+    if (match) return true;
+  }
+
+  return false;
+}
+
+/**
  * Pure function: Evaluate clinical triage rules against reason text & user answers
  *
  * @param {string} reasonText - Patient input text
@@ -38,8 +104,7 @@ export function evaluateTriageRules(reasonText = '', answers = {}) {
 
   for (const category of redFlagsConfig.categories || []) {
     for (const pattern of category.patterns || []) {
-      const normPattern = normalizeText(pattern);
-      if (normPattern && normalized.includes(normPattern)) {
+      if (matchPatternWithTypo(normalized, pattern)) {
         if (category.level > highestLevel) {
           highestLevel = category.level;
           urgencySuggested = category.urgencySuggested;
@@ -47,6 +112,44 @@ export function evaluateTriageRules(reasonText = '', answers = {}) {
           emergencyMessage = category.emergencyMessage;
           matchedCategory = category;
         }
+      }
+    }
+  }
+
+  // Rule 4: "Severe right now = Yes" handling
+  const isSevereRightNow =
+    answers.severity === 'yes' ||
+    answers.severity === 'high' ||
+    answers.severity === true ||
+    answers.isSevereRightNow === 'yes' ||
+    answers.isSevereRightNow === true;
+
+  // Key emergency symptom check (chest, breathing, bleeding, stroke, consciousness)
+  const hasCriticalSymptom =
+    matchedCategory?.id === 'cardiac' ||
+    matchedCategory?.id === 'respiratory_severe' ||
+    matchedCategory?.id === 'neurological' ||
+    matchedCategory?.id === 'hemorrhage_severe' ||
+    matchPatternWithTypo(normalized, 'chest') ||
+    matchPatternWithTypo(normalized, 'breathe') ||
+    matchPatternWithTypo(normalized, 'breathing') ||
+    matchPatternWithTypo(normalized, 'bleed') ||
+    matchPatternWithTypo(normalized, 'bleeding') ||
+    matchPatternWithTypo(normalized, 'stroke') ||
+    matchPatternWithTypo(normalized, 'unconscious');
+
+  if (isSevereRightNow) {
+    if (hasCriticalSymptom || highestLevel === ClinicalLevel.EMERGENCY) {
+      highestLevel = ClinicalLevel.EMERGENCY;
+      urgencySuggested = 'emergency';
+      redFlag = true;
+      if (!emergencyMessage) {
+        emergencyMessage = 'CRITICAL EMERGENCY ALERT: Severe acute symptoms detected. Immediate emergency medical evaluation required.';
+      }
+    } else {
+      if (highestLevel < ClinicalLevel.URGENT) {
+        highestLevel = ClinicalLevel.URGENT;
+        urgencySuggested = 'urgent';
       }
     }
   }
@@ -61,6 +164,7 @@ export function evaluateTriageRules(reasonText = '', answers = {}) {
     clinicalLevel: highestLevel,
     urgencySuggested,
     redFlag,
+    redFlagSuspected: redFlag,
     emergencyMessage,
     matchedCategory: matchedCategory?.id || null,
     departmentId: suggestedDept,
@@ -94,6 +198,7 @@ export function mergeAIWithRulesTriage(ruleResult, aiResult = null) {
       clinicalLevel: ClinicalLevel.EMERGENCY,
       urgencySuggested: 'emergency',
       redFlag: true,
+      redFlagSuspected: true,
       emergencyMessage: ruleResult.emergencyMessage,
       departmentId: aiResult.departmentId || ruleResult.departmentId,
       complexity: Complexity.COMPLEX,
@@ -111,6 +216,7 @@ export function mergeAIWithRulesTriage(ruleResult, aiResult = null) {
     clinicalLevel: mergedLevel,
     urgencySuggested: urgencySuggestedMap[mergedLevel] || ruleResult.urgencySuggested,
     redFlag: mergedLevel === ClinicalLevel.EMERGENCY,
+    redFlagSuspected: mergedLevel === ClinicalLevel.EMERGENCY,
     emergencyMessage: mergedLevel === ClinicalLevel.EMERGENCY
       ? (ruleResult.emergencyMessage || 'Emergency level flagged. Please seek urgent care.')
       : null,

@@ -7,13 +7,17 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
+    "dev:emulator": "firebase emulators:start --only firestore,auth --project demo-project & timeout /t 5 /nobreak && cross-env FIRESTORE_EMULATOR_HOST=localhost:8080 FIREBASE_AUTH_EMULATOR_HOST=localhost:9099 GCLOUD_PROJECT=demo-project FLAG_SCHEDULER=false node scripts/seedEmulatorData.js && cross-env FIRESTORE_EMULATOR_HOST=localhost:8080 FIREBASE_AUTH_EMULATOR_HOST=localhost:9099 GCLOUD_PROJECT=demo-project FLAG_SCHEDULER=false node --watch server.js",
+    "dev:emulator:server": "cross-env FIRESTORE_EMULATOR_HOST=localhost:8080 FIREBASE_AUTH_EMULATOR_HOST=localhost:9099 GCLOUD_PROJECT=demo-project FLAG_SCHEDULER=false node --watch server.js",
+    "seed:emulator": "cross-env FIRESTORE_EMULATOR_HOST=localhost:8080 FIREBASE_AUTH_EMULATOR_HOST=localhost:9099 GCLOUD_PROJECT=demo-project node scripts/seedEmulatorData.js",
     "seed": "node scripts/seedDemoData.js",
     "seed:doctors": "node scripts/seedDemoDoctors.js",
+    "seed:firestore": "node scripts/seedDoctorsFirestore.js",
     "seed:patients": "node scripts/seedDemoPatients.js",
     "backfill:name-lower": "node scripts/backfillNameLower.js",
     "test": "vitest run",
-    "test:emu": "firebase emulators:exec --only firestore,auth \"vitest run\" --project demo-project"
-
+    "test:emu": "firebase emulators:exec --only firestore,auth \"vitest run\" --project demo-project",
+    "smoke:test": "vitest run tests/smoke.test.js"
   },
   "dependencies": {
     "@google/genai": "^2.23.0",
@@ -31,6 +35,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "cross-env": "^10.1.0",
     "supertest": "^7.0.0",
     "vitest": "^2.0.5"
   }
