@@ -93,10 +93,11 @@ export const AuthProvider = ({ children }) => {
     return () => unsubscribe();
   }, []);
 
-  const patientLogin = async (email, password) => {
+  const login = async (email, password) => {
     let synced;
     if (!auth) {
-      const demoUser = { uid: `pat-${Date.now()}`, email, role: 'patient' };
+      // Fallback if Firebase auth is completely missing
+      const demoUser = { uid: `usr-${Date.now()}`, email, role: 'patient' };
       localStorage.setItem('healthcare_demo_user', JSON.stringify(demoUser));
       setCurrentUser(demoUser);
       setUserRole('patient');
@@ -109,7 +110,7 @@ export const AuthProvider = ({ children }) => {
       } catch (fbErr) {
         if (fbErr.code === 'auth/configuration-not-found' || fbErr.code === 'auth/operation-not-allowed') {
           console.warn('⚠️ Firebase Auth Email provider unconfigured. Falling back to backend session sync.');
-          const demoUser = { uid: `pat-${Date.now()}`, email, role: 'patient' };
+          const demoUser = { uid: `usr-${Date.now()}`, email, role: 'patient' };
           localStorage.setItem('healthcare_demo_user', JSON.stringify(demoUser));
           setCurrentUser(demoUser);
           setUserRole('patient');
@@ -120,19 +121,20 @@ export const AuthProvider = ({ children }) => {
       }
     }
 
-    // Trigger Welcome Animation for login
-    let displayName = synced?.fullName || email?.split('@')[0] || 'Patient';
-    try {
-      const profRes = await API.get('/patients/me');
-      if (profRes.data && profRes.data.success) {
-        setPatientProfile(profRes.data.data);
-        displayName = profRes.data.data.fullName || displayName;
+    if (synced?.role === 'patient') {
+      let displayName = synced?.fullName || email?.split('@')[0] || 'Patient';
+      try {
+        const profRes = await API.get('/patients/me');
+        if (profRes.data && profRes.data.success) {
+          setPatientProfile(profRes.data.data);
+          displayName = profRes.data.data.fullName || displayName;
+        }
+      } catch (e) {
+        // ignore
       }
-    } catch (e) {
-      // ignore
+      setWelcomeAnimation({ show: true, isNew: false, name: displayName });
     }
 
-    setWelcomeAnimation({ show: true, isNew: false, name: displayName });
     return synced;
   };
 
@@ -187,35 +189,6 @@ export const AuthProvider = ({ children }) => {
     return res.data;
   };
 
-  const doctorLogin = async (email, password) => {
-    if (!auth) {
-      const demoUser = { uid: 'doc-001', email, role: 'doctor', mustChangePassword: false };
-      localStorage.setItem('healthcare_demo_user', JSON.stringify(demoUser));
-      setCurrentUser(demoUser);
-      setUserRole('doctor');
-      setMustChangePassword(false);
-      return demoUser;
-    }
-
-    try {
-      const credential = await signInWithEmailAndPassword(auth, email, password);
-      setCurrentUser(credential.user);
-      const synced = await syncUserSession(credential.user);
-      return synced;
-    } catch (fbErr) {
-      if (fbErr.code === 'auth/configuration-not-found' || fbErr.code === 'auth/operation-not-allowed') {
-        console.warn('⚠️ Firebase Auth Email provider unconfigured. Falling back to doctor session.');
-        const demoUser = { uid: 'doc-001', email, role: 'doctor', mustChangePassword: false };
-        localStorage.setItem('healthcare_demo_user', JSON.stringify(demoUser));
-        setCurrentUser(demoUser);
-        setUserRole('doctor');
-        setMustChangePassword(false);
-        return demoUser;
-      }
-      throw fbErr;
-    }
-  };
-
   const changeDoctorPassword = async (newPassword) => {
     const res = await API.post('/auth/change-password', { newPassword });
     if (res.data && res.data.success) {
@@ -256,9 +229,8 @@ export const AuthProvider = ({ children }) => {
     mustChangePassword,
     welcomeAnimation,
     dismissWelcome,
-    patientLogin,
+    login,
     patientRegister,
-    doctorLogin,
     changeDoctorPassword,
     logout,
     loading

@@ -15,10 +15,8 @@ import CaregiverManager from './components/patient/CaregiverManager';
 import UserPreferences from './components/patient/UserPreferences';
 
 import LandingPage from './pages/LandingPage';
-import RoleSelection from './pages/RoleSelection';
-import PatientLogin from './pages/PatientLogin';
+import Login from './pages/Login';
 import PatientRegister from './pages/PatientRegister';
-import DoctorLogin from './pages/DoctorLogin';
 import ChangePassword from './pages/ChangePassword';
 
 import PatientDashboard from './pages/PatientDashboard';
@@ -42,6 +40,7 @@ import PatientsNeedingAttention from './components/doctor/PatientsNeedingAttenti
 import PharmacyVerifyPage from './pages/PharmacyVerifyPage';
 import PatientHistoryTimelinePage from './pages/PatientHistoryTimelinePage';
 import ReportUploadPage from './pages/ReportUploadPage';
+import { NurseDashboard, ReceptionDashboard, PharmacyDashboard } from './pages/Placeholders';
 
 import ManageDoctors from './components/admin/ManageDoctors';
 import ManageDepartments from './components/admin/ManageDepartments';
@@ -68,15 +67,28 @@ export const App = () => {
                     {/* Public Landing & Entry Routes */}
                     <Route path="/" element={<LandingPage />} />
                     <Route path="/welcome" element={<LandingPage />} />
-                    <Route path="/role-selection" element={<RoleSelection />} />
-                    <Route path="/select-role" element={<Navigate to="/role-selection" replace />} />
-                    <Route path="/patient-login" element={<PatientLogin />} />
+                    <Route path="/login" element={<Login />} />
+                    <Route path="/role-selection" element={<Navigate to="/login" replace />} />
+                    <Route path="/select-role" element={<Navigate to="/login" replace />} />
+                    <Route path="/patient-login" element={<Navigate to="/login" replace />} />
+                    <Route path="/doctor-login" element={<Navigate to="/login" replace />} />
                     <Route path="/patient-register" element={<PatientRegister />} />
-                    <Route path="/doctor-login" element={<DoctorLogin />} />
-
-                    {/* Legacy Route Fallbacks */}
-                    <Route path="/login" element={<Navigate to="/role-selection" replace />} />
                     <Route path="/register" element={<Navigate to="/patient-register" replace />} />
+
+                    {/* Role aliases */}
+                    <Route path="/patient" element={<Navigate to="/patient-dashboard" replace />} />
+                    <Route path="/doctor" element={<Navigate to="/doctor-dashboard" replace />} />
+                    <Route path="/admin" element={<Navigate to="/admin-dashboard" replace />} />
+                    
+                    <Route element={<ProtectedRoute allowedRoles={['nurse']} />}>
+                      <Route path="/nurse" element={<NurseDashboard />} />
+                    </Route>
+                    <Route element={<ProtectedRoute allowedRoles={['reception']} />}>
+                      <Route path="/reception" element={<ReceptionDashboard />} />
+                    </Route>
+                    <Route element={<ProtectedRoute allowedRoles={['pharmacy']} />}>
+                      <Route path="/pharmacy" element={<PharmacyDashboard />} />
+                    </Route>
 
                     {/* Mandatory Doctor Password Change Route */}
                     <Route element={<ProtectedRoute allowedRoles={['doctor', 'admin']} />}>

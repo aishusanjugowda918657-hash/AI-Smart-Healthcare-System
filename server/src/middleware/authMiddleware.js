@@ -34,7 +34,7 @@ export const requireAuth = async (req, res, next) => {
     }
 
     const decodedToken = await auth.verifyIdToken(token);
-    let role = decodedToken.role || 'patient';
+    let role = decodedToken.role;
     const db = getDb();
     
     if (db) {
@@ -42,6 +42,11 @@ export const requireAuth = async (req, res, next) => {
       if (userDoc.exists) {
         role = userDoc.data().role || role;
       }
+    }
+
+    const ALLOWED_ROLES = ['patient', 'doctor', 'nurse', 'reception', 'pharmacy', 'admin'];
+    if (!role || !ALLOWED_ROLES.includes(role)) {
+      return res.status(401).json(formatErrorResponse('UNAUTHORIZED_ROLE', 'Missing or unknown role in authentication token. Please log in again.'));
     }
 
     req.user = {

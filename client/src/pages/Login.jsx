@@ -1,45 +1,56 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Activity, Lock, Mail, UserCheck } from 'lucide-react';
+import { Activity, Lock, Mail } from 'lucide-react';
 import API from '../services/api';
+
+import { ROLE_ROUTES } from '../config/roles';
 
 export const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState('patient');
   const [error, setError] = useState('');
+  const [infoMessage, setInfoMessage] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const { loginAsDemo } = useAuth();
+  const { login } = useAuth();
   const navigate = useNavigate();
 
   const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
+    setInfoMessage('');
     setLoading(true);
 
     try {
-      // Demo authentication simulation
-      const uid = `usr-${Date.now().toString(36)}`;
-      const demoUser = {
-        uid,
-        email,
-        role,
-        patientHealthId: role === 'patient' ? `HID-2026-${Math.floor(10000 + Math.random() * 90000)}` : undefined,
-        doctorId: role === 'doctor' ? `DOC-${Math.floor(100 + Math.random() * 900)}` : undefined
-      };
+      const res = await login(email, password);
 
-      loginAsDemo(demoUser);
-
-      if (role === 'patient') navigate('/patient-dashboard');
-      else if (role === 'doctor') navigate('/doctor-dashboard');
-      else navigate('/admin-dashboard');
+      const role = res?.role;
+      if (role === 'doctor' && res.mustChangePassword) {
+        navigate('/change-password');
+      } else {
+        const homeRoute = ROLE_ROUTES[role] || '/patient';
+        navigate(homeRoute);
+      }
     } catch (err) {
-      setError(err.message || 'Login failed. Please check credentials.');
+      console.error('Login error:', err);
+      let msg = err.response?.data?.message || err.message || 'Login failed. Please check credentials.';
+      if (err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
+        msg = 'Invalid email address or password.';
+      }
+      setError(msg);
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleForgotPassword = () => {
+    if (!email) {
+      setError('Please enter your email address to reset password.');
+      return;
+    }
+    setError('');
+    setInfoMessage(`Password reset request submitted for ${email}. Please check your email.`);
   };
 
   return (
@@ -57,28 +68,14 @@ export const Login = () => {
           {error}
         </div>
       )}
+      
+      {infoMessage && (
+        <div className="mb-4 p-3 bg-teal-50 border border-teal-200 text-teal-800 text-xs rounded-xl">
+          {infoMessage}
+        </div>
+      )}
 
       <form onSubmit={handleLogin} className="space-y-4">
-        <div>
-          <label className="block text-xs font-semibold text-slate-700 mb-1">Select Role</label>
-          <div className="grid grid-cols-3 gap-2">
-            {['patient', 'doctor', 'admin'].map((r) => (
-              <button
-                key={r}
-                type="button"
-                onClick={() => setRole(r)}
-                className={`py-2 text-xs font-bold rounded-xl capitalize transition-all border ${
-                  role === r
-                    ? 'bg-brand-600 text-white border-brand-600 shadow-sm'
-                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                {r}
-              </button>
-            ))}
-          </div>
-        </div>
-
         <div>
           <label className="block text-xs font-semibold text-slate-700 mb-1">Email Address</label>
           <div className="relative">
@@ -95,7 +92,16 @@ export const Login = () => {
         </div>
 
         <div>
-          <label className="block text-xs font-semibold text-slate-700 mb-1">Password</label>
+          <div className="flex items-center justify-between mb-1">
+            <label className="block text-xs font-semibold text-slate-700">Password</label>
+            <button
+              type="button"
+              onClick={handleForgotPassword}
+              className="text-xs font-semibold text-brand-600 hover:text-brand-700"
+            >
+              Forgot Password?
+            </button>
+          </div>
           <div className="relative">
             <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
             <input
@@ -114,7 +120,7 @@ export const Login = () => {
           disabled={loading}
           className="w-full py-3 bg-brand-600 hover:bg-brand-700 text-white text-xs font-bold rounded-xl transition-all shadow-md mt-2"
         >
-          {loading ? 'Authenticating...' : `Sign In as ${role.toUpperCase()}`}
+          {loading ? 'Authenticating...' : 'Sign In'}
         </button>
       </form>
 

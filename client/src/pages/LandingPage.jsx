@@ -52,7 +52,7 @@ const LandingPage = () => {
         {/* Primary CTA: Get Started */}
         <div className="pt-6 flex items-center justify-center">
           <button
-            onClick={() => navigate('/role-selection')}
+            onClick={() => navigate('/login')}
             className="w-full sm:w-auto px-10 py-4 rounded-2xl bg-gradient-to-r from-indigo-600 to-teal-600 hover:from-indigo-700 hover:to-teal-700 text-white font-bold text-lg shadow-xl shadow-indigo-500/25 hover:shadow-2xl hover:scale-105 transition-all flex items-center justify-center gap-3 group"
           >
             <span>Get Started</span>

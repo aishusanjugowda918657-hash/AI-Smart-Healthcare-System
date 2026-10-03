@@ -10,15 +10,16 @@ const ALLOWED_ROLES = ['patient', 'doctor', 'nurse', 'reception', 'pharmacy', 'a
  */
 export const registerUser = async (req, res, next) => {
   try {
-    const { email, password, role = 'patient', fullName, displayName, phone, dob, gender, bloodGroup } = req.body;
+    const { email, password, role: requestedRole, fullName, displayName, phone, dob, gender, bloodGroup } = req.body;
+    const role = 'patient'; // Force role to patient
     const nameToUse = fullName || displayName || 'New User';
 
     if (!email || !password) {
       return res.status(400).json(formatErrorResponse('VALIDATION_ERROR', 'Email and password are required.'));
     }
 
-    if (role && !ALLOWED_ROLES.includes(role)) {
-      return res.status(400).json(formatErrorResponse('VALIDATION_ERROR', `Invalid role '${role}'. Allowed roles: [${ALLOWED_ROLES.join(', ')}]`));
+    if (requestedRole && !ALLOWED_ROLES.includes(requestedRole)) {
+      return res.status(400).json(formatErrorResponse('VALIDATION_ERROR', `Invalid role '${requestedRole}'. Allowed roles: [${ALLOWED_ROLES.join(', ')}]`));
     }
 
     const db = assertDbConnected();
@@ -289,7 +290,8 @@ export const loginSync = async (req, res, next) => {
       uid: userData.uid,
       email: userData.email,
       role: userData.role,
-      displayName: userData.displayName || ''
+      displayName: userData.displayName || '',
+      mustChangePassword: userData.mustChangePassword || false
     }));
   } catch (error) {
     next(error);

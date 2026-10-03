@@ -1,6 +1,7 @@
 import React from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { ROLE_ROUTES } from '../../config/roles';
 import LoadingSpinner from './LoadingSpinner';
 
 export const ProtectedRoute = ({ allowedRoles = [] }) => {
@@ -15,9 +16,9 @@ export const ProtectedRoute = ({ allowedRoles = [] }) => {
     );
   }
 
-  // Unauthenticated users are redirected immediately to /role-selection
+  // Unauthenticated users are redirected immediately to /login
   if (!currentUser) {
-    return <Navigate to="/role-selection" replace />;
+    return <Navigate to="/login" replace />;
   }
 
   // Doctor must change password before accessing any protected workspace features
@@ -27,13 +28,8 @@ export const ProtectedRoute = ({ allowedRoles = [] }) => {
 
   // Wrong role redirection
   if (allowedRoles.length > 0 && !allowedRoles.includes(userRole)) {
-    if (userRole === 'doctor') {
-      return <Navigate to="/doctor-dashboard" replace />;
-    }
-    if (userRole === 'admin') {
-      return <Navigate to="/admin-dashboard" replace />;
-    }
-    return <Navigate to="/patient-dashboard" replace />;
+    const homeRoute = ROLE_ROUTES[userRole] || '/login';
+    return <Navigate to={homeRoute} replace />;
   }
 
   return <Outlet />;
