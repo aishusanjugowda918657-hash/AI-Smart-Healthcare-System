@@ -60,6 +60,14 @@ app.get('/api/health', (req, res) => {
   }));
 });
 
+// Environment Guard Endpoint (REQ 5)
+app.get('/api/health/env', (req, res) => {
+  const projectId = process.env.VITE_FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT || 'demo-project';
+  res.status(200).json(formatSuccessResponse({
+    projectId
+  }));
+});
+
 // Protected Internal Tick Endpoint (PRD Section 7, 3.5)
 // Runs all scheduler jobs once — safe for external pingers (cron-job.org)
 app.post('/api/internal/tick', async (req, res) => {

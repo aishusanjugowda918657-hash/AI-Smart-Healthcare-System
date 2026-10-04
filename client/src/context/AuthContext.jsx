@@ -7,6 +7,9 @@ import {
   signOut
 } from 'firebase/auth';
 import API from '../services/api';
+import { mapAuthError } from '../utils/errorMapper';
+
+const ALLOWED_ROLES = ['patient', 'doctor', 'nurse', 'reception', 'pharmacy', 'admin'];
 
 const AuthContext = createContext();
 
@@ -17,14 +20,61 @@ export const AuthProvider = ({ children }) => {
   const [mustChangePassword, setMustChangePassword] = useState(false);
   const [loading, setLoading] = useState(true);
   const [welcomeAnimation, setWelcomeAnimation] = useState({ show: false, isNew: false, name: '' });
+  const [envWarning, setEnvWarning] = useState(null);
 
-  // Sync user session with backend
+  // Environment Guard Check (REQ 5)
+  useEffect(() => {
+    const checkEnvironment = async () => {
+      try {
+        const res = await API.get('/health/env');
+        const serverProjectId = res.data?.data?.projectId;
+        const clientProjectId = import.meta.env.VITE_FIREBASE_PROJECT_ID || 'demo-project';
+
+        if (serverProjectId && clientProjectId && serverProjectId !== clientProjectId) {
+          setEnvWarning(
+            `⚠️ Environment Mismatch Warning: Client Firebase Project (${clientProjectId}) does not match Server Firebase Project (${serverProjectId}).`
+          );
+        } else {
+          setEnvWarning(null);
+        }
+      } catch (err) {
+        // Ignore health check errors in offline/test env
+      }
+    };
+    checkEnvironment();
+  }, []);
+
+  // Clear stale state helper (REQ 6)
+  const clearStaleSession = () => {
+    localStorage.removeItem('healthcare_demo_user');
+    Object.keys(localStorage).forEach((key) => {
+      if (key.startsWith('role_') || key.startsWith('auth_') || key.startsWith('patient_')) {
+        localStorage.removeItem(key);
+      }
+    });
+    sessionStorage.clear();
+    setCurrentUser(null);
+    setUserRole(null);
+    setPatientProfile(null);
+    setMustChangePassword(false);
+    setWelcomeAnimation({ show: false, isNew: false, name: '' });
+  };
+
+  // Sync user session with backend (REQ 2, 4)
   const syncUserSession = async (user) => {
     try {
       const response = await API.post('/auth/login-sync');
       if (response.data && response.data.success) {
         const syncData = response.data.data;
         const { role, mustChangePassword: mustChange } = syncData;
+
+        // Strict role validation (REQ 4: unknown role -> logout)
+        if (!role || !ALLOWED_ROLES.includes(role)) {
+          console.warn('⚠️ Unknown or unassigned role returned by loginSync:', role);
+          await logout();
+          throw new Error('Unknown or unauthorized user role. Session terminated.');
+        }
+
         setUserRole(role);
         setMustChangePassword(!!mustChange);
         setCurrentUser((prev) => ({ ...(prev || {}), ...syncData }));
@@ -36,9 +86,12 @@ export const AuthProvider = ({ children }) => {
         return syncData;
       }
     } catch (err) {
+      if (err.response?.status === 403 || err.response?.data?.error?.code === 'PROFILE_MISSING') {
+        await logout();
+        throw err;
+      }
       console.warn('⚠️ User session sync warning:', err.message);
-      const fallbackRole = localStorage.getItem(`role_${user.uid}`) || 'patient';
-      setUserRole(fallbackRole);
+      throw err;
     }
   };
 
@@ -54,21 +107,25 @@ export const AuthProvider = ({ children }) => {
   };
 
   useEffect(() => {
-    // Check if demo user was saved
+    // Check demo user
     const savedDemoUser = localStorage.getItem('healthcare_demo_user');
     if (savedDemoUser) {
       try {
         const parsed = JSON.parse(savedDemoUser);
-        setCurrentUser(parsed);
-        setUserRole(parsed.role);
-        setMustChangePassword(!!parsed.mustChangePassword);
-        if (parsed.role === 'patient') {
-          fetchPatientProfile();
+        if (parsed && ALLOWED_ROLES.includes(parsed.role)) {
+          setCurrentUser(parsed);
+          setUserRole(parsed.role);
+          setMustChangePassword(!!parsed.mustChangePassword);
+          if (parsed.role === 'patient') {
+            fetchPatientProfile();
+          }
+          setLoading(false);
+          return;
+        } else {
+          clearStaleSession();
         }
-        setLoading(false);
-        return;
       } catch (err) {
-        console.error('Error parsing demo user:', err);
+        clearStaleSession();
       }
     }
 
@@ -80,12 +137,13 @@ export const AuthProvider = ({ children }) => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         setCurrentUser(user);
-        await syncUserSession(user);
+        try {
+          await syncUserSession(user);
+        } catch (e) {
+          clearStaleSession();
+        }
       } else {
-        setCurrentUser(null);
-        setUserRole(null);
-        setPatientProfile(null);
-        setMustChangePassword(false);
+        clearStaleSession();
       }
       setLoading(false);
     });
@@ -93,10 +151,11 @@ export const AuthProvider = ({ children }) => {
     return () => unsubscribe();
   }, []);
 
-  const login = async (email, password) => {
+  const login = async (rawEmail, password) => {
+    const email = String(rawEmail || '').trim().toLowerCase(); // Trim & lowercase email
     let synced;
+
     if (!auth) {
-      // Fallback if Firebase auth is completely missing
       const demoUser = { uid: `usr-${Date.now()}`, email, role: 'patient' };
       localStorage.setItem('healthcare_demo_user', JSON.stringify(demoUser));
       setCurrentUser(demoUser);
@@ -109,7 +168,6 @@ export const AuthProvider = ({ children }) => {
         synced = await syncUserSession(credential.user);
       } catch (fbErr) {
         if (fbErr.code === 'auth/configuration-not-found' || fbErr.code === 'auth/operation-not-allowed') {
-          console.warn('⚠️ Firebase Auth Email provider unconfigured. Falling back to backend session sync.');
           const demoUser = { uid: `usr-${Date.now()}`, email, role: 'patient' };
           localStorage.setItem('healthcare_demo_user', JSON.stringify(demoUser));
           setCurrentUser(demoUser);
@@ -122,12 +180,12 @@ export const AuthProvider = ({ children }) => {
     }
 
     if (synced?.role === 'patient') {
-      let displayName = synced?.fullName || email?.split('@')[0] || 'Patient';
+      let displayName = synced?.displayName || synced?.fullName || email?.split('@')[0] || 'Patient';
       try {
         const profRes = await API.get('/patients/me');
         if (profRes.data && profRes.data.success) {
           setPatientProfile(profRes.data.data);
-          displayName = profRes.data.data.fullName || displayName;
+          displayName = profRes.data.data.name || displayName;
         }
       } catch (e) {
         // ignore
@@ -139,19 +197,19 @@ export const AuthProvider = ({ children }) => {
   };
 
   const patientRegister = async (formData) => {
-    let uid;
-    let email = formData.email;
+    const cleanEmail = String(formData.email || '').trim().toLowerCase(); // Trim & lowercase email
+    const cleanData = { ...formData, email: cleanEmail, role: 'patient' }; // Force role patient
 
+    let uid;
     if (auth) {
       try {
-        const credential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
+        const credential = await createUserWithEmailAndPassword(auth, cleanEmail, formData.password);
         uid = credential.user.uid;
         setCurrentUser(credential.user);
       } catch (fbErr) {
         if (fbErr.code === 'auth/configuration-not-found' || fbErr.code === 'auth/operation-not-allowed') {
-          console.warn('⚠️ Firebase Auth Email provider unconfigured. Falling back to backend profile creation.');
           uid = `pat-${Date.now()}`;
-          const demoUser = { uid, email, role: 'patient' };
+          const demoUser = { uid, email: cleanEmail, role: 'patient' };
           localStorage.setItem('healthcare_demo_user', JSON.stringify(demoUser));
           setCurrentUser(demoUser);
         } else {
@@ -160,15 +218,14 @@ export const AuthProvider = ({ children }) => {
       }
     } else {
       uid = `pat-${Date.now()}`;
-      const demoUser = { uid, email, role: 'patient' };
+      const demoUser = { uid, email: cleanEmail, role: 'patient' };
       localStorage.setItem('healthcare_demo_user', JSON.stringify(demoUser));
       setCurrentUser(demoUser);
     }
 
     setUserRole('patient');
 
-    // Register patient profile & generate Health ID in Firestore
-    const res = await API.post('/patients/profile', formData);
+    const res = await API.post('/auth/register', cleanData);
     try {
       await syncUserSession(auth?.currentUser || { uid });
     } catch (e) {
@@ -179,11 +236,10 @@ export const AuthProvider = ({ children }) => {
       setPatientProfile(res.data.data);
     }
 
-    // Trigger Welcome Animation for new registration
     setWelcomeAnimation({
       show: true,
       isNew: true,
-      name: formData.fullName || email.split('@')[0]
+      name: cleanData.fullName || cleanEmail.split('@')[0]
     });
 
     return res.data;
@@ -205,15 +261,14 @@ export const AuthProvider = ({ children }) => {
   };
 
   const logout = async () => {
-    localStorage.removeItem('healthcare_demo_user');
     if (auth) {
-      await signOut(auth);
+      try {
+        await signOut(auth);
+      } catch (e) {
+        // ignore
+      }
     }
-    setCurrentUser(null);
-    setUserRole(null);
-    setPatientProfile(null);
-    setMustChangePassword(false);
-    setWelcomeAnimation({ show: false, isNew: false, name: '' });
+    clearStaleSession();
   };
 
   const dismissWelcome = () => {
@@ -229,6 +284,7 @@ export const AuthProvider = ({ children }) => {
     mustChangePassword,
     welcomeAnimation,
     dismissWelcome,
+    envWarning,
     login,
     patientRegister,
     changeDoctorPassword,
@@ -238,6 +294,11 @@ export const AuthProvider = ({ children }) => {
 
   return (
     <AuthContext.Provider value={value}>
+      {envWarning && (
+        <div className="bg-amber-500 text-white text-xs font-bold text-center py-2 px-4 shadow-md">
+          {envWarning}
+        </div>
+      )}
       {!loading && children}
     </AuthContext.Provider>
   );

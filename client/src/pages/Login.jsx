@@ -2,8 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Activity, Lock, Mail } from 'lucide-react';
-import API from '../services/api';
-
+import { mapAuthError } from '../utils/errorMapper';
 import { ROLE_ROUTES } from '../config/roles';
 
 export const Login = () => {
@@ -20,10 +19,17 @@ export const Login = () => {
     e.preventDefault();
     setError('');
     setInfoMessage('');
+
+    const cleanEmail = email.trim().toLowerCase(); // Trim and lowercase email
+    if (!cleanEmail || !password) {
+      setError('Please enter a valid email address and password.');
+      return;
+    }
+
     setLoading(true);
 
     try {
-      const res = await login(email, password);
+      const res = await login(cleanEmail, password);
 
       const role = res?.role;
       if (role === 'doctor' && res.mustChangePassword) {
@@ -34,23 +40,21 @@ export const Login = () => {
       }
     } catch (err) {
       console.error('Login error:', err);
-      let msg = err.response?.data?.message || err.message || 'Login failed. Please check credentials.';
-      if (err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
-        msg = 'Invalid email address or password.';
-      }
-      setError(msg);
+      const mappedMsg = mapAuthError(err);
+      setError(mappedMsg);
     } finally {
       setLoading(false);
     }
   };
 
   const handleForgotPassword = () => {
-    if (!email) {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail) {
       setError('Please enter your email address to reset password.');
       return;
     }
     setError('');
-    setInfoMessage(`Password reset request submitted for ${email}. Please check your email.`);
+    setInfoMessage(`Password reset request submitted for ${cleanEmail}. Please check your email.`);
   };
 
   return (
@@ -64,11 +68,11 @@ export const Login = () => {
       </div>
 
       {error && (
-        <div className="mb-4 p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl">
+        <div className="mb-4 p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl font-medium">
           {error}
         </div>
       )}
-      
+
       {infoMessage && (
         <div className="mb-4 p-3 bg-teal-50 border border-teal-200 text-teal-800 text-xs rounded-xl">
           {infoMessage}

@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { HeartPulse } from 'lucide-react';
 import API from '../services/api';
 import { calculateAge } from '../utils/formatters';
+import { mapAuthError } from '../utils/errorMapper';
 
 export const Register = () => {
   const [formData, setFormData] = useState({
@@ -36,6 +37,12 @@ export const Register = () => {
     e.preventDefault();
     setError('');
 
+    const cleanEmail = (formData.email || '').trim().toLowerCase();
+    if (!cleanEmail) {
+      setError('Please enter a valid email address.');
+      return;
+    }
+
     if (formData.password !== formData.confirmPassword) {
       setError('Passwords do not match. Please verify your password and confirm password.');
       return;
@@ -49,59 +56,25 @@ export const Register = () => {
     setLoading(true);
 
     try {
-      // 1. Register Auth User
-      try {
-        await API.post('/auth/register', {
-          email: formData.email,
-          password: formData.password,
-          fullName: formData.fullName,
-          role: 'patient'
-        });
-      } catch (authErr) {
-        console.info('Auth registration status/fallback:', authErr.message);
-      }
-
-      // 2. Create Patient Profile
-      const res = await API.post('/patients/profile', {
+      // 1. Call server register endpoint with cleaned email and forced role 'patient'
+      const res = await API.post('/auth/register', {
+        email: cleanEmail,
+        password: formData.password,
         fullName: formData.fullName,
         phone: formData.phone,
         dob: formData.dob,
         gender: formData.gender,
-        address: formData.address,
         bloodGroup: formData.bloodGroup,
-        emergencyContactName: formData.emergencyContactName,
-        emergencyContactPhone: formData.emergencyContactPhone
+        role: 'patient'
       });
 
-      const patientData = res.data?.data || {};
-
-      const demoUser = {
-        uid: patientData.patientUid || `usr-${Date.now().toString(36)}`,
-        email: formData.email,
-        role: 'patient',
-        patientHealthId: patientData.patientHealthId || 'HID-2026-00001',
-        fullName: formData.fullName,
-        dob: formData.dob,
-        age: ageDisplay,
-        address: formData.address
-      };
-
-      loginAsDemo(demoUser);
-      navigate('/patient-dashboard');
+      if (res.data && res.data.success) {
+        navigate('/login', { state: { info: 'Registration successful! Please sign in with your credentials.' } });
+      }
     } catch (err) {
-      console.warn('Registration fallback local state:', err.message);
-      const mockHealthId = `HID-2026-${Math.floor(10000 + Math.random() * 90000)}`;
-      loginAsDemo({
-        uid: `usr-${Date.now().toString(36)}`,
-        email: formData.email,
-        role: 'patient',
-        patientHealthId: mockHealthId,
-        fullName: formData.fullName,
-        dob: formData.dob,
-        age: ageDisplay,
-        address: formData.address
-      });
-      navigate('/patient-dashboard');
+      console.error('Registration error:', err);
+      const mappedMsg = mapAuthError(err);
+      setError(mappedMsg);
     } finally {
       setLoading(false);
     }

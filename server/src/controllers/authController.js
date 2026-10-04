@@ -1,29 +1,28 @@
 import { assertDbConnected, auth } from '../config/firebase.js';
 import { generateAtomicPatientHealthId } from '../services/healthIdGenerator.js';
-import { formatSuccessResponse, formatErrorResponse, AppError } from '../utils/errors.js';
+import { formatSuccessResponse, formatErrorResponse } from '../utils/errors.js';
 
 const ALLOWED_ROLES = ['patient', 'doctor', 'nurse', 'reception', 'pharmacy', 'admin'];
 
 /**
- * Register a new user & create self patient profile with a Health ID
- * Defined as per PRD Section 6 F1
+ * Register a new patient account & create self patient profile with a Health ID
+ * Implements PRD Section 6 F1 & Safe Registration Protocol
  */
 export const registerUser = async (req, res, next) => {
   try {
-    const { email, password, role: requestedRole, fullName, displayName, phone, dob, gender, bloodGroup } = req.body;
-    const role = 'patient'; // Force role to patient
-    const nameToUse = fullName || displayName || 'New User';
+    let { email, password, fullName, displayName, phone, dob, gender, bloodGroup } = req.body;
+    const role = 'patient'; // Public registration ALWAYS creates role 'patient'. Ignore body role.
 
     if (!email || !password) {
       return res.status(400).json(formatErrorResponse('VALIDATION_ERROR', 'Email and password are required.'));
     }
 
-    if (requestedRole && !ALLOWED_ROLES.includes(requestedRole)) {
-      return res.status(400).json(formatErrorResponse('VALIDATION_ERROR', `Invalid role '${requestedRole}'. Allowed roles: [${ALLOWED_ROLES.join(', ')}]`));
-    }
+    email = String(email).trim().toLowerCase();
+    const nameToUse = (fullName || displayName || 'New User').trim();
 
     const db = assertDbConnected();
     let uid;
+    let authUserCreated = false;
 
     if (auth) {
       try {
@@ -33,69 +32,125 @@ export const registerUser = async (req, res, next) => {
           displayName: nameToUse
         });
         uid = userRecord.uid;
-        await auth.setCustomUserClaims(uid, { role: role || 'patient' });
+        authUserCreated = true;
+        await auth.setCustomUserClaims(uid, { role: 'patient' });
       } catch (authErr) {
         if (authErr.code === 'auth/email-already-exists') {
-          return res.status(409).json(formatErrorResponse('POSSIBLE_DUPLICATE', 'Email address is already registered in Firebase Authentication.'));
+          // Idempotent Check: Check whether users doc and self-patient profile exist for that email
+          try {
+            const existingRecord = await auth.getUserByEmail(email);
+            const existingUid = existingRecord.uid;
+
+            const userDocSnap = await db.collection('users').doc(existingUid).get();
+            const patientSnap = await db.collection('patients')
+              .where('ownerUid', '==', existingUid)
+              .where('relation', '==', 'self')
+              .limit(1)
+              .get();
+
+            const isUserComplete = userDocSnap.exists;
+            const isPatientComplete = !patientSnap.empty;
+
+            if (!isUserComplete || !isPatientComplete) {
+              return res.status(409).json(
+                formatErrorResponse('ACCOUNT_INCOMPLETE', 'This account was not finished. Please sign in to complete it.')
+              );
+            }
+
+            return res.status(409).json(
+              formatErrorResponse('EMAIL_IN_USE', 'This email already has an account. Sign in, or reset your password.')
+            );
+          } catch (e) {
+            return res.status(409).json(
+              formatErrorResponse('EMAIL_IN_USE', 'This email already has an account. Sign in, or reset your password.')
+            );
+          }
         }
-        throw authErr;
+
+        if (authErr.code === 'auth/weak-password') {
+          return res.status(400).json(formatErrorResponse('VALIDATION_ERROR', 'Password must be at least 6 characters long.'));
+        }
+        if (authErr.code === 'auth/invalid-email') {
+          return res.status(400).json(formatErrorResponse('VALIDATION_ERROR', 'Please enter a valid email address.'));
+        }
+        if (authErr.code === 'app/network-error' || (authErr.message && authErr.message.includes('ECONNREFUSED'))) {
+          uid = `usr-${Date.now().toString(36)}`;
+        } else {
+          throw authErr;
+        }
       }
     } else {
       uid = `usr-${Date.now().toString(36)}`;
     }
 
-    const healthId = await generateAtomicPatientHealthId();
+    // Wrap Firestore writes in try/catch to roll back Auth user if Firestore setup fails
+    try {
+      const healthId = await generateAtomicPatientHealthId();
 
-    const userDoc = {
-      uid,
-      role: role || 'patient',
-      displayName: nameToUse,
-      email,
-      phone: phone || '',
-      language: 'en',
-      fcmTokens: [],
-      prefs: {
-        quietHours: { start: '22:00', end: '07:00' },
-        privacyMode: false,
-        mealTimes: { breakfast: '08:00', lunch: '13:00', dinner: '20:00' }
-      },
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
+      const userDoc = {
+        uid,
+        role: 'patient',
+        displayName: nameToUse,
+        email,
+        phone: phone || '',
+        language: 'en',
+        fcmTokens: [],
+        prefs: {
+          quietHours: { start: '22:00', end: '07:00' },
+          privacyMode: false,
+          mealTimes: { breakfast: '08:00', lunch: '13:00', dinner: '20:00' }
+        },
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
 
-    const patientDoc = {
-      healthId,
-      patientHealthId: healthId,
-      ownerUid: uid,
-      relation: 'self',
-      isTemporary: false,
-      name: nameToUse.trim(),
-      searchName: nameToUse.trim().toLowerCase(),
-      dob: dob || '1990-01-01',
-      gender: gender || 'other',
-      bloodGroup: bloodGroup || '',
-      allergies: [],
-      conditions: [],
-      flags: { pregnant: false, disability: false },
-      emergencyContact: null,
-      accessList: {},
-      emergencyQrEnabled: false,
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
+      const patientDoc = {
+        healthId,
+        patientHealthId: healthId,
+        ownerUid: uid,
+        relation: 'self',
+        isTemporary: false,
+        name: nameToUse,
+        searchName: nameToUse.toLowerCase(),
+        dob: dob || '1990-01-01',
+        gender: gender || 'other',
+        bloodGroup: bloodGroup || '',
+        allergies: [],
+        conditions: [],
+        flags: { pregnant: false, disability: false },
+        emergencyContact: null,
+        accessList: {},
+        emergencyQrEnabled: false,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
 
-    const batch = db.batch();
-    batch.set(db.collection('users').doc(uid), userDoc);
-    batch.set(db.collection('patients').doc(healthId), patientDoc);
-    await batch.commit();
+      const batch = db.batch();
+      batch.set(db.collection('users').doc(uid), userDoc);
+      batch.set(db.collection('patients').doc(healthId), patientDoc);
+      await batch.commit();
 
-    return res.status(201).json(formatSuccessResponse({
-      uid,
-      email,
-      role: role || 'patient',
-      healthId,
-      name: nameToUse
-    }));
+      return res.status(201).json(formatSuccessResponse({
+        uid,
+        email,
+        role: 'patient',
+        healthId,
+        name: nameToUse
+      }));
+    } catch (fsErr) {
+      // Rollback newly created Auth user if database setup failed
+      if (auth && authUserCreated && uid) {
+        try {
+          await auth.deleteUser(uid);
+          console.warn(`🧹 Rolled back Auth user ${uid} due to Firestore setup failure.`);
+        } catch (delErr) {
+          console.error(`Failed to rollback Auth user ${uid}:`, delErr.message);
+        }
+      }
+      return res.status(503).json(
+        formatErrorResponse('SERVICE_UNAVAILABLE', 'Registration database setup failed. Please try again.')
+      );
+    }
   } catch (error) {
     next(error);
   }
@@ -110,7 +165,9 @@ export const getMe = async (req, res, next) => {
     const db = assertDbConnected();
 
     const userDoc = await db.collection('users').doc(uid).get();
-    let userData = userDoc.exists ? userDoc.data() : { email: req.user.email || 'demo@healthcare.org', role: req.user.role || 'patient' };
+    let userData = userDoc.exists
+      ? userDoc.data()
+      : { email: req.user.email || 'demo@healthcare.org', role: req.user.role || 'patient' };
 
     const patientSnap = await db.collection('patients')
       .where('ownerUid', '==', uid)
@@ -263,28 +320,87 @@ export const changeDoctorPassword = async (req, res, next) => {
 };
 
 /**
- * Login sync endpoint
+ * Login sync endpoint with profile repair & role safety
  */
 export const loginSync = async (req, res, next) => {
   try {
-    const { uid, email, role } = req.user;
+    const { uid, email, role: claimedRole } = req.user;
     const db = assertDbConnected();
 
-    let userDoc = await db.collection('users').doc(uid).get();
+    let userDocSnap = await db.collection('users').doc(uid).get();
 
-    if (!userDoc.exists) {
+    if (!userDocSnap.exists) {
+      const PRIVILEGED_ROLES = ['doctor', 'nurse', 'reception', 'pharmacy', 'admin'];
+      if (claimedRole && PRIVILEGED_ROLES.includes(claimedRole)) {
+        return res.status(403).json(
+          formatErrorResponse('PROFILE_MISSING', 'Profile missing, contact the administrator.')
+        );
+      }
+
+      // Unprivileged / patient user: auto-create users doc with role 'patient'
+      const nameToUse = (req.user.name || email?.split('@')[0] || 'Patient').trim();
       const newDoc = {
         uid,
         email: email || '',
-        role: role || 'patient',
+        displayName: nameToUse,
+        role: 'patient',
+        phone: '',
+        language: 'en',
+        fcmTokens: [],
+        prefs: {
+          quietHours: { start: '22:00', end: '07:00' },
+          privacyMode: false,
+          mealTimes: { breakfast: '08:00', lunch: '13:00', dinner: '20:00' }
+        },
         createdAt: new Date(),
         updatedAt: new Date()
       };
       await db.collection('users').doc(uid).set(newDoc);
-      userDoc = await db.collection('users').doc(uid).get();
+      userDocSnap = await db.collection('users').doc(uid).get();
     }
 
-    const userData = userDoc.data();
+    const userData = userDocSnap.data();
+
+    if (!ALLOWED_ROLES.includes(userData.role)) {
+      return res.status(403).json(
+        formatErrorResponse('UNAUTHORIZED_ROLE', 'Unknown or unauthorized user role. Please contact support.')
+      );
+    }
+
+    // Check & repair missing self patient profile for patient accounts
+    if (userData.role === 'patient') {
+      const patientSnap = await db.collection('patients')
+        .where('ownerUid', '==', uid)
+        .where('relation', '==', 'self')
+        .limit(1)
+        .get();
+
+      if (patientSnap.empty) {
+        const healthId = await generateAtomicPatientHealthId();
+        const nameToUse = userData.displayName || 'Patient';
+        const patientDoc = {
+          healthId,
+          patientHealthId: healthId,
+          ownerUid: uid,
+          relation: 'self',
+          isTemporary: false,
+          name: nameToUse,
+          searchName: nameToUse.toLowerCase(),
+          dob: '1990-01-01',
+          gender: 'other',
+          bloodGroup: '',
+          allergies: [],
+          conditions: [],
+          flags: { pregnant: false, disability: false },
+          emergencyContact: null,
+          accessList: {},
+          emergencyQrEnabled: false,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        };
+        await db.collection('patients').doc(healthId).set(patientDoc);
+      }
+    }
 
     return res.status(200).json(formatSuccessResponse({
       uid: userData.uid,

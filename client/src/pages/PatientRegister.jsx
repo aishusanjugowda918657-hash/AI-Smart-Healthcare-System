@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { UserPlus, Mail, Lock, Phone, Calendar, MapPin, AlertCircle, ArrowLeft, Eye, EyeOff } from 'lucide-react';
+import { mapAuthError } from '../utils/errorMapper';
 
 const PatientRegister = () => {
   const navigate = useNavigate();
@@ -58,13 +59,8 @@ const PatientRegister = () => {
       navigate('/patient-dashboard');
     } catch (err) {
       console.error('Patient registration error:', err);
-      let msg = err.message || 'Registration failed. Please try again.';
-      if (err.code === 'auth/email-already-in-use') {
-        msg = 'This email address is already registered. Please sign in instead.';
-      } else if (err.code === 'auth/configuration-not-found' || err.code === 'auth/operation-not-allowed') {
-        msg = 'Firebase Email/Password Authentication is not enabled in Firebase Console. (Please enable Email/Password provider in Firebase Console > Authentication > Sign-in method).';
-      }
-      setError(msg);
+      const mappedMsg = mapAuthError(err);
+      setError(mappedMsg);
     } finally {
       setIsSubmitting(false);
     }
