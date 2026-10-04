@@ -223,6 +223,8 @@ export const AppointmentBookingForm = () => {
         reasonText: `${reasonChips.join(', ')}. ${reasonText}`.trim(),
         reasonChips,
         complexity: triageData?.complexity || 'moderate',
+        clinicalLevel: triageData?.clinicalLevel || 1,
+        urgencySuggested: triageData?.urgencySuggested || 'routine',
         disclaimerAck: { acknowledged: true },
         travelMinutes: travelMinutes || null
       });

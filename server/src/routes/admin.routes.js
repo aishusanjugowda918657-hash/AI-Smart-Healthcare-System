@@ -8,7 +8,7 @@ import {
   getClinicalLists
 } from '../controllers/adminController.js';
 import { adminMergePatients } from '../controllers/patientController.js';
-import { saveDoctorSchedule } from '../controllers/doctorController.js';
+import { saveDoctorSchedule, getLeaves } from '../controllers/doctorController.js';
 import { adminGenerateSlots, adminCreateLeave, adminDeleteLeave } from '../controllers/slotController.js';
 import { getLeaveRescheduleProgress } from '../jobs/leaveReschedule.js';
 import { requireAuth } from '../middleware/authMiddleware.js';
@@ -27,8 +27,9 @@ router.post('/patients/merge', requireAuth, requireRole('admin'), adminMergePati
 
 // Doctor Schedule & Leave Management (PRD F2 & F16)
 router.put('/doctors/:id/schedule', requireAuth, requireRole('admin'), saveDoctorSchedule);
+router.get('/leaves', requireAuth, requireRole('admin', 'doctor'), getLeaves);
 router.post('/leaves', requireAuth, requireRole('admin', 'doctor'), adminCreateLeave);
-router.delete('/leaves/:id', requireAuth, requireRole('admin'), adminDeleteLeave);
+router.delete('/leaves/:id', requireAuth, requireRole('admin', 'doctor'), adminDeleteLeave);
 router.get('/leaves/:id/progress', requireAuth, requireRole('admin', 'doctor'), async (req, res, next) => {
   try {
     const { id } = req.params;

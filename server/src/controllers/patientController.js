@@ -33,7 +33,8 @@ export const createOrUpdatePatientProfile = async (req, res, next) => {
       emergencyContactPhone,
       emergencyContactRelationship,
       allergies = [],
-      existingConditions = []
+      existingConditions = [],
+      emergencyQrEnabled
     } = req.body;
 
     if (!fullName || !phone || !dob || !address || !gender) {
@@ -41,42 +42,61 @@ export const createOrUpdatePatientProfile = async (req, res, next) => {
     }
 
     const db = assertDbConnected();
-    const patientRef = db.collection('patients').doc(uid);
-    const patientDoc = await patientRef.get();
 
-    let patientHealthId;
+    let patientRef = null;
+    let patientHealthId = null;
     let createdAt = new Date();
+    let existingData = {};
 
-    if (patientDoc.exists) {
-      patientHealthId = patientDoc.data().patientHealthId || patientDoc.data().healthId;
-      createdAt = patientDoc.data().createdAt || new Date();
+    const selfSnap = await db.collection('patients')
+      .where('ownerUid', '==', uid)
+      .where('relation', '==', 'self')
+      .limit(1)
+      .get();
+
+    if (!selfSnap.empty) {
+      const docSnap = selfSnap.docs[0];
+      patientRef = docSnap.ref;
+      existingData = docSnap.data();
+      patientHealthId = existingData.patientHealthId || existingData.healthId;
+      createdAt = existingData.createdAt || new Date();
     } else {
-      patientHealthId = await generateAtomicPatientHealthId();
+      const legacyDoc = await db.collection('patients').doc(uid).get();
+      if (legacyDoc.exists) {
+        patientRef = legacyDoc.ref;
+        existingData = legacyDoc.data();
+        patientHealthId = existingData.patientHealthId || existingData.healthId;
+        createdAt = existingData.createdAt || new Date();
+      } else {
+        patientHealthId = await generateAtomicPatientHealthId();
+        patientRef = db.collection('patients').doc(patientHealthId);
+      }
     }
 
     const emergencyContact = {
-      name: emergencyContactName || '',
-      phone: emergencyContactPhone || '',
-      relationship: emergencyContactRelationship || 'Relative'
+      name: emergencyContactName !== undefined ? emergencyContactName : (existingData.emergencyContact?.name || ''),
+      phone: emergencyContactPhone !== undefined ? emergencyContactPhone : (existingData.emergencyContact?.phone || ''),
+      relationship: emergencyContactRelationship !== undefined ? emergencyContactRelationship : (existingData.emergencyContact?.relationship || 'Relative')
     };
 
     const parsedAllergies = Array.isArray(allergies)
       ? allergies
       : typeof allergies === 'string'
       ? allergies.split(',').map((s) => s.trim()).filter(Boolean)
-      : [];
+      : (existingData.allergies || []);
 
     const parsedConditions = Array.isArray(existingConditions)
       ? existingConditions
       : typeof existingConditions === 'string'
       ? existingConditions.split(',').map((s) => s.trim()).filter(Boolean)
-      : [];
+      : (existingData.conditions || []);
 
     const profileData = {
       patientUid: uid,
       patientHealthId,
       healthId: patientHealthId,
       ownerUid: uid,
+      primaryAccountUid: uid,
       relation: 'self',
       isTemporary: false,
       fullName,
@@ -92,10 +112,10 @@ export const createOrUpdatePatientProfile = async (req, res, next) => {
       allergies: parsedAllergies,
       existingConditions: parsedConditions,
       conditions: parsedConditions,
-      flags: { pregnant: false, disability: false },
-      accessList: {},
-      emergencyQrEnabled: false,
-      qrVersion: 1,
+      flags: { pregnant: false, disability: false, ...(existingData.flags || {}) },
+      accessList: existingData.accessList || {},
+      emergencyQrEnabled: emergencyQrEnabled !== undefined ? !!emergencyQrEnabled : (existingData.emergencyQrEnabled || false),
+      qrVersion: existingData.qrVersion || 1,
       profileCompleted: true,
       consentStatus: true,
       createdAt,
@@ -131,12 +151,27 @@ export const getMyPatientProfile = async (req, res, next) => {
     const { uid } = req.user;
     const db = assertDbConnected();
 
-    const patientDoc = await db.collection('patients').doc(uid).get();
-    if (!patientDoc.exists) {
+    const snap = await db.collection('patients')
+      .where('ownerUid', '==', uid)
+      .where('relation', '==', 'self')
+      .limit(1)
+      .get();
+
+    let data = null;
+
+    if (!snap.empty) {
+      data = snap.docs[0].data();
+    } else {
+      const directDoc = await db.collection('patients').doc(uid).get();
+      if (directDoc.exists) {
+        data = directDoc.data();
+      }
+    }
+
+    if (!data) {
       return res.status(404).json(formatErrorResponse('NOT_FOUND', 'Patient profile not found. Please complete profile registration.'));
     }
 
-    const data = patientDoc.data();
     const computedYears = calculateAge(data.dob);
     data.age = computedYears !== null ? `${computedYears} years` : '';
 
@@ -184,18 +219,25 @@ export const getFamilyMembers = async (req, res, next) => {
     const { uid } = req.user;
     const db = assertDbConnected();
 
-    const snapshot = await db.collection('patients')
-      .where('primaryAccountUid', '==', uid)
-      .get();
+    const [ownerSnap, primarySnap] = await Promise.all([
+      db.collection('patients').where('ownerUid', '==', uid).get(),
+      db.collection('patients').where('primaryAccountUid', '==', uid).get()
+    ]);
 
-    const familyMembers = snapshot.docs.map((d) => {
-      const data = d.data();
-      const computedYears = calculateAge(data.dob);
-      return {
-        ...data,
-        age: computedYears !== null ? `${computedYears} years` : ''
-      };
+    const docsMap = new Map();
+    [...ownerSnap.docs, ...primarySnap.docs].forEach((doc) => {
+      docsMap.set(doc.id, doc.data());
     });
+
+    const familyMembers = Array.from(docsMap.values())
+      .filter((data) => data.relation !== 'self')
+      .map((data) => {
+        const computedYears = calculateAge(data.dob);
+        return {
+          ...data,
+          age: computedYears !== null ? `${computedYears} years` : ''
+        };
+      });
 
     return res.status(200).json(formatSuccessResponse(familyMembers));
   } catch (error) {
@@ -637,6 +679,7 @@ export const removeCaregiver = async (req, res, next) => {
 export const getHealthIdCard = async (req, res, next) => {
   try {
     const { healthId } = req.params;
+    const { uid, role } = req.user;
     const db = assertDbConnected();
 
     const doc = await db.collection('patients').doc(healthId).get();
@@ -645,6 +688,15 @@ export const getHealthIdCard = async (req, res, next) => {
     }
 
     const data = doc.data();
+    const isOwner = data.ownerUid === uid || data.primaryAccountUid === uid;
+    const isStaff = ['doctor', 'admin', 'reception', 'nurse'].includes(role);
+    const accessEntry = (data.accessList || {})[uid];
+    const isCaregiver = accessEntry && accessEntry.status === 'active';
+
+    if (!isOwner && !isStaff && !isCaregiver) {
+      return res.status(403).json(formatErrorResponse('FORBIDDEN', 'Forbidden. You do not have permission to access this Health ID card.'));
+    }
+
     const qrVersion = data.qrVersion || 1;
     const qrPayload = `PHI:${healthId}:${qrVersion}`;
 
@@ -671,12 +723,20 @@ export const getHealthIdCard = async (req, res, next) => {
 export const refreshHealthIdQr = async (req, res, next) => {
   try {
     const { healthId } = req.params;
+    const { uid, role } = req.user;
     const db = assertDbConnected();
 
     const docRef = db.collection('patients').doc(healthId);
     const doc = await docRef.get();
     if (!doc.exists) {
       return res.status(404).json(formatErrorResponse('NOT_FOUND', 'Patient record not found.'));
+    }
+
+    const isOwner = doc.data().ownerUid === uid || doc.data().primaryAccountUid === uid;
+    const isStaff = ['doctor', 'admin'].includes(role);
+
+    if (!isOwner && !isStaff) {
+      return res.status(403).json(formatErrorResponse('FORBIDDEN', 'Forbidden. Only profile owner or authorized staff can refresh QR code.'));
     }
 
     const newVersion = (doc.data().qrVersion || 1) + 1;
@@ -704,13 +764,34 @@ export const staffPatientLookup = async (req, res, next) => {
     const db = assertDbConnected();
     const qLower = query.trim().toLowerCase();
 
+    // First, check exact Health ID
+    const exactDoc = await db.collection('patients').doc(query.trim()).get();
+    if (exactDoc.exists) {
+      const pData = exactDoc.data();
+      const computedYears = calculateAge(pData.dob);
+      pData.age = computedYears !== null ? `${computedYears} years` : '';
+      await writeAuditLog({
+        actorUid: req.user.uid,
+        actorRole: req.user.role,
+        action: 'STAFF_PATIENT_LOOKUP',
+        targetType: 'patient_search',
+        targetId: query,
+        requestId: req.requestId
+      });
+      return res.status(200).json(formatSuccessResponse([pData]));
+    }
+
     const snap = await db.collection('patients')
       .where('searchName', '>=', qLower)
       .where('searchName', '<=', qLower + '\uf8ff')
       .limit(10)
       .get();
 
-    const results = snap.docs.map((d) => d.data());
+    const results = snap.docs.map((d) => {
+      const pData = d.data();
+      const computedYears = calculateAge(pData.dob);
+      return { ...pData, age: computedYears !== null ? `${computedYears} years` : '' };
+    });
 
     await writeAuditLog({
       actorUid: req.user.uid,
@@ -776,7 +857,23 @@ export const adminMergePatients = async (req, res, next) => {
 export const getPatientActivityHistory = async (req, res, next) => {
   try {
     const { healthId } = req.params;
+    const { uid, role } = req.user;
     const db = assertDbConnected();
+
+    const patientDoc = await db.collection('patients').doc(healthId).get();
+    if (!patientDoc.exists) {
+      return res.status(404).json(formatErrorResponse('NOT_FOUND', 'Patient record not found.'));
+    }
+
+    const data = patientDoc.data();
+    const isOwner = data.ownerUid === uid || data.primaryAccountUid === uid;
+    const isStaff = ['doctor', 'admin'].includes(role);
+    const accessEntry = (data.accessList || {})[uid];
+    const isCaregiver = accessEntry && accessEntry.status === 'active';
+
+    if (!isOwner && !isStaff && !isCaregiver) {
+      return res.status(403).json(formatErrorResponse('FORBIDDEN', 'Forbidden. You do not have access to this patient activity history.'));
+    }
 
     const logsSnap = await db.collection('auditLogs')
       .where('healthId', '==', healthId)

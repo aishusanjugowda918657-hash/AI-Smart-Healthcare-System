@@ -15,6 +15,9 @@
     "seed:firestore": "node scripts/seedDoctorsFirestore.js",
     "seed:patients": "node scripts/seedDemoPatients.js",
     "backfill:name-lower": "node scripts/backfillNameLower.js",
+    "bootstrap": "node scripts/bootstrap.js",
+    "reset:everything": "node scripts/resetEverything.js",
+    "reset:patient": "node scripts/resetPatientData.js",
     "test": "vitest run",
     "test:emu": "firebase emulators:exec --only firestore,auth \"vitest run\" --project demo-project",
     "smoke:test": "vitest run tests/smoke.test.js"

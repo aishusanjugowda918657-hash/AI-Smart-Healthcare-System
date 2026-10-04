@@ -7,9 +7,12 @@ describe('Domain Module: Clinical Triage & Red Flag Safety Rules (PRD F4 & Secti
     expect(normalizeText('Chest Pain!!!')).toBe('chest pain');
     expect(normalizeText('Chhati me DARD')).toBe('chhati me dard');
     expect(normalizeText('Nenju Vali')).toBe('nenju vali');
+    expect(normalizeText('छाती में दर्द')).toBe('छाती में दर्द');
+    expect(normalizeText('நெஞ்சு வலி')).toBe('நெஞ்சு வலி');
+    expect(normalizeText('ಎದೆಯಲ್ಲಿ ನೋವು')).toBe('ಎದೆಯಲ್ಲಿ ನೋವು');
   });
 
-  it('flags cardiac emergency (Level 3) for English, Hindi, Tamil symptom matches', () => {
+  it('flags cardiac emergency (Level 3) across all 4 supported languages (English, Hindi, Tamil, Kannada)', () => {
     // English
     const resEn = evaluateTriageRules('I have severe chest pain');
     expect(resEn.clinicalLevel).toBe(ClinicalLevel.EMERGENCY);
@@ -17,14 +20,41 @@ describe('Domain Module: Clinical Triage & Red Flag Safety Rules (PRD F4 & Secti
     expect(resEn.departmentId).toBe('dept-card');
 
     // Hindi Transliterated
-    const resHi = evaluateTriageRules('mujhe chhati me dard ho raha hai');
-    expect(resHi.clinicalLevel).toBe(ClinicalLevel.EMERGENCY);
-    expect(resHi.redFlag).toBe(true);
+    const resHiTrans = evaluateTriageRules('mujhe chhati me dard ho raha hai');
+    expect(resHiTrans.clinicalLevel).toBe(ClinicalLevel.EMERGENCY);
+    expect(resHiTrans.redFlag).toBe(true);
+
+    // Hindi Native Script
+    const resHiNative = evaluateTriageRules('मुझे छाती में दर्द हो रहा है');
+    expect(resHiNative.clinicalLevel).toBe(ClinicalLevel.EMERGENCY);
+    expect(resHiNative.redFlag).toBe(true);
 
     // Tamil Transliterated
-    const resTa = evaluateTriageRules('enaku nenju vali erukku');
-    expect(resTa.clinicalLevel).toBe(ClinicalLevel.EMERGENCY);
-    expect(resTa.redFlag).toBe(true);
+    const resTaTrans = evaluateTriageRules('enaku nenju vali erukku');
+    expect(resTaTrans.clinicalLevel).toBe(ClinicalLevel.EMERGENCY);
+    expect(resTaTrans.redFlag).toBe(true);
+
+    // Tamil Native Script
+    const resTaNative = evaluateTriageRules('எனக்கு நெஞ்சு வலி இருக்கிறது');
+    expect(resTaNative.clinicalLevel).toBe(ClinicalLevel.EMERGENCY);
+    expect(resTaNative.redFlag).toBe(true);
+
+    // Kannada Transliterated
+    const resKnTrans = evaluateTriageRules('nanage edeyalli novu ide');
+    expect(resKnTrans.clinicalLevel).toBe(ClinicalLevel.EMERGENCY);
+    expect(resKnTrans.redFlag).toBe(true);
+
+    // Kannada Native Script
+    const resKnNative = evaluateTriageRules('ನನಗೆ ಎದೆಯಲ್ಲಿ ನೋವು ಇದೆ');
+    expect(resKnNative.clinicalLevel).toBe(ClinicalLevel.EMERGENCY);
+    expect(resKnNative.redFlag).toBe(true);
+  });
+
+  it('flags severe respiratory distress (Level 3) for English, Hindi, Tamil, Kannada', () => {
+    expect(evaluateTriageRules('cannot breathe').clinicalLevel).toBe(ClinicalLevel.EMERGENCY);
+    expect(evaluateTriageRules('saans lene me takleef').clinicalLevel).toBe(ClinicalLevel.EMERGENCY);
+    expect(evaluateTriageRules('moochu thinaral').clinicalLevel).toBe(ClinicalLevel.EMERGENCY);
+    expect(evaluateTriageRules('usiru kattuvike').clinicalLevel).toBe(ClinicalLevel.EMERGENCY);
   });
 
   it('flags high fever as Urgent (Level 2)', () => {

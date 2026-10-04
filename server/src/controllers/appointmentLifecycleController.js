@@ -8,6 +8,29 @@ import { writeAuditLog } from '../utils/audit.js';
 import { recalculateQueue } from '../services/queueService.js';
 
 /**
+ * Authorization helper: Verifies user is staff or owner of the appointment
+ */
+function verifyAppointmentAccess(apt, user) {
+  if (!user) return true;
+  const role = user.role || 'patient';
+  const isStaff = ['doctor', 'admin', 'reception', 'nurse'].includes(role);
+  if (isStaff) return true;
+
+  const uid = user.uid;
+  const isOwner =
+    (apt.patientUid && apt.patientUid === uid) ||
+    (apt.ownerUid && apt.ownerUid === uid) ||
+    (apt.bookedByUid && apt.bookedByUid === uid) ||
+    (apt.bookedBy && apt.bookedBy === uid) ||
+    (apt.patientId && apt.patientId === uid);
+
+  if (!isOwner) {
+    throw new AppError('FORBIDDEN', 'Security Error: You are not authorized to manage this appointment.', 403);
+  }
+  return true;
+}
+
+/**
  * POST /api/appointments/:id/confirm
  */
 export const confirmAppointment = async (req, res, next) => {
@@ -22,6 +45,7 @@ export const confirmAppointment = async (req, res, next) => {
     }
 
     const apt = snap.data();
+    verifyAppointmentAccess(apt, req.user);
     assertTransition(apt.status, 'confirmed');
 
     const now = clock.now();
@@ -63,6 +87,7 @@ export const cancelAppointment = async (req, res, next) => {
     }
 
     const apt = snap.data();
+    verifyAppointmentAccess(apt, req.user);
     assertTransition(apt.status, 'cancelled');
 
     const now = clock.now();
@@ -130,6 +155,7 @@ export const undoCancelAppointment = async (req, res, next) => {
     }
 
     const apt = snap.data();
+    verifyAppointmentAccess(apt, req.user);
 
     if (apt.status !== 'cancelled') {
       throw new AppError('INVALID_STATE', 'Appointment is not in cancelled state.', 400);
@@ -152,14 +178,15 @@ export const undoCancelAppointment = async (req, res, next) => {
       updatedAt: now
     });
 
-    // Re-reserve slot if present
-    if (apt.slotId) {
-      const slotRef = db.collection('slots').doc(apt.slotId);
+    // Re-reserve slot(s) if present
+    const targetSlotIds = apt.slotIds && Array.isArray(apt.slotIds) ? apt.slotIds : (apt.slotId ? [apt.slotId] : []);
+    for (const sId of targetSlotIds) {
+      const slotRef = db.collection('slots').doc(sId);
       const slotSnap = await slotRef.get();
       if (slotSnap.exists && slotSnap.data().status === SlotStatus.FREE) {
         await slotRef.update({
           status: SlotStatus.BOOKED,
-          bookedBy: apt.patientId || apt.patientUid,
+          bookedBy: apt.patientId || apt.patientUid || apt.ownerUid,
           updatedAt: now
         });
       }
@@ -197,7 +224,7 @@ export const restoreAppointment = async (req, res, next) => {
     await aptRef.update({
       status: targetStatus,
       restoredAt: now,
-      restoredBy: req.user.uid,
+      restoredBy: req.user ? req.user.uid : 'staff',
       cancel: null,
       updatedAt: now
     });
@@ -218,16 +245,18 @@ export const restoreAppointment = async (req, res, next) => {
 export const rescheduleAppointment = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { newSlotId, newDate, newTime } = req.body;
+    const { newSlotId, newSlotIds, newDate, newTime } = req.body;
 
-    if (!newSlotId || !newDate) {
+    const targetNewSlotIds = Array.isArray(newSlotIds) && newSlotIds.length > 0
+      ? newSlotIds
+      : (newSlotId ? [newSlotId] : []);
+
+    if (targetNewSlotIds.length === 0 || !newDate) {
       throw new AppError('VALIDATION_ERROR', 'newSlotId and newDate are required for rescheduling.', 400);
     }
 
     const db = assertDbConnected();
     const aptRef = db.collection('appointments').doc(id);
-    const newSlotRef = db.collection('slots').doc(newSlotId);
-
     const now = clock.now();
 
     await db.runTransaction(async (transaction) => {
@@ -237,41 +266,56 @@ export const rescheduleAppointment = async (req, res, next) => {
       }
       const apt = aptSnap.data();
 
-      const newSlotSnap = await transaction.get(newSlotRef);
-      if (!newSlotSnap.exists) {
-        throw new AppError('NOT_FOUND', 'Target slot not found.', 404);
-      }
-      const newSlot = newSlotSnap.data();
+      // Authorization check
+      verifyAppointmentAccess(apt, req.user);
 
-      if (newSlot.status !== SlotStatus.FREE && newSlot.status !== SlotStatus.HELD) {
-        throw new AppError('SLOT_UNAVAILABLE', 'Selected slot is no longer available.', 409);
+      const newSlotRefs = targetNewSlotIds.map((sId) => db.collection('slots').doc(sId));
+      const newSlotSnaps = await Promise.all(newSlotRefs.map((r) => transaction.get(r)));
+
+      for (const newSlotSnap of newSlotSnaps) {
+        if (!newSlotSnap.exists) {
+          throw new AppError('NOT_FOUND', `Target slot '${newSlotSnap.id}' not found.`, 404);
+        }
+        const newSlot = newSlotSnap.data();
+        if (newSlot.status !== SlotStatus.FREE && newSlot.status !== SlotStatus.HELD) {
+          throw new AppError('SLOT_UNAVAILABLE', `Selected slot '${newSlotSnap.id}' is no longer available.`, 409);
+        }
       }
 
-      // Release old slot if exists
-      if (apt.slotId && apt.slotId !== newSlotId) {
-        const oldSlotRef = db.collection('slots').doc(apt.slotId);
-        transaction.update(oldSlotRef, {
-          status: SlotStatus.FREE,
-          bookedBy: null,
+      // Release old slot(s)
+      const oldSlotIds = Array.isArray(apt.slotIds) && apt.slotIds.length > 0
+        ? apt.slotIds
+        : (apt.slotId ? [apt.slotId] : []);
+
+      for (const oldId of oldSlotIds) {
+        if (!targetNewSlotIds.includes(oldId)) {
+          const oldSlotRef = db.collection('slots').doc(oldId);
+          transaction.update(oldSlotRef, {
+            status: SlotStatus.FREE,
+            bookedBy: null,
+            updatedAt: now
+          });
+        }
+      }
+
+      // Reserve new slot(s)
+      for (const newSlotRef of newSlotRefs) {
+        transaction.update(newSlotRef, {
+          status: SlotStatus.BOOKED,
+          bookedBy: apt.patientId || apt.patientUid || apt.ownerUid,
           updatedAt: now
         });
       }
 
-      // Reserve new slot
-      transaction.update(newSlotRef, {
-        status: SlotStatus.BOOKED,
-        bookedBy: apt.patientId || apt.patientUid,
-        updatedAt: now
-      });
-
-      // Update appointment
+      const firstNewSlot = newSlotSnaps[0].data();
       transaction.update(aptRef, {
-        slotId: newSlotId,
+        slotId: targetNewSlotIds[0],
+        slotIds: targetNewSlotIds,
         date: newDate,
-        timeSlot: newTime || newSlot.startAt || apt.timeSlot,
+        timeSlot: newTime || firstNewSlot.startAt || apt.timeSlot,
         status: 'booked',
         rescheduledFrom: {
-          slotId: apt.slotId,
+          slotId: apt.slotId || (apt.slotIds ? apt.slotIds[0] : null),
           date: apt.date,
           timeSlot: apt.timeSlot
         },
@@ -282,7 +326,8 @@ export const rescheduleAppointment = async (req, res, next) => {
 
     res.status(200).json(formatSuccessResponse({
       id,
-      slotId: newSlotId,
+      slotId: targetNewSlotIds[0],
+      slotIds: targetNewSlotIds,
       date: newDate,
       status: 'booked'
     }, 'Appointment rescheduled successfully.'));
@@ -306,6 +351,7 @@ export const onTheWay = async (req, res, next) => {
     }
 
     const apt = snap.data();
+    verifyAppointmentAccess(apt, req.user);
     assertTransition(apt.status, 'on_the_way');
 
     const now = clock.now();
@@ -339,6 +385,7 @@ export const nearby = async (req, res, next) => {
     }
 
     const apt = snap.data();
+    verifyAppointmentAccess(apt, req.user);
     assertTransition(apt.status, 'nearby');
 
     const now = clock.now();
@@ -372,6 +419,7 @@ export const rejoinQueue = async (req, res, next) => {
     }
 
     const apt = snap.data();
+    verifyAppointmentAccess(apt, req.user);
     assertTransition(apt.status, 'rejoined');
 
     const now = clock.now();
@@ -407,6 +455,7 @@ export const lateSwap = async (req, res, next) => {
     }
 
     const apt = snap.data();
+    verifyAppointmentAccess(apt, req.user);
     assertTransition(apt.status, 'late');
 
     const now = clock.now();

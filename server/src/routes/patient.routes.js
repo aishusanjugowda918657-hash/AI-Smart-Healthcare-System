@@ -38,6 +38,8 @@ router.post('/:healthId/convert', requireAuth, convertTemporaryPatient);
 
 // Caregiver Management
 router.post('/:healthId/caregivers', requireAuth, addCaregiver);
+router.post('/:healthId/caregivers/accept', requireAuth, acceptCaregiverInvite);
+router.post('/:healthId/accept-caregiver', requireAuth, acceptCaregiverInvite);
 router.patch('/:healthId/caregivers/:caregiverUid', requireAuth, updateCaregiver);
 router.delete('/:healthId/caregivers/:caregiverUid', requireAuth, removeCaregiver);
 
@@ -47,6 +49,7 @@ router.post('/:healthId/refresh-qr', requireAuth, refreshHealthIdQr);
 router.get('/:healthId/activity', requireAuth, getPatientActivityHistory);
 
 // Lookup (Staff)
+router.get('/search', requireAuth, requireRole('doctor', 'admin', 'reception', 'nurse'), staffPatientLookup);
 router.get('/by-health-id/:healthId', requireAuth, requireRole('doctor', 'admin'), getPatientByHealthId);
 
 export default router;

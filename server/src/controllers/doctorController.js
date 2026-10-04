@@ -126,18 +126,83 @@ export const getDoctorById = async (req, res, next) => {
 };
 
 /**
+ * Get all registered leaves (Admin or Doctor query)
+ */
+export const getLeaves = async (req, res, next) => {
+  try {
+    const { doctorId } = req.query;
+    const db = assertDbConnected();
+
+    let query = db.collection('leaves');
+    if (doctorId) {
+      query = query.where('doctorId', '==', doctorId);
+    }
+
+    const snap = await query.get();
+    const leaves = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+    res.status(200).json(formatSuccessResponse(leaves));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * Configure/Update Doctor Working Schedule (Admin or Doctor)
  */
 export const saveDoctorSchedule = async (req, res, next) => {
   try {
-    const doctorId = req.params.id || req.user.doctorUid || req.user.uid;
+    const rawId = req.params.id;
+    const targetDoctorIdFromParam = (!rawId || rawId === 'schedule') ? (req.user.doctorUid || req.user.uid) : rawId;
+    const doctorId = targetDoctorIdFromParam;
+
     const {
-      slotMinutes = 10,
+      slotMinutes,
+      slotDurationMinutes,
       bufferEverySlots = 6,
-      weekly = [],
-      lunch = { start: '13:00', end: '14:00' },
+      weekly,
+      workingDays,
+      workingHours,
+      lunch,
+      breakTimes,
       maxBookedPerSession
     } = req.body;
+
+    const slotMins = Number(slotMinutes || slotDurationMinutes) || 10;
+    const bufferEvery = Number(bufferEverySlots) || 6;
+    const lunchObj = lunch || (Array.isArray(breakTimes) && breakTimes[0]) || { start: '13:00', end: '14:00' };
+
+    let weeklyConfig = Array.isArray(weekly) && weekly.length > 0 ? weekly : null;
+
+    if (!weeklyConfig && Array.isArray(workingDays) && workingDays.length > 0) {
+      const start = workingHours?.start || '09:00';
+      const end = workingHours?.end || '17:00';
+
+      let sessions = [];
+      if (lunchObj && lunchObj.start && lunchObj.end && lunchObj.start > start && lunchObj.end < end) {
+        sessions = [
+          { start, end: lunchObj.start },
+          { start: lunchObj.end, end }
+        ];
+      } else {
+        sessions = [{ start, end }];
+      }
+
+      weeklyConfig = workingDays.map((dNum) => ({
+        dayOfWeek: dNum === 7 ? 0 : Number(dNum),
+        sessions
+      }));
+    }
+
+    if (!weeklyConfig) {
+      weeklyConfig = [
+        { dayOfWeek: 1, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] },
+        { dayOfWeek: 2, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] },
+        { dayOfWeek: 3, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] },
+        { dayOfWeek: 4, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] },
+        { dayOfWeek: 5, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] }
+      ];
+    }
 
     const db = assertDbConnected();
 
@@ -152,20 +217,26 @@ export const saveDoctorSchedule = async (req, res, next) => {
     }
 
     if (!docSnap.exists) {
-      throw new AppError('NOT_FOUND', `Doctor record '${doctorId}' not found.`, 404);
+      const userSnap = await db.collection('users').doc(doctorId).get();
+      const docName = userSnap.exists ? (userSnap.data().displayName || userSnap.data().fullName || 'Dr. Medical Staff') : 'Dr. Medical Staff';
+      await doctorRef.set({
+        id: doctorId,
+        doctorId,
+        name: docName,
+        fullName: docName,
+        departmentId: 'dept-gen',
+        active: true,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }, { merge: true });
+      docSnap = await doctorRef.get();
     }
 
     const scheduleObj = {
-      slotMinutes: Number(slotMinutes) || 10,
-      bufferEverySlots: Number(bufferEverySlots) || 6,
-      weekly: Array.isArray(weekly) && weekly.length > 0 ? weekly : [
-        { dayOfWeek: 1, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] },
-        { dayOfWeek: 2, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] },
-        { dayOfWeek: 3, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] },
-        { dayOfWeek: 4, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] },
-        { dayOfWeek: 5, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] }
-      ],
-      lunch: lunch || { start: '13:00', end: '14:00' },
+      slotMinutes: slotMins,
+      bufferEverySlots: bufferEvery,
+      weekly: weeklyConfig,
+      lunch: lunchObj,
       maxBookedPerSession: maxBookedPerSession || null
     };
 

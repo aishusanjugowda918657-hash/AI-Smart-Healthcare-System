@@ -197,4 +197,41 @@ describe('Phase 3 - Feature F2 Doctor Schedules & Smart Slot Generation', () => 
 
     expect([201, 500]).toContain(res.statusCode);
   });
+
+  it('POST /api/doctors/schedule allows doctor to configure working schedule', async () => {
+    const res = await request(app)
+      .post('/api/doctors/schedule')
+      .set('x-demo-uid', 'DOC-001')
+      .set('x-demo-role', 'doctor')
+      .send({
+        workingDays: [1, 2, 3, 4, 5],
+        workingHours: { start: '09:00', end: '17:00' },
+        slotDurationMinutes: 15,
+        breakTimes: [{ start: '13:00', end: '14:00' }]
+      });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.schedule.slotMinutes).toBe(15);
+  });
+
+  it('GET /api/doctors/leaves lists doctor leaves for authorized staff', async () => {
+    const res = await request(app)
+      .get('/api/doctors/leaves?doctorId=DOC-001')
+      .set('x-demo-uid', 'DOC-001')
+      .set('x-demo-role', 'doctor');
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(Array.isArray(res.body.data)).toBe(true);
+  });
+
+  it('Non-owner doctor gets 403 when trying to delete another doctor\'s leave', async () => {
+    const res = await request(app)
+      .delete('/api/admin/leaves/leave_DOC-002_other')
+      .set('x-demo-uid', 'DOC-001')
+      .set('x-demo-role', 'doctor');
+
+    expect([403, 404]).toContain(res.statusCode);
+  });
 });

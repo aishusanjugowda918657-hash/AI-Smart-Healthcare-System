@@ -4,6 +4,7 @@ import app from '../src/app.js';
 import { evaluateTriageRules, mergeAIWithRulesTriage } from '../src/domain/triage.js';
 import { ClinicalLevel } from '../src/domain/constants.js';
 import * as geminiService from '../src/services/geminiService.js';
+import { assertDbConnected } from '../src/config/firebase.js';
 
 describe('Phase 4 - Feature F3 & F4 Booking, Triage & Check-in QR Verification', () => {
   const doctorId = 'DOC-001';
@@ -152,6 +153,45 @@ describe('Phase 4 - Feature F3 & F4 Booking, Triage & Check-in QR Verification',
       expect(res.body.data.tokenLabel).toMatch(/^[A-Z]-\d{3}$/);
       expect(res.body.data.qrPayload).toMatch(/^APPT:[a-zA-Z0-9_-]+:[a-f0-9]{32}$/);
     }
+  });
+
+  // -------------------------------------------------------------
+  // REGRESSION TEST: Triage Downgrade Bug
+  // Ensure that booking an appointment with severe symptoms strictly
+  // enforces the emergency level on the backend, regardless of client payload.
+  // -------------------------------------------------------------
+  it('Server STRICTLY ENFORCES emergency clinicalLevel when booking with red flag symptoms (Regression Test)', async () => {
+    const targetSlotId = `${doctorId}_${date}_1130`;
+    const db = assertDbConnected();
+    await db.collection('slots').doc(targetSlotId).set({
+      id: targetSlotId,
+      doctorId,
+      date,
+      startAt: '11:30',
+      status: 'free',
+      departmentId: 'dept-gen'
+    });
+
+    const res = await request(app)
+      .post('/api/appointments')
+      .set('x-demo-uid', 'demo-patient-001')
+      .set('x-demo-role', 'patient')
+      .send({
+        slotIds: [targetSlotId],
+        patientHealthId,
+        patientName: 'Emergency Patient',
+        doctorId,
+        date,
+        visitType: 'new',
+        reasonText: 'Severe chest pain right now', // Red flag
+        clinicalLevel: 1, // Malicious or buggy client tries to send routine
+        urgencySuggested: 'routine',
+        disclaimerAck: { acknowledged: true }
+      });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.body.data.clinicalLevel).toBe(3);
+    expect(res.body.data.urgencySuggested).toBe('emergency');
   });
 
   // -------------------------------------------------------------

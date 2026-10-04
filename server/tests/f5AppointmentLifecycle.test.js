@@ -72,6 +72,25 @@ describe('PRD F5: Feature Acceptance Criteria - Appointment Lifecycle, QR Check-
     expect(updatedDoc.data().status).toBe('confirmed');
   });
 
+  it('rejects unauthorized patient attempting to confirm or cancel another patient appointment with 403', async () => {
+    const unauthRes = await request(app)
+      .post(`/api/appointments/${testApptId}/confirm`)
+      .set('x-demo-uid', 'other-patient-999')
+      .set('x-demo-role', 'patient');
+
+    expect(unauthRes.status).toBe(403);
+    expect(unauthRes.body.error.code).toBe('FORBIDDEN');
+
+    const unauthCancel = await request(app)
+      .post(`/api/appointments/${testApptId}/cancel`)
+      .set('x-demo-uid', 'other-patient-999')
+      .set('x-demo-role', 'patient')
+      .send({ reason: 'Malicious cancel' });
+
+    expect(unauthCancel.status).toBe(403);
+    expect(unauthCancel.body.error.code).toBe('FORBIDDEN');
+  });
+
   // 2. Cancel Appointment
   it('POST /api/appointments/:id/cancel requires reason and sets 10-minute undo window', async () => {
     // Missing reason returns 400 REASON_REQUIRED

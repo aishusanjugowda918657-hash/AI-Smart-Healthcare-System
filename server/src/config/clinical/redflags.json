@@ -18,13 +18,20 @@
         "chhati me dard",
         "chhati dard",
         "dil ka daura",
+        "chhati me tej dard",
+        "छाती में दर्द",
+        "छाती दर्द",
+        "दिल का दौरा",
         "nenju vali",
         "nenjil vali",
+        "nenjil kadum vali",
+        "நெஞ்சு வலி",
+        "நெஞ்சில் வலி",
         "edeyalli novu",
         "hrudayaagatha",
-        "chhati me tej dard",
-        "nenjil kadum vali",
-        "edeyalli teevra novu"
+        "edeyalli teevra novu",
+        "ಎದೆಯಲ್ಲಿ ನೋವು",
+        "ಹೃದಯಾಘಾತ"
       ]
     },
     {
@@ -43,10 +50,15 @@
         "breathlessness",
         "saans lene me takleef",
         "saans phoolna",
-        "usiru kattuvike",
-        "moochu thinaral",
         "svaasakosha takleef",
-        "saans nahi aa rahi"
+        "saans nahi aa rahi",
+        "सांसं लेने में तकलीफ",
+        "सांस फूलना",
+        "सांस नहीं आ रही",
+        "moochu thinaral",
+        "மூச்சு திணறல்",
+        "usiru kattuvike",
+        "ಉಸಿರು ಕಟ್ಟುವಿಕೆ"
       ]
     },
     {
@@ -65,9 +77,13 @@
         "loss of consciousness",
         "behosh",
         "lakwa",
-        "svabodhina",
         "fainting",
-        "mayakkam"
+        "बेहोश",
+        "लकवा",
+        "mayakkam",
+        "மயக்கம்",
+        "svabodhina",
+        "ಸ್ವಬೋಧಿನ"
       ]
     },
     {
@@ -83,10 +99,14 @@
         "uncontrolled bleeding",
         "bleeding that will not stop",
         "tez khoon behna",
+        "तेज़ खून बहना",
+        "rathasravam",
+        "kadu ratha pokku",
+        "ரத்தப்போக்கு",
+        "அதிக ரத்தப்போக்கு",
         "teevra rakthasrava",
         "raka srava",
-        "rathasravam",
-        "kadu ratha pokku"
+        "ತೀವ್ರ ರಕ್ತಸ್ರಾವ"
       ]
     },
     {
@@ -100,8 +120,11 @@
         "high fever",
         "fever over 102",
         "tez bukhar",
-        "teevra jwara",
+        "तेज़ बुखार",
         "kadu kaichal",
+        "கடும் காய்ச்சல்",
+        "teevra jwara",
+        "ತೀವ್ರ ಜ್ವರ",
         "chills and fever"
       ]
     },
@@ -117,8 +140,11 @@
         "child vomiting",
         "infant breathlessness",
         "bachhe ko bukhar",
+        "बच्चे को बुखार",
+        "kulandhai kaichal",
+        "குழந்தை காய்ச்சல்",
         "maguvige jwara",
-        "kulandhai kaichal"
+        "ಮಗುವಿಗೆ ಜ್ವರ"
       ]
     }
   ]

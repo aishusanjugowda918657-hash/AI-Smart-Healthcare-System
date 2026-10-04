@@ -436,6 +436,14 @@ export const adminDeleteLeave = async (req, res, next) => {
     }
 
     const leaveData = leaveSnap.data();
+
+    const user = req.user || {};
+    const isOwnerDoctor = leaveData.doctorId === user.uid || leaveData.doctorId === user.doctorUid;
+    const isAdmin = user.role === 'admin';
+    if (!isAdmin && !isOwnerDoctor) {
+      throw new AppError('FORBIDDEN', 'Security Error: You are only authorized to delete your own leave records.', 403);
+    }
+
     await leaveRef.delete();
 
     // Re-generate slots for affected doctor date range to unblock free/reserved slots

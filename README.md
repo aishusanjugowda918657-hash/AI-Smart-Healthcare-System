@@ -26,12 +26,39 @@ A web application that makes hospital appointments, queues, digital prescription
 
 ---
 
-## 3. Database Seeding (Doctors, Departments & Slots)
+## 3. Database Seeding & Real Project Tooling
 
-### Option A — Firebase Emulator (Recommended for local development)
+### 3.1 Full Reset Tool (`resetEverything.js` / `resetPatientData.js`)
 
-The `seed:emulator` script creates Firebase Auth users for each demo doctor and links them to Firestore
-using the Auth UID as the document ID — the same pattern used in production:
+Deletes all top-level Firestore collections, all Firebase Auth users, and Storage files under `reports/`.
+
+- **Dry Run (Default — safe inspection of data counts)**:
+  ```bash
+  npm run reset:everything --prefix server -- --wipe-all
+  ```
+
+- **Real Deletion (Requires all 3 safety confirmation flags)**:
+  ```bash
+  npm run reset:everything --prefix server -- --wipe-all --execute --confirm=ai-basedsmarthealthcaresystem --i-understand-all-data-will-be-lost
+  ```
+
+### 3.2 Bootstrap Tool (`bootstrap.js`)
+
+Initialises `settings/global` (PRD F3 disclaimers & PRD 4.2 thresholds), canonical departments (`dept-gen`, `dept-card`, `dept-ped`, `dept-ortho`, `dept-derm`), an Admin account, and optional Doctor account with 14 days of slots.
+
+- **Standard Bootstrap (Settings + Departments + Admin Account)**:
+  ```bash
+  npm run bootstrap --prefix server -- --admin-email=admin@smartcare.com --admin-name="System Admin" --admin-password="Password123!"
+  ```
+
+- **Bootstrap with Doctor Account & 14-Day Slot Generation (`--doctor`)**:
+  ```bash
+  npm run bootstrap --prefix server -- --doctor --doctor-email=doctor@smartcare.com --doctor-name="Dr. Jane Doe" --doctor-password="Password123!" --department-id=dept-card
+  ```
+
+### 3.3 Emulator Seeding (Local Development)
+
+The `seed:emulator` script creates Firebase Auth users for each demo doctor and links them to Firestore:
 
 ```bash
 # Requires emulators to be running first
@@ -41,29 +68,6 @@ npm run seed:emulator --prefix server
 Auth credentials for all demo doctors in the emulator:
 - **Password**: `SmartCare@123`
 - **Emails**: `sarah.smith@smartcare-demo.com`, `rahul.kumar@smartcare-demo.com`, etc.
-
-### Option B — Real Firebase Project (after any environment reset)
-
-Seed only `doctors` and `departments` collections into the real Firebase project
-without requiring Firebase Auth:
-
-```bash
-# Run from the repo root (uses server/.env FIREBASE_SERVICE_ACCOUNT_PATH)
-npm run seed:firestore --prefix server
-```
-
-> This uses stable document IDs (`DOC-001` … `DOC-006`) so the `departmentId` index query in
-> `getDoctorOptions` always finds them. Run this when Step 4 of booking shows "No doctors found".
-
-#### Linking real Auth users to doctor docs (real project)
-
-When a doctor signs in via Firebase Auth for the first time:
-1. Note their Firebase Auth UID from the Firebase Console (Authentication > Users).
-2. Create a Firestore document at `doctors/{uid}` with at minimum:
-   ```json
-   { "uid": "<auth_uid>", "doctorId": "DOC-001", "departmentId": "dept-card", "role": "doctor" }
-   ```
-3. Set the custom claim: `firebase.auth().setCustomUserClaims(uid, { role: 'doctor', doctorId: 'DOC-001' })`.
 
 ---
 

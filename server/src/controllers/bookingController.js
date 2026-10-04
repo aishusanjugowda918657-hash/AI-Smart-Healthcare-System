@@ -306,6 +306,8 @@ export const createAppointment = async (req, res, next) => {
       reasonText = 'Routine checkup',
       reasonChips = [],
       complexity = 'moderate',
+      clinicalLevel = 1,
+      urgencySuggested = 'routine',
       disclaimerAck,
       travelMinutes
     } = req.body;
@@ -333,6 +335,17 @@ export const createAppointment = async (req, res, next) => {
       if (deptSnap.exists && deptSnap.data().letter) {
         deptLetter = deptSnap.data().letter;
       }
+    }
+
+    // SERVER-SIDE TRIAGE ENFORCEMENT
+    // Ensure that even if the client sends clinicalLevel = 1, if the reason text
+    // hits a red flag, we enforce the emergency level on the backend.
+    const ruleResult = evaluateTriageRules(reasonText);
+    let finalClinicalLevel = Number(clinicalLevel) || 1;
+    let finalUrgencySuggested = urgencySuggested || 'routine';
+    if (ruleResult.clinicalLevel > finalClinicalLevel) {
+      finalClinicalLevel = ruleResult.clinicalLevel;
+      finalUrgencySuggested = ruleResult.urgencySuggested;
     }
 
     const apptResult = await db.runTransaction(async (tx) => {
@@ -394,8 +407,8 @@ export const createAppointment = async (req, res, next) => {
         reasonText,
         reasonChips,
         complexity,
-        clinicalLevel: 1,
-        urgencySuggested: 'routine',
+        clinicalLevel: finalClinicalLevel,
+        urgencySuggested: finalUrgencySuggested,
         status: 'booked',
         statusHistory: [{ status: 'booked', at: new Date().toISOString(), by: userId }],
         tokenNumber,

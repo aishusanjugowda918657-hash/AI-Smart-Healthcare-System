@@ -104,3 +104,47 @@ Set `fileParallelism: false` in `vitest.config.js`. Tests within a single file s
 - Full suite takes ~70s instead of ~40s (acceptable for 42 files / 523+ tests).
 - Eliminates all cross-file contamination without needing unique collection prefixes or per-file emulator instances.
 - Individual tests within a file still use unique random IDs (`appt_f5_${rand}`) to avoid intra-file conflicts.
+
+---
+
+## D-005: Canonical Department ID Format and Real Project Reset & Bootstrap Tooling
+
+**Date**: 2026-10-04
+**Status**: Accepted
+
+### Context
+
+The system requires tools to safely reset real Firebase environments and bootstrap core configurations, canonical departments, admin accounts, and optional doctor profiles with slot generation without introducing inconsistent department IDs or risking accidental production data loss.
+
+### Decision
+
+1. **Canonical Department ID Format**:
+   - All department documents use the **`dept-<shortcode>`** format (lowercase):
+     - `dept-gen` — General Medicine (Letter `G`, code `GEN`)
+     - `dept-card` — Cardiology (Letter `C`, code `CARD`)
+     - `dept-ped` — Pediatrics (Letter `P`, code `PED`)
+     - `dept-ortho` — Orthopedics (Letter `O`, code `ORTHO`)
+     - `dept-derm` — Dermatology (Letter `D`, code `DERM`)
+   - All booking workflows, seeding scripts, and doctor documents must reference this exact canonical format.
+
+2. **Full Reset Safety & Confirmation Protocol (`resetEverything.js`)**:
+   - **Dry Run by Default**: Executing the reset script without explicit execution confirmation flags will default to a non-destructive dry run that audits and reports document counts across all collections, Auth users, and Storage report files.
+   - **Triple Safety Gate for Real Wipe (`--wipe-all`)**: Actual deletion requires ALL 3 of the following flags:
+     1. `--execute`
+     2. `--confirm=<active_project_id>` (must match active Firebase project ID)
+     3. `--i-understand-all-data-will-be-lost`
+   - **Resource Quota Resilience**: Handles `RESOURCE_EXHAUSTED` (Quota exceeded) errors gracefully by stopping execution cleanly and outputting a post-wipe recreation checklist.
+
+3. **Bootstrap Tooling (`bootstrap.js`)**:
+   - **Settings Initialisation**: Writes `settings/global` containing PRD F3 disclaimers (`textFull`, `textShort`, `version: "1.0"`) and PRD 4.2 thresholds (`fairnessBumpMin: 30`, `maxDelayProtectMin: 30`, `graceMin: 5`, etc.).
+   - **Canonical Department Provisioning**: Seeds all 5 canonical departments with default durations and token letters using `{ merge: true }`.
+   - **Admin Account Creation**: Provisions an Admin Auth user, sets the custom claim `role: 'admin'`, and creates `users/{uid}` with `role: 'admin'`. Passwords are typed interactively or via flags and never logged or stored.
+   - **Doctor Account Creation (`--doctor`)**: Provisions a Doctor Auth user with `role: 'doctor'`, creates `users/{uid}` and `doctors/{uid}` (where document ID equals the Auth UID), and generates 14 days of slots starting from today.
+   - **Idempotency**: All writes use `set(..., { merge: true })` or look up existing Auth users by email so running the bootstrap tool multiple times does not produce duplicate records or lose missing fields.
+
+### Consequences
+
+- Reset and bootstrap workflows are safe, deterministic, and idempotent.
+- The project ID confirmation check prevents accidental wipes on production Firebase projects.
+- Document IDs for doctor profiles match Firebase Auth UIDs across both emulator and real Firebase environments.
+
