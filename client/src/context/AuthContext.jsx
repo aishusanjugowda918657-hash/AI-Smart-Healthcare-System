@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { auth } from '../config/firebase';
 import {
   onAuthStateChanged,
@@ -16,13 +16,16 @@ const AuthContext = createContext();
 export const AuthProvider = ({ children }) => {
   const [currentUser, setCurrentUser] = useState(null);
   const [userRole, setUserRole] = useState(null);
+  const [loginSynced, setLoginSynced] = useState(false);
   const [patientProfile, setPatientProfile] = useState(null);
   const [mustChangePassword, setMustChangePassword] = useState(false);
   const [loading, setLoading] = useState(true);
   const [welcomeAnimation, setWelcomeAnimation] = useState({ show: false, isNew: false, name: '' });
   const [envWarning, setEnvWarning] = useState(null);
+  const [noRoleError, setNoRoleError] = useState('');
+  const prevUidRef = useRef(null);
 
-  // Environment Guard Check (REQ 5)
+  // Environment Guard Check
   useEffect(() => {
     const checkEnvironment = async () => {
       try {
@@ -44,23 +47,19 @@ export const AuthProvider = ({ children }) => {
     checkEnvironment();
   }, []);
 
-  // Clear stale state helper (REQ 6)
+  // Clear all stored auth, role, and session data
   const clearStaleSession = () => {
-    localStorage.removeItem('healthcare_demo_user');
-    Object.keys(localStorage).forEach((key) => {
-      if (key.startsWith('role_') || key.startsWith('auth_') || key.startsWith('patient_')) {
-        localStorage.removeItem(key);
-      }
-    });
+    localStorage.clear();
     sessionStorage.clear();
     setCurrentUser(null);
     setUserRole(null);
+    setLoginSynced(false);
     setPatientProfile(null);
     setMustChangePassword(false);
     setWelcomeAnimation({ show: false, isNew: false, name: '' });
   };
 
-  // Sync user session with backend (REQ 2, 4)
+  // Sync user session with backend
   const syncUserSession = async (user) => {
     try {
       const response = await API.post('/auth/login-sync');
@@ -68,24 +67,31 @@ export const AuthProvider = ({ children }) => {
         const syncData = response.data.data;
         const { role, mustChangePassword: mustChange } = syncData;
 
-        // Strict role validation (REQ 4: unknown role -> logout)
+        // Strict role validation: missing or unknown role -> show message and logout
         if (!role || !ALLOWED_ROLES.includes(role)) {
           console.warn('⚠️ Unknown or unassigned role returned by loginSync:', role);
+          setNoRoleError('Your account has no role assigned');
           await logout();
-          throw new Error('Unknown or unauthorized user role. Session terminated.');
+          throw new Error('Your account has no role assigned');
         }
 
         setUserRole(role);
         setMustChangePassword(!!mustChange);
-        setCurrentUser((prev) => ({ ...(prev || {}), ...syncData }));
+        setLoginSynced(true);
+        setCurrentUser((prev) => ({ ...(prev || {}), ...user, ...syncData }));
 
         if (role === 'patient') {
           fetchPatientProfile();
         }
 
         return syncData;
+      } else {
+        throw new Error('Login sync failed');
       }
     } catch (err) {
+      if (err.message === 'Your account has no role assigned') {
+        throw err;
+      }
       if (err.response?.status === 403 || err.response?.data?.error?.code === 'PROFILE_MISSING') {
         await logout();
         throw err;
@@ -107,28 +113,6 @@ export const AuthProvider = ({ children }) => {
   };
 
   useEffect(() => {
-    // Check demo user
-    const savedDemoUser = localStorage.getItem('healthcare_demo_user');
-    if (savedDemoUser) {
-      try {
-        const parsed = JSON.parse(savedDemoUser);
-        if (parsed && ALLOWED_ROLES.includes(parsed.role)) {
-          setCurrentUser(parsed);
-          setUserRole(parsed.role);
-          setMustChangePassword(!!parsed.mustChangePassword);
-          if (parsed.role === 'patient') {
-            fetchPatientProfile();
-          }
-          setLoading(false);
-          return;
-        } else {
-          clearStaleSession();
-        }
-      } catch (err) {
-        clearStaleSession();
-      }
-    }
-
     if (!auth) {
       setLoading(false);
       return;
@@ -136,6 +120,10 @@ export const AuthProvider = ({ children }) => {
 
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
+        if (prevUidRef.current && prevUidRef.current !== user.uid) {
+          clearStaleSession();
+        }
+        prevUidRef.current = user.uid;
         setCurrentUser(user);
         try {
           await syncUserSession(user);
@@ -143,6 +131,7 @@ export const AuthProvider = ({ children }) => {
           clearStaleSession();
         }
       } else {
+        prevUidRef.current = null;
         clearStaleSession();
       }
       setLoading(false);
@@ -152,32 +141,16 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   const login = async (rawEmail, password) => {
-    const email = String(rawEmail || '').trim().toLowerCase(); // Trim & lowercase email
-    let synced;
+    const email = String(rawEmail || '').trim().toLowerCase();
+    setNoRoleError('');
 
     if (!auth) {
-      const demoUser = { uid: `usr-${Date.now()}`, email, role: 'patient' };
-      localStorage.setItem('healthcare_demo_user', JSON.stringify(demoUser));
-      setCurrentUser(demoUser);
-      setUserRole('patient');
-      synced = demoUser;
-    } else {
-      try {
-        const credential = await signInWithEmailAndPassword(auth, email, password);
-        setCurrentUser(credential.user);
-        synced = await syncUserSession(credential.user);
-      } catch (fbErr) {
-        if (fbErr.code === 'auth/configuration-not-found' || fbErr.code === 'auth/operation-not-allowed') {
-          const demoUser = { uid: `usr-${Date.now()}`, email, role: 'patient' };
-          localStorage.setItem('healthcare_demo_user', JSON.stringify(demoUser));
-          setCurrentUser(demoUser);
-          setUserRole('patient');
-          synced = demoUser;
-        } else {
-          throw fbErr;
-        }
-      }
+      throw new Error('Firebase Auth unavailable.');
     }
+
+    const credential = await signInWithEmailAndPassword(auth, email, password);
+    setCurrentUser(credential.user);
+    const synced = await syncUserSession(credential.user);
 
     if (synced?.role === 'patient') {
       let displayName = synced?.displayName || synced?.fullName || email?.split('@')[0] || 'Patient';
@@ -197,37 +170,22 @@ export const AuthProvider = ({ children }) => {
   };
 
   const patientRegister = async (formData) => {
-    const cleanEmail = String(formData.email || '').trim().toLowerCase(); // Trim & lowercase email
-    const cleanData = { ...formData, email: cleanEmail, role: 'patient' }; // Force role patient
+    const cleanEmail = String(formData.email || '').trim().toLowerCase();
+    const cleanData = { ...formData, email: cleanEmail, role: 'patient' };
+    setNoRoleError('');
 
-    let uid;
-    if (auth) {
-      try {
-        const credential = await createUserWithEmailAndPassword(auth, cleanEmail, formData.password);
-        uid = credential.user.uid;
-        setCurrentUser(credential.user);
-      } catch (fbErr) {
-        if (fbErr.code === 'auth/configuration-not-found' || fbErr.code === 'auth/operation-not-allowed') {
-          uid = `pat-${Date.now()}`;
-          const demoUser = { uid, email: cleanEmail, role: 'patient' };
-          localStorage.setItem('healthcare_demo_user', JSON.stringify(demoUser));
-          setCurrentUser(demoUser);
-        } else {
-          throw fbErr;
-        }
-      }
-    } else {
-      uid = `pat-${Date.now()}`;
-      const demoUser = { uid, email: cleanEmail, role: 'patient' };
-      localStorage.setItem('healthcare_demo_user', JSON.stringify(demoUser));
-      setCurrentUser(demoUser);
+    if (!auth) {
+      throw new Error('Firebase Auth unavailable.');
     }
 
+    const credential = await createUserWithEmailAndPassword(auth, cleanEmail, formData.password);
+    const uid = credential.user.uid;
+    setCurrentUser(credential.user);
     setUserRole('patient');
 
     const res = await API.post('/auth/register', cleanData);
     try {
-      await syncUserSession(auth?.currentUser || { uid });
+      await syncUserSession(credential.user);
     } catch (e) {
       // sync fallback
     }
@@ -252,9 +210,6 @@ export const AuthProvider = ({ children }) => {
       if (currentUser && currentUser.uid) {
         const updatedUser = { ...currentUser, mustChangePassword: false };
         setCurrentUser(updatedUser);
-        if (localStorage.getItem('healthcare_demo_user')) {
-          localStorage.setItem('healthcare_demo_user', JSON.stringify(updatedUser));
-        }
       }
     }
     return res.data;
@@ -279,16 +234,20 @@ export const AuthProvider = ({ children }) => {
     currentUser,
     userRole,
     setUserRole,
+    loginSynced,
     patientProfile,
     fetchPatientProfile,
     mustChangePassword,
     welcomeAnimation,
     dismissWelcome,
     envWarning,
+    noRoleError,
+    setNoRoleError,
     login,
     patientRegister,
     changeDoctorPassword,
     logout,
+    clearStaleSession,
     loading
   };
 

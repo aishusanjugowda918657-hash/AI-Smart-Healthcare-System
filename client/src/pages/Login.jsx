@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Activity, Lock, Mail } from 'lucide-react';
@@ -12,15 +12,25 @@ export const Login = () => {
   const [infoMessage, setInfoMessage] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const { login } = useAuth();
+  const { currentUser, userRole, loginSynced, login, noRoleError, clearStaleSession } = useAuth();
   const navigate = useNavigate();
+
+  // On /login, if a valid session exists, redirect to role home; if not, clear stale data
+  useEffect(() => {
+    if (currentUser && userRole && loginSynced && ROLE_ROUTES[userRole]) {
+      const homeRoute = ROLE_ROUTES[userRole];
+      navigate(homeRoute, { replace: true });
+    } else {
+      clearStaleSession();
+    }
+  }, [currentUser, userRole, loginSynced, navigate]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
     setInfoMessage('');
 
-    const cleanEmail = email.trim().toLowerCase(); // Trim and lowercase email
+    const cleanEmail = email.trim().toLowerCase();
     if (!cleanEmail || !password) {
       setError('Please enter a valid email address and password.');
       return;
@@ -30,7 +40,6 @@ export const Login = () => {
 
     try {
       const res = await login(cleanEmail, password);
-
       const role = res?.role;
       if (role === 'doctor' && res.mustChangePassword) {
         navigate('/change-password');
@@ -57,6 +66,8 @@ export const Login = () => {
     setInfoMessage(`Password reset request submitted for ${cleanEmail}. Please check your email.`);
   };
 
+  const displayError = error || (noRoleError ? noRoleError : '');
+
   return (
     <div className="max-w-md mx-auto my-12 bg-white rounded-3xl p-8 border border-slate-200 shadow-xl">
       <div className="text-center mb-8">
@@ -67,9 +78,9 @@ export const Login = () => {
         <p className="text-xs text-slate-500 mt-1">Sign in to your SmartCare AI portal</p>
       </div>
 
-      {error && (
+      {displayError && (
         <div className="mb-4 p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl font-medium">
-          {error}
+          {displayError}
         </div>
       )}
 

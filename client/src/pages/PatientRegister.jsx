@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { UserPlus, Mail, Lock, Phone, Calendar, MapPin, AlertCircle, ArrowLeft, Eye, EyeOff } from 'lucide-react';
+import { UserPlus, AlertCircle, Eye, EyeOff } from 'lucide-react';
 import { mapAuthError } from '../utils/errorMapper';
 
 const PatientRegister = () => {
@@ -68,14 +68,6 @@ const PatientRegister = () => {
 
   return (
     <div className="max-w-2xl mx-auto py-8 px-4">
-      <button
-        onClick={() => navigate('/role-selection')}
-        className="inline-flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 font-medium mb-6 transition-colors"
-      >
-        <ArrowLeft className="w-4 h-4" />
-        <span>Back to Role Selection</span>
-      </button>
-
       <div className="bg-white rounded-3xl border border-slate-200 p-8 shadow-sm space-y-6">
         <div className="text-center space-y-2">
           <div className="w-14 h-14 rounded-2xl bg-indigo-100 flex items-center justify-center text-indigo-600 mx-auto mb-3 shadow-xs">
@@ -318,7 +310,7 @@ const PatientRegister = () => {
 
         <div className="pt-4 border-t border-slate-100 text-center text-sm text-slate-600">
           Already registered?{' '}
-          <Link to="/patient-login" className="font-bold text-indigo-600 hover:text-indigo-700">
+          <Link to="/login" className="font-bold text-indigo-600 hover:text-indigo-700">
             Sign in here
           </Link>
         </div>

@@ -18,21 +18,12 @@ import {
 } from 'lucide-react';
 
 export const Sidebar = () => {
-  const { currentUser, userRole } = useAuth();
+  const { currentUser, userRole, loginSynced } = useAuth();
   const location = useLocation();
 
-  const hiddenRoutes = [
-    '/',
-    '/welcome',
-    '/role-selection',
-    '/select-role',
-    '/patient-login',
-    '/patient-register',
-    '/doctor-login',
-    '/change-password'
-  ];
+  const publicRoutes = ['/', '/welcome', '/login', '/register'];
 
-  if (!currentUser || hiddenRoutes.includes(location.pathname)) {
+  if (!currentUser || !userRole || !loginSynced || publicRoutes.includes(location.pathname)) {
     return null;
   }
 
@@ -104,7 +95,7 @@ export const Sidebar = () => {
           <span>Role Authorization</span>
         </div>
         <p className="text-[11px] text-slate-500 capitalize">
-          Signed in as <strong>{userRole || 'Patient'}</strong>
+          Signed in as <strong>{userRole}</strong>
         </p>
       </div>
     </aside>

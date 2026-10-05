@@ -5,6 +5,19 @@
 export function mapAuthError(err) {
   if (!err) return 'An unexpected error occurred. Please try again.';
 
+  // No response from server / network level failure (Axios or fetch)
+  if (
+    (err.isAxiosError && !err.response) ||
+    (!err.response && (err.request || err.message === 'Network Error' || err.code === 'ERR_NETWORK'))
+  ) {
+    return 'Cannot reach the server. Please check that the server is running and try again.';
+  }
+
+  // Rate Limiting (429)
+  if (err.response?.status === 429) {
+    return 'Too many requests. Please slow down and try again later.';
+  }
+
   // Response error from server API
   const serverCode = err.response?.data?.error?.code || err.response?.data?.code;
   const serverMsg = err.response?.data?.error?.message || err.response?.data?.message;

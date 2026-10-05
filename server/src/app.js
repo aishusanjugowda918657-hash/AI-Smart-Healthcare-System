@@ -37,10 +37,26 @@ const app = express();
 
 // Global Middlewares
 app.use(helmet());
-app.use(cors({
-  origin: env.CLIENT_ORIGIN || 'http://localhost:5173',
-  credentials: true
-}));
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    const allowedOrigins = (env.CLIENT_ORIGIN || 'http://localhost:5173')
+      .split(',')
+      .map((o) => o.trim())
+      .filter(Boolean);
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, origin);
+    }
+    return callback(null, false);
+  },
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  optionsSuccessStatus: 200
+};
+
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '100kb' }));
 app.use(express.urlencoded({ extended: true, limit: '100kb' }));
 app.use(requestIdMiddleware);

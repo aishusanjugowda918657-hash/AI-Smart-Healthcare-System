@@ -5,16 +5,28 @@ import app from '../src/app.js';
 describe('Role-Based Login Redirection API Verification', () => {
   const roles = ['patient', 'doctor', 'admin', 'nurse', 'reception', 'pharmacy'];
 
-  for (const role of roles) {
-    it(`Login simulation via auth endpoint returns ${role} role`, async () => {
+  it('Login simulation via login-sync creates profile for patient role', async () => {
+    const res = await request(app)
+      .post('/api/auth/login-sync')
+      .set('x-demo-uid', 'patient-uid-01')
+      .set('x-demo-role', 'patient')
+      .set('x-demo-email', 'patient@example.com');
+
+    expect(res.statusCode).toEqual(200);
+    expect(res.body.data.role).toEqual('patient');
+  });
+
+  const privilegedRoles = ['doctor', 'admin', 'nurse', 'reception', 'pharmacy'];
+  for (const role of privilegedRoles) {
+    it(`Login simulation via login-sync returns 403 PROFILE_MISSING for uncreated ${role} profile`, async () => {
       const res = await request(app)
         .post('/api/auth/login-sync')
-        .set('x-demo-uid', `${role}-uid-01`)
+        .set('x-demo-uid', `${role}-uncreated-uid-01`)
         .set('x-demo-role', role)
         .set('x-demo-email', `${role}@example.com`);
-      
-      expect(res.statusCode).toEqual(200);
-      expect(res.body.data.role).toEqual(role);
+
+      expect(res.statusCode).toEqual(403);
+      expect(res.body.error.code).toEqual('PROFILE_MISSING');
     });
   }
 

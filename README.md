@@ -22,6 +22,7 @@ A web application that makes hospital appointments, queues, digital prescription
    cp .env.example .env
    ```
 2. Fill in your Firebase service account path and API credentials.
+   - `CLIENT_ORIGIN`: Supports a comma-separated list of allowed origins (e.g. `http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000`).
 3. **Important:** `FLAG_SCHEDULER` defaults to `false`. Enable it only when using the emulator (see Section 4).
 
 ---

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { NotificationProvider } from './context/NotificationContext';
 import { LanguageProvider } from './context/LanguageContext';
@@ -9,6 +9,7 @@ import Sidebar from './components/common/Sidebar';
 import ProtectedRoute from './components/common/ProtectedRoute';
 import HealthDisclaimerModal from './components/common/HealthDisclaimerModal';
 import PwaInstallPrompt from './components/common/PwaInstallPrompt';
+import HealthBanner from './components/common/HealthBanner';
 
 import FamilyMembersManager from './components/patient/FamilyMembersManager';
 import CaregiverManager from './components/patient/CaregiverManager';
@@ -48,6 +49,21 @@ import ManagePatients from './components/admin/ManagePatients';
 import QueueMonitor from './components/admin/QueueMonitor';
 import SystemAnalyticsCharts from './components/admin/SystemAnalyticsCharts';
 
+// Dashboard layout wrapper used ONLY for role pages
+const DashboardLayout = () => {
+  return (
+    <div className="min-h-screen flex flex-col bg-slate-50">
+      <Navbar />
+      <div className="flex-1 max-w-7xl w-full mx-auto flex">
+        <Sidebar />
+        <main className="flex-1 p-6 overflow-x-hidden">
+          <Outlet />
+        </main>
+      </div>
+    </div>
+  );
+};
+
 export const App = () => {
   const [showDisclaimer, setShowDisclaimer] = useState(false);
 
@@ -55,104 +71,103 @@ export const App = () => {
     <LanguageProvider>
       <AuthProvider>
         <NotificationProvider>
+          <HealthBanner />
           <Router>
-            <div className="min-h-screen flex flex-col bg-slate-50">
-              <Navbar />
+            <Routes>
+              {/* Public Entry Routes — OUTSIDE Dashboard Layout (No Sidebar, No Navbar with user info) */}
+              <Route path="/" element={<LandingPage />} />
+              <Route path="/welcome" element={<LandingPage />} />
+              <Route path="/login" element={<Login />} />
+              <Route path="/register" element={<PatientRegister />} />
 
-              <div className="flex-1 max-w-7xl w-full mx-auto flex">
-                <Sidebar />
+              {/* Redirects for legacy entry & role selection routes */}
+              <Route path="/role-selection" element={<Navigate to="/login" replace />} />
+              <Route path="/select-role" element={<Navigate to="/login" replace />} />
+              <Route path="/patient-login" element={<Navigate to="/login" replace />} />
+              <Route path="/doctor-login" element={<Navigate to="/login" replace />} />
+              <Route path="/patient-register" element={<Navigate to="/register" replace />} />
+              <Route path="/doctor-register" element={<Navigate to="/register" replace />} />
 
-                <main className="flex-1 p-6 overflow-x-hidden">
-                  <Routes>
-                    {/* Public Landing & Entry Routes */}
-                    <Route path="/" element={<LandingPage />} />
-                    <Route path="/welcome" element={<LandingPage />} />
-                    <Route path="/login" element={<Login />} />
-                    <Route path="/role-selection" element={<Navigate to="/login" replace />} />
-                    <Route path="/select-role" element={<Navigate to="/login" replace />} />
-                    <Route path="/patient-login" element={<Navigate to="/login" replace />} />
-                    <Route path="/doctor-login" element={<Navigate to="/login" replace />} />
-                    <Route path="/patient-register" element={<PatientRegister />} />
-                    <Route path="/register" element={<Navigate to="/patient-register" replace />} />
+              {/* Role Pages & Dashboards — INSIDE Dashboard Layout */}
+              <Route element={<DashboardLayout />}>
+                <Route path="/patient" element={<Navigate to="/patient-dashboard" replace />} />
+                <Route path="/doctor" element={<Navigate to="/doctor-dashboard" replace />} />
+                <Route path="/admin" element={<Navigate to="/admin-dashboard" replace />} />
+                <Route path="/nurse" element={<Navigate to="/nurse-dashboard" replace />} />
+                <Route path="/reception" element={<Navigate to="/reception-dashboard" replace />} />
+                <Route path="/pharmacy" element={<Navigate to="/pharmacy-dashboard" replace />} />
 
-                    {/* Role aliases */}
-                    <Route path="/patient" element={<Navigate to="/patient-dashboard" replace />} />
-                    <Route path="/doctor" element={<Navigate to="/doctor-dashboard" replace />} />
-                    <Route path="/admin" element={<Navigate to="/admin-dashboard" replace />} />
-                    
-                    <Route element={<ProtectedRoute allowedRoles={['nurse']} />}>
-                      <Route path="/nurse" element={<NurseDashboard />} />
-                    </Route>
-                    <Route element={<ProtectedRoute allowedRoles={['reception']} />}>
-                      <Route path="/reception" element={<ReceptionDashboard />} />
-                    </Route>
-                    <Route element={<ProtectedRoute allowedRoles={['pharmacy']} />}>
-                      <Route path="/pharmacy" element={<PharmacyDashboard />} />
-                    </Route>
+                <Route element={<ProtectedRoute allowedRoles={['nurse']} />}>
+                  <Route path="/nurse-dashboard" element={<NurseDashboard />} />
+                </Route>
 
-                    {/* Mandatory Doctor Password Change Route */}
-                    <Route element={<ProtectedRoute allowedRoles={['doctor', 'admin']} />}>
-                      <Route path="/change-password" element={<ChangePassword />} />
-                    </Route>
+                <Route element={<ProtectedRoute allowedRoles={['reception']} />}>
+                  <Route path="/reception-dashboard" element={<ReceptionDashboard />} />
+                </Route>
 
-                    {/* Patient Routes */}
-                    <Route element={<ProtectedRoute allowedRoles={['patient', 'doctor', 'admin']} />}>
-                      <Route path="/patient-dashboard" element={<PatientDashboard />} />
-                      <Route path="/dashboard" element={<PatientDashboard />} />
-                      <Route path="/book-appointment" element={<AppointmentBookingForm />} />
-                      <Route path="/live-queue" element={<LiveQueueTracker />} />
-                      <Route path="/health-id-card" element={<HealthIdCard />} />
-                      <Route path="/family" element={<FamilyMembersManager />} />
-                      <Route path="/caregivers" element={<CaregiverManager />} />
-                      <Route path="/preferences" element={<UserPreferences />} />
-                      <Route path="/medical-history" element={<PatientHistoryTimelinePage />} />
-                      <Route path="/patient-history" element={<PatientHistoryTimelinePage />} />
-                      <Route path="/diagnostic-reports" element={<ReportUploadPage />} />
-                      <Route path="/reports" element={<ReportUploadPage />} />
-                      <Route path="/prescriptions" element={<PrescriptionViewer />} />
-                      <Route path="/pharmacy/verify" element={<PharmacyVerifyPage />} />
-                      <Route path="/pharmacy" element={<PharmacyVerifyPage />} />
-                      <Route path="/medicine-reminders" element={<MedicineTracker />} />
-                      <Route path="/notifications" element={<NotificationsPage />} />
-                      <Route path="/ai-chat" element={<ChatbotPage />} />
-                    </Route>
+                <Route element={<ProtectedRoute allowedRoles={['pharmacy']} />}>
+                  <Route path="/pharmacy-dashboard" element={<PharmacyDashboard />} />
+                  <Route path="/pharmacy/verify" element={<PharmacyVerifyPage />} />
+                </Route>
 
-                    {/* Doctor Routes */}
-                    <Route element={<ProtectedRoute allowedRoles={['doctor', 'admin']} />}>
-                      <Route path="/doctor-dashboard" element={<DoctorDashboard />} />
-                      <Route path="/today-queue" element={<TodayQueueList />} />
-                      <Route path="/consultation-workspace" element={<ConsultationWorkspace />} />
-                      <Route path="/consultation" element={<ConsultationWorkspace />} />
-                      <Route path="/schedule-config" element={<ScheduleConfigurator />} />
-                      <Route path="/followups" element={<FollowUpList />} />
-                      <Route path="/follow-ups" element={<FollowUpList />} />
-                      <Route path="/patients-needing-attention" element={<PatientsNeedingAttention />} />
-                      <Route path="/doctor-alerts" element={<PatientsNeedingAttention />} />
-                    </Route>
+                <Route element={<ProtectedRoute allowedRoles={['doctor', 'admin']} />}>
+                  <Route path="/change-password" element={<ChangePassword />} />
+                </Route>
 
-                    {/* Admin Routes */}
-                    <Route element={<ProtectedRoute allowedRoles={['admin']} />}>
-                      <Route path="/admin-dashboard" element={<AdminDashboard />} />
-                      <Route path="/manage-doctors" element={<ManageDoctors />} />
-                      <Route path="/manage-departments" element={<ManageDepartments />} />
-                      <Route path="/manage-patients" element={<ManagePatients />} />
-                      <Route path="/queue-monitor" element={<QueueMonitor />} />
-                      <Route path="/analytics" element={<SystemAnalyticsCharts />} />
-                    </Route>
+                {/* Patient Routes */}
+                <Route element={<ProtectedRoute allowedRoles={['patient', 'doctor', 'admin']} />}>
+                  <Route path="/patient-dashboard" element={<PatientDashboard />} />
+                  <Route path="/dashboard" element={<PatientDashboard />} />
+                  <Route path="/book-appointment" element={<AppointmentBookingForm />} />
+                  <Route path="/live-queue" element={<LiveQueueTracker />} />
+                  <Route path="/health-id-card" element={<HealthIdCard />} />
+                  <Route path="/family" element={<FamilyMembersManager />} />
+                  <Route path="/caregivers" element={<CaregiverManager />} />
+                  <Route path="/preferences" element={<UserPreferences />} />
+                  <Route path="/medical-history" element={<PatientHistoryTimelinePage />} />
+                  <Route path="/patient-history" element={<PatientHistoryTimelinePage />} />
+                  <Route path="/diagnostic-reports" element={<ReportUploadPage />} />
+                  <Route path="/reports" element={<ReportUploadPage />} />
+                  <Route path="/prescriptions" element={<PrescriptionViewer />} />
+                  <Route path="/medicine-reminders" element={<MedicineTracker />} />
+                  <Route path="/notifications" element={<NotificationsPage />} />
+                  <Route path="/ai-chat" element={<ChatbotPage />} />
+                </Route>
 
-                    {/* Fallback */}
-                    <Route path="*" element={<NotFound />} />
-                  </Routes>
-                </main>
-              </div>
+                {/* Doctor Routes */}
+                <Route element={<ProtectedRoute allowedRoles={['doctor', 'admin']} />}>
+                  <Route path="/doctor-dashboard" element={<DoctorDashboard />} />
+                  <Route path="/today-queue" element={<TodayQueueList />} />
+                  <Route path="/consultation-workspace" element={<ConsultationWorkspace />} />
+                  <Route path="/consultation" element={<ConsultationWorkspace />} />
+                  <Route path="/schedule-config" element={<ScheduleConfigurator />} />
+                  <Route path="/followups" element={<FollowUpList />} />
+                  <Route path="/follow-ups" element={<FollowUpList />} />
+                  <Route path="/patients-needing-attention" element={<PatientsNeedingAttention />} />
+                  <Route path="/doctor-alerts" element={<PatientsNeedingAttention />} />
+                </Route>
 
-              <PwaInstallPrompt />
+                {/* Admin Routes */}
+                <Route element={<ProtectedRoute allowedRoles={['admin']} />}>
+                  <Route path="/admin-dashboard" element={<AdminDashboard />} />
+                  <Route path="/manage-doctors" element={<ManageDoctors />} />
+                  <Route path="/manage-departments" element={<ManageDepartments />} />
+                  <Route path="/manage-patients" element={<ManagePatients />} />
+                  <Route path="/queue-monitor" element={<QueueMonitor />} />
+                  <Route path="/analytics" element={<SystemAnalyticsCharts />} />
+                </Route>
+              </Route>
 
-              <HealthDisclaimerModal
-                isOpen={showDisclaimer}
-                onClose={() => setShowDisclaimer(false)}
-              />
-            </div>
+              {/* Fallback — OUTSIDE Dashboard Layout */}
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+
+            <PwaInstallPrompt />
+
+            <HealthDisclaimerModal
+              isOpen={showDisclaimer}
+              onClose={() => setShowDisclaimer(false)}
+            />
           </Router>
         </NotificationProvider>
       </AuthProvider>

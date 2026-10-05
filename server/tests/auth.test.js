@@ -18,13 +18,14 @@ describe('Phase 2 - Auth & Role API Verification', () => {
     expect(res.body.success).toBe(false);
   });
 
-  it('POST /api/auth/register rejects invalid roles', async () => {
+  it('POST /api/auth/register ignores requested role in body and forces role patient', async () => {
     const res = await request(app)
       .post('/api/auth/register')
-      .send({ email: 'test@example.com', password: 'password123', role: 'superhero' });
-    
-    expect(res.statusCode).toEqual(400);
-    expect(res.body.message).toContain('Invalid role');
+      .send({ email: `ignore_role_${Date.now()}@example.com`, password: 'password123', role: 'superhero' });
+
+    expect(res.statusCode).toEqual(201);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.role).toEqual('patient');
   });
 
   it('GET /api/auth/me rejects unauthorized request without auth token', async () => {

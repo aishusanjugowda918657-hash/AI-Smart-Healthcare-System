@@ -6,18 +6,18 @@ import { Activity, Bell, LogOut, Bot } from 'lucide-react';
 import Badge from './Badge';
 
 export const Navbar = () => {
-  const { currentUser, userRole, patientProfile, logout } = useAuth();
+  const { currentUser, userRole, loginSynced, patientProfile, logout } = useAuth();
   const { notifications, unreadCount, markAsRead } = useNotifications();
   const [showNotifMenu, setShowNotifMenu] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
 
-  const publicRoutes = ['/', '/welcome', '/role-selection', '/select-role', '/patient-login', '/patient-register', '/doctor-login'];
-  const isPublic = publicRoutes.includes(location.pathname) || !currentUser;
+  // Show right nav controls only when user is logged in AND login-sync has succeeded
+  const isAuthenticated = !!(currentUser && userRole && loginSynced);
 
   const handleLogout = async () => {
     await logout();
-    navigate('/role-selection');
+    navigate('/login');
   };
 
   const displayName = patientProfile?.fullName || currentUser?.displayName || currentUser?.email || 'Authenticated User';
@@ -27,7 +27,18 @@ export const Navbar = () => {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
         
         {/* Brand Logo & Name */}
-        <Link to={currentUser ? (userRole === 'doctor' ? '/doctor-dashboard' : userRole === 'admin' ? '/admin-dashboard' : '/patient-dashboard') : '/'} className="flex items-center space-x-3 group">
+        <Link
+          to={
+            isAuthenticated
+              ? userRole === 'doctor'
+                ? '/doctor-dashboard'
+                : userRole === 'admin'
+                ? '/admin-dashboard'
+                : '/patient-dashboard'
+              : '/'
+          }
+          className="flex items-center space-x-3 group"
+        >
           <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-teal-500 flex items-center justify-center text-white shadow-md group-hover:scale-105 transition-transform">
             <Activity className="w-6 h-6" />
           </div>
@@ -38,8 +49,8 @@ export const Navbar = () => {
           </div>
         </Link>
 
-        {/* Right Navigation Controls - Show ONLY when authenticated and NOT on a public entry page */}
-        {!isPublic && (
+        {/* Right Navigation Controls - Show ONLY when authenticated & synced */}
+        {isAuthenticated && (
           <div className="flex items-center space-x-4">
             
             {/* AI Chatbot Launcher Link */}
@@ -95,7 +106,7 @@ export const Navbar = () => {
               <div className="text-right hidden sm:block">
                 <p className="text-xs font-semibold text-slate-800">{displayName}</p>
                 <p className="text-[10px] uppercase font-bold text-indigo-600 tracking-wider">
-                  Role: {userRole || 'Patient'}
+                  Role: {userRole ? userRole.toUpperCase() : ''}
                 </p>
               </div>
 
