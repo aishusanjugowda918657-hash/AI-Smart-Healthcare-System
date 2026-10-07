@@ -14,6 +14,7 @@
     "seed:doctors": "node scripts/seedDemoDoctors.js",
     "seed:firestore": "node scripts/seedDoctorsFirestore.js",
     "seed:patients": "node scripts/seedDemoPatients.js",
+    "doctor": "node scripts/doctor.js",
     "backfill:name-lower": "node scripts/backfillNameLower.js",
     "bootstrap": "node scripts/bootstrap.js",
     "reset:everything": "node scripts/resetEverything.js",

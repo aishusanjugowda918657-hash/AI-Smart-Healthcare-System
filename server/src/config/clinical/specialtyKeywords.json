@@ -1,0 +1,8 @@
+{
+  "cardiology": ["chest pain", "heart", "bp", "palpitations", "hypertension", "angina"],
+  "hypertension": ["chest pain", "bp", "blood pressure", "hypertension", "high bp"],
+  "general": ["fever", "cold", "cough", "flu", "weakness", "headache", "viral"],
+  "pediatrics": ["child fever", "baby", "infant", "toddler", "vaccine", "child", "pediatric"],
+  "orthopedics": ["bone", "fracture", "joint", "back pain", "arthritis", "bone pain", "knee pain"],
+  "dermatology": ["skin", "rash", "itch", "acne", "pimple", "allergy", "skin rash"]
+}

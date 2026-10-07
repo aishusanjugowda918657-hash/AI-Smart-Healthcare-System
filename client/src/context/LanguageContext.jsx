@@ -25,3 +25,5 @@ export const useT = () => {
   }
   return context;
 };
+
+export const useLanguage = useT;

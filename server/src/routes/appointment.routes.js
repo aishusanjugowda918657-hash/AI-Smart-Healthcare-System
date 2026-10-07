@@ -13,11 +13,13 @@ import {
   cancelAppointment as cancelAppointmentF5,
   undoCancelAppointment,
   restoreAppointment,
+  getRecentlyCancelled,
   rescheduleAppointment,
   onTheWay,
   nearby,
   rejoinQueue,
-  lateSwap
+  lateSwap,
+  recordNoShowReason
 } from '../controllers/appointmentLifecycleController.js';
 import { requireAuth } from '../middleware/authMiddleware.js';
 import { requireRole } from '../middleware/roleMiddleware.js';
@@ -28,6 +30,7 @@ router.post('/', requireAuth, createAppointment);
 router.post('/book', requireAuth, bookAppointment);
 router.get('/', requireAuth, getMyAppointments);
 router.get('/my-appointments', requireAuth, getMyAppointments);
+router.get('/recently-cancelled', requireAuth, requireRole('reception', 'nurse', 'doctor', 'admin'), getRecentlyCancelled);
 router.get('/doctor-today', requireAuth, requireRole('doctor', 'admin'), getDoctorTodayAppointments);
 router.post('/:id/level', requireAuth, requireRole('doctor', 'nurse', 'admin'), overrideClinicalLevel);
 
@@ -41,6 +44,7 @@ router.post('/:id/on-the-way', requireAuth, onTheWay);
 router.post('/:id/nearby', requireAuth, nearby);
 router.post('/:id/rejoin', requireAuth, rejoinQueue);
 router.post('/:id/late-swap', requireAuth, lateSwap);
+router.post('/:id/no-show-reason', requireAuth, recordNoShowReason);
 
 router.patch('/:id/status', requireAuth, updateAppointmentStatus);
 router.patch('/:id/cancel', requireAuth, cancelAppointment);

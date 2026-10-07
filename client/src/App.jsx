@@ -37,6 +37,9 @@ import ConsultationWorkspace from './components/doctor/ConsultationWorkspace';
 import ScheduleConfigurator from './components/doctor/ScheduleConfigurator';
 import FollowUpList from './components/doctor/FollowUpList';
 import PatientsNeedingAttention from './components/doctor/PatientsNeedingAttention';
+import DoctorQueueScreen from './components/doctor/DoctorQueueScreen';
+import DoctorPatientsPage from './pages/DoctorPatientsPage';
+import DoctorAskAgentPage from './pages/DoctorAskAgentPage';
 
 import PharmacyVerifyPage from './pages/PharmacyVerifyPage';
 import PatientHistoryTimelinePage from './pages/PatientHistoryTimelinePage';
@@ -134,17 +137,30 @@ export const App = () => {
                   <Route path="/ai-chat" element={<ChatbotPage />} />
                 </Route>
 
-                {/* Doctor Routes */}
+                {/* Doctor Routes (Task A) */}
                 <Route element={<ProtectedRoute allowedRoles={['doctor', 'admin']} />}>
-                  <Route path="/doctor-dashboard" element={<DoctorDashboard />} />
-                  <Route path="/today-queue" element={<TodayQueueList />} />
-                  <Route path="/consultation-workspace" element={<ConsultationWorkspace />} />
-                  <Route path="/consultation" element={<ConsultationWorkspace />} />
-                  <Route path="/schedule-config" element={<ScheduleConfigurator />} />
-                  <Route path="/followups" element={<FollowUpList />} />
-                  <Route path="/follow-ups" element={<FollowUpList />} />
-                  <Route path="/patients-needing-attention" element={<PatientsNeedingAttention />} />
-                  <Route path="/doctor-alerts" element={<PatientsNeedingAttention />} />
+                  <Route path="/doctor/dashboard" element={<DoctorDashboard />} />
+                  <Route path="/doctor/queue" element={<DoctorQueueScreen />} />
+                  <Route path="/doctor/patients" element={<DoctorPatientsPage />} />
+                  <Route path="/doctor/alerts" element={<PatientsNeedingAttention />} />
+                  <Route path="/doctor/schedule" element={<ScheduleConfigurator />} />
+                  <Route path="/doctor/ask-agent" element={<DoctorAskAgentPage />} />
+                  <Route path="/doctor/notifications" element={<NotificationsPage />} />
+                  <Route path="/doctor/consultation/:appointmentId" element={<ConsultationWorkspace />} />
+                  <Route path="/doctor/consultation" element={<ConsultationWorkspace />} />
+
+                  {/* Redirects for legacy routes per PRD / Task A */}
+                  <Route path="/doctor" element={<Navigate to="/doctor/dashboard" replace />} />
+                  <Route path="/doctor-dashboard" element={<Navigate to="/doctor/dashboard" replace />} />
+                  <Route path="/today-queue" element={<Navigate to="/doctor/queue" replace />} />
+                  <Route path="/doctor-alerts" element={<Navigate to="/doctor/alerts" replace />} />
+                  <Route path="/patients-needing-attention" element={<Navigate to="/doctor/alerts" replace />} />
+                  <Route path="/my-schedule" element={<Navigate to="/doctor/schedule" replace />} />
+                  <Route path="/schedule-config" element={<Navigate to="/doctor/schedule" replace />} />
+                  <Route path="/consultation-workspace" element={<Navigate to="/doctor/queue" replace />} />
+                  <Route path="/consultation" element={<Navigate to="/doctor/queue" replace />} />
+                  <Route path="/followups" element={<Navigate to="/doctor/alerts" replace />} />
+                  <Route path="/follow-ups" element={<Navigate to="/doctor/alerts" replace />} />
                 </Route>
 
                 {/* Admin Routes */}

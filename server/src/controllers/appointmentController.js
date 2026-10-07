@@ -127,6 +127,8 @@ export const bookAppointment = async (req, res, next) => {
       appointmentData = {
         id: appointmentId,
         appointmentId,
+        ownerUid: targetPatientUid,
+        bookedByUid: accountUid,
         patientUid: targetPatientUid,
         patientHealthId,          // Verified — matches target patient's patientHealthId
         bookedBy: accountUid,
@@ -216,12 +218,16 @@ export const getMyAppointments = async (req, res, next) => {
       targetUid = filterPatientId;
     }
 
-    // Fetch patient doc to get patientHealthId for fallback lookups
+    // Fetch patient's healthId by querying patients where ownerUid matches (correct structure: patients/{healthId})
     let patientHealthId = null;
     try {
-      const pDoc = await db.collection('patients').doc(targetUid).get();
-      if (pDoc.exists) {
-        patientHealthId = pDoc.data().patientHealthId || null;
+      const pSnap = await db.collection('patients')
+        .where('ownerUid', '==', targetUid)
+        .where('relation', '==', 'self')
+        .limit(1)
+        .get();
+      if (!pSnap.empty) {
+        patientHealthId = pSnap.docs[0].data().patientHealthId || pSnap.docs[0].data().healthId || null;
       }
     } catch (pErr) {
       console.warn('Patient doc lookup warning:', pErr.message);
@@ -234,15 +240,18 @@ export const getMyAppointments = async (req, res, next) => {
         .where('patientUid', '==', targetUid)
         .get();
     } else {
-      // Fetch both appointments for self and appointments booked by accountUid for family members
-      const [selfSnap, bookedSnap] = await Promise.all([
+      // Fetch appointments using all patient UID field variations
+      const [selfSnap, bookedSnap, patientUidSnap, bookedBySnap] = await Promise.all([
+        db.collection('appointments').where('ownerUid', '==', patientUid).get(),
+        db.collection('appointments').where('bookedByUid', '==', patientUid).get(),
         db.collection('appointments').where('patientUid', '==', patientUid).get(),
         db.collection('appointments').where('bookedBy', '==', patientUid).get()
       ]);
 
       const map = new Map();
-      selfSnap.docs.forEach((d) => map.set(d.id, { id: d.id, appointmentId: d.data().appointmentId || d.id, ...d.data() }));
-      bookedSnap.docs.forEach((d) => map.set(d.id, { id: d.id, appointmentId: d.data().appointmentId || d.id, ...d.data() }));
+      [selfSnap, bookedSnap, patientUidSnap, bookedBySnap].forEach((snap) => {
+        snap.docs.forEach((d) => map.set(d.id, { id: d.id, appointmentId: d.data().appointmentId || d.id, ...d.data() }));
+      });
       snapshot = { docs: Array.from(map.values()) };
     }
 

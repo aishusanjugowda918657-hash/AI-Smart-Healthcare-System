@@ -13,7 +13,10 @@ service cloud.firestore {
       allow write: if false;
     }
     match /queues/{id} {
-      allow read: if signedIn() && (resource.data.doctorId == request.auth.uid || isStaff());
+      allow read: if signedIn() && (
+        resource.data.doctorId == request.auth.uid ||
+        resource.data.doctorUid == request.auth.uid ||
+        isStaff());
       allow write: if false;
     }
     match /notifications/{id} {
@@ -25,6 +28,7 @@ service cloud.firestore {
     match /alerts/{id} {
       allow read: if signedIn() && (
         resource.data.doctorId == request.auth.uid ||
+        resource.data.doctorUid == request.auth.uid ||
         (resource.data.kind == 'triage' && role() in ['nurse','admin']));
       allow write: if false;
     }

@@ -116,7 +116,9 @@ describe('PRD F5: Feature Acceptance Criteria - Appointment Lifecycle, QR Check-
     expect(updatedDoc.data().status).toBe('cancelled');
     expect(updatedDoc.data().cancel.reason).toBe('Personal conflict');
 
-    // Verify slot freed
+    // Verify slot freed after undo window expires
+    clock.setMockTime(Date.now() + 11 * 60 * 1000);
+    await releaseCancelledSlotsJob();
     const slotDoc = await db.collection('slots').doc(testSlotId).get();
     expect(slotDoc.data().status).toBe('free');
   });

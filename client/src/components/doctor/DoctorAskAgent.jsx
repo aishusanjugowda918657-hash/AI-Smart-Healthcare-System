@@ -3,7 +3,7 @@ import { Stethoscope, Send, RefreshCw, Sparkles, User, FileText, Mic, MicOff, Al
 import { useSpeech } from '../../hooks/useSpeech';
 import API from '../../services/api';
 
-export const DoctorAskAgent = () => {
+export const DoctorAskAgent = ({ defaultHealthId = null, onClose = null }) => {
   const [messages, setMessages] = useState([
     {
       id: 'msg-1',
@@ -13,7 +13,7 @@ export const DoctorAskAgent = () => {
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [selectedHealthId, setSelectedHealthId] = useState(null);
+  const [selectedHealthId, setSelectedHealthId] = useState(defaultHealthId);
   const [choices, setChoices] = useState(null);
 
   const { isListening, transcript, setTranscript, toggleListening, speak } = useSpeech('en-IN');
@@ -36,47 +36,81 @@ export const DoctorAskAgent = () => {
     setLoading(true);
 
     try {
-      const res = await API.post('/ai/doctor/ask', {
+      const res = await API.post('/patient-agent/query', {
         question,
-        selectedHealthId,
-        history: messages.map(m => ({ role: m.sender === 'doctor' ? 'user' : 'model', text: m.text }))
+        uniqueId: selectedHealthId || undefined
       });
 
       const data = res.data;
 
-      if (data.status === 'CHOICES_REQUIRED' && data.choices) {
-        setChoices(data.choices);
+      if (data && data.status === 'duplicate' && data.matches) {
+        setChoices(
+          data.matches.map((m) => ({
+            healthId: m.patientHealthId || m.id,
+            name: m.fullName || m.name || 'Patient',
+            age: m.age || 'N/A',
+            gender: m.gender || '',
+            lastVisitDate: m.lastVisitDate || 'N/A'
+          }))
+        );
         setMessages((prev) => [
           ...prev,
           {
             id: `ai-${Date.now()}`,
             sender: 'ai',
-            text: data.message || "Multiple patients match. Please select a patient below:"
+            text: data.message || "Multiple patients match your search. Please select the correct Health ID below:"
           }
         ]);
         return;
       }
 
+      if (data && data.status === 'answered') {
+        const sourceList = Array.isArray(data.sources)
+          ? data.sources.map((s) => (typeof s === 'string' ? { title: s, date: 'Stored Record' } : s))
+          : [];
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `ai-${Date.now()}`,
+            sender: 'ai',
+            text: data.answer || "Information retrieved from patient record.",
+            sources: sourceList
+          }
+        ]);
+        speak(data.answer);
+        return;
+      }
+
+      if (data && data.status === 'not_found') {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `ai-${Date.now()}`,
+            sender: 'ai',
+            text: data.message || "No patient found matching the specified query in stored records."
+          }
+        ]);
+        return;
+      }
+
+      // Fallback for other non-successful status
       setMessages((prev) => [
         ...prev,
         {
           id: `ai-${Date.now()}`,
           sender: 'ai',
-          text: data.answer || "No record found.",
-          sources: data.sources || []
+          text: data.error || "Not available yet"
         }
       ]);
-
-      speak(data.answer);
-
     } catch (err) {
-      console.warn('Doctor agent fallback:', err.message);
+      console.warn('Patient information agent notice:', err.message);
       setMessages((prev) => [
         ...prev,
         {
           id: `ai-${Date.now()}`,
           sender: 'ai',
-          text: "The AI assistant is currently unavailable. Please use the patient search and history screens directly."
+          text: "Not available yet"
         }
       ]);
     } finally {

@@ -2,6 +2,23 @@ import { assertDbConnected } from '../config/firebase.js';
 import { AppError, formatSuccessResponse } from '../utils/errors.js';
 import { generateSlotsForDoctorDate } from '../domain/slots.js';
 import { notify } from '../services/notify.js';
+import { clock } from '../utils/clock.js';
+import { writeAuditLog } from '../utils/audit.js';
+
+// 60-second in-memory cache for doctor dashboard totals
+export const dashboardSummaryCache = new Map();
+
+function calculateAge(dob) {
+  if (!dob) return null;
+  const birth = new Date(dob);
+  const now = new Date();
+  let years = now.getFullYear() - birth.getFullYear();
+  const m = now.getMonth() - birth.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < birth.getDate())) {
+    years--;
+  }
+  return years >= 0 ? years : null;
+}
 
 /**
  * List all active medical departments
@@ -66,7 +83,7 @@ export const createDepartment = async (req, res, next) => {
  */
 export const getDoctors = async (req, res, next) => {
   try {
-    const { departmentId } = req.query;
+    const { departmentId, includeSlotStatus } = req.query;
     const db = assertDbConnected();
 
     let query = db.collection('doctors');
@@ -80,6 +97,20 @@ export const getDoctors = async (req, res, next) => {
       id: doc.id,
       ...doc.data()
     }));
+
+    if (includeSlotStatus === 'true') {
+      const todayStr = new Date().toISOString().split('T')[0];
+      for (const doc of doctors) {
+        const targetId = doc.doctorId || doc.id;
+        const slotsSnap = await db.collection('slots')
+          .where('doctorId', '==', targetId)
+          .where('date', '>=', todayStr)
+          .where('status', '==', 'free')
+          .limit(1)
+          .get();
+        doc.hasFutureSlots = !slotsSnap.empty;
+      }
+    }
 
     res.status(200).json(formatSuccessResponse(doctors));
   } catch (error) {
@@ -397,6 +428,446 @@ export const sendPatientReminderAlert = async (req, res, next) => {
     });
 
     res.status(200).json(formatSuccessResponse({ message: 'Direct patient reminder sent successfully.' }));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * GET /api/doctor/dashboard-summary (PRD F6, F7, Task A Requirement 4)
+ * Doctor only, own data. Returns total, waiting, in consultation, completed,
+ * not arrived, late, and timeFactor using native count() queries.
+ * Cached for 60 seconds in memory to stay quota-safe.
+ */
+export const getDoctorDashboardSummary = async (req, res, next) => {
+  try {
+    const user = req.user;
+    if (!user) {
+      throw new AppError('UNAUTHORIZED', 'Authentication required.', 401);
+    }
+    const db = assertDbConnected();
+    const doctorUid = user.uid;
+
+    let targetDoctorId = user.doctorId;
+    if (!targetDoctorId) {
+      const docSnap = await db.collection('doctors').doc(doctorUid).get();
+      targetDoctorId = docSnap.exists ? docSnap.data().doctorId : doctorUid;
+    }
+
+    const date = req.query.date || clock.now().toISOString().split('T')[0];
+    const cacheKey = `${targetDoctorId}_${date}`;
+
+    if (req.query.nocache !== 'true' && dashboardSummaryCache.has(cacheKey)) {
+      const cached = dashboardSummaryCache.get(cacheKey);
+      if (Date.now() - cached.timestamp < 60000) {
+        return res.status(200).json(formatSuccessResponse({ ...cached.data, cached: true }));
+      }
+    }
+
+    // 1. Total appointments today (using native count())
+    const totalSnap = await db.collection('appointments')
+      .where('doctorId', '==', targetDoctorId)
+      .where('date', '==', date)
+      .count()
+      .get();
+    const total = totalSnap.data().count;
+
+    // 2. Waiting (checked_in, rejoined)
+    const waitingSnap = await db.collection('appointments')
+      .where('doctorId', '==', targetDoctorId)
+      .where('date', '==', date)
+      .where('status', 'in', ['checked_in', 'rejoined'])
+      .count()
+      .get();
+    const waiting = waitingSnap.data().count;
+
+    // 3. In consultation (called, in_consultation)
+    const inConsultSnap = await db.collection('appointments')
+      .where('doctorId', '==', targetDoctorId)
+      .where('date', '==', date)
+      .where('status', 'in', ['called', 'in_consultation'])
+      .count()
+      .get();
+    const inConsultation = inConsultSnap.data().count;
+
+    // 4. Completed
+    const completedSnap = await db.collection('appointments')
+      .where('doctorId', '==', targetDoctorId)
+      .where('date', '==', date)
+      .where('status', '==', 'completed')
+      .count()
+      .get();
+    const completed = completedSnap.data().count;
+
+    // 5. Not arrived (booked, confirmed, on_the_way, nearby, not_arrived)
+    const notArrivedSnap = await db.collection('appointments')
+      .where('doctorId', '==', targetDoctorId)
+      .where('date', '==', date)
+      .where('status', 'in', ['booked', 'confirmed', 'on_the_way', 'nearby', 'not_arrived'])
+      .count()
+      .get();
+    const notArrived = notArrivedSnap.data().count;
+
+    // 6. Late
+    const lateSnap = await db.collection('appointments')
+      .where('doctorId', '==', targetDoctorId)
+      .where('date', '==', date)
+      .where('status', '==', 'late')
+      .count()
+      .get();
+    const late = lateSnap.data().count;
+
+    // Queue doc lookup for delay, timeFactor, currentAppointmentId
+    const queueSnap = await db.collection('queues').doc(`${targetDoctorId}_${date}`).get();
+    const queueData = queueSnap.exists ? queueSnap.data() : {};
+    const timeFactor = queueData.timeFactor !== undefined ? Number(queueData.timeFactor) : 1.0;
+    const delayMin = queueData.delayMin || 0;
+    const currentAppointmentId = queueData.currentAppointmentId || null;
+
+    // Schedule status message adhering strictly to non-blaming wording rule
+    let runningLateMsg = 'On schedule';
+    if (delayMin > 0) {
+      runningLateMsg = `Schedule is running ${delayMin} minutes behind`;
+    } else if (timeFactor > 1.15) {
+      runningLateMsg = 'Consultations are taking more time';
+    }
+
+    const summaryData = {
+      doctorId: targetDoctorId,
+      date,
+      total,
+      waiting,
+      inConsultation,
+      completed,
+      notArrived,
+      late,
+      timeFactor,
+      delayMin,
+      currentAppointmentId,
+      runningLateMsg
+    };
+
+    dashboardSummaryCache.set(cacheKey, { data: summaryData, timestamp: Date.now() });
+
+    res.status(200).json(formatSuccessResponse(summaryData));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * GET /api/doctor/leaves/impact (PRD F2, Task A Requirement 5)
+ * Calculates how many booked appointments fall within the requested leave window.
+ */
+export const getDoctorLeaveImpact = async (req, res, next) => {
+  try {
+    const fromAt = req.query.fromAt || req.query.startDate;
+    const toAt = req.query.toAt || req.query.endDate;
+    const doctorId = req.query.doctorId;
+    if (!fromAt || !toAt) {
+      throw new AppError('VALIDATION_ERROR', 'Start date and end date are required.', 400);
+    }
+    const db = assertDbConnected();
+    const user = req.user;
+    let targetDoctorId = doctorId || user.doctorId;
+    if (!targetDoctorId) {
+      const docSnap = await db.collection('doctors').doc(user.uid).get();
+      targetDoctorId = docSnap.exists ? docSnap.data().doctorId : user.uid;
+    }
+
+    const fromDateStr = fromAt.split('T')[0];
+    const toDateStr = toAt.split('T')[0];
+
+    const countSnap = await db.collection('appointments')
+      .where('doctorId', '==', targetDoctorId)
+      .where('date', '>=', fromDateStr)
+      .where('date', '<=', toDateStr)
+      .where('status', 'in', ['booked', 'confirmed'])
+      .count()
+      .get();
+
+    const affectedAppointments = countSnap.data().count;
+
+    res.status(200).json(formatSuccessResponse({
+      doctorId: targetDoctorId,
+      fromDate: fromDateStr,
+      toDate: toDateStr,
+      affectedAppointments,
+      affectedAppointmentsCount: affectedAppointments
+    }));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * GET /api/doctor/patients/search (PRD Task A Requirement 3)
+ * Search by name prefix, Health ID, or token.
+ * If two patients share a name, both are returned with their ages.
+ */
+export const doctorSearchPatients = async (req, res, next) => {
+  try {
+    const rawQuery = req.query.query || req.query.q;
+    if (!rawQuery || !rawQuery.trim()) {
+      return res.status(200).json({ success: true, count: 0, data: [] });
+    }
+    const db = assertDbConnected();
+    const qTrim = rawQuery.trim();
+    const qLower = qTrim.toLowerCase();
+    const doctorUid = req.user.uid;
+
+    let patientsFound = [];
+
+    // 1. Direct Health ID check
+    const directDoc = await db.collection('patients').doc(qTrim).get();
+    if (directDoc.exists) {
+      patientsFound.push({ id: directDoc.id, ...directDoc.data() });
+    }
+
+    // 2. Token search in appointments
+    if (patientsFound.length === 0) {
+      const tokenSnap = await db.collection('appointments')
+        .where('tokenLabel', '==', qTrim)
+        .limit(5)
+        .get();
+      if (!tokenSnap.empty) {
+        for (const apptDoc of tokenSnap.docs) {
+          const pId = apptDoc.data().patientHealthId;
+          if (pId) {
+            const pSnap = await db.collection('patients').doc(pId).get();
+            if (pSnap.exists && !patientsFound.some((p) => (p.healthId || p.patientHealthId || p.id) === pId)) {
+              patientsFound.push({ id: pSnap.id, ...pSnap.data() });
+            }
+          }
+        }
+      }
+    }
+
+    // 3. Name prefix search
+    if (patientsFound.length === 0) {
+      const searchNameSnap = await db.collection('patients')
+        .where('searchName', '>=', qLower)
+        .where('searchName', '<=', qLower + '\uf8ff')
+        .limit(20)
+        .get();
+
+      searchNameSnap.docs.forEach((doc) => {
+        patientsFound.push({ id: doc.id, ...doc.data() });
+      });
+
+      if (patientsFound.length === 0) {
+        const nameLowerSnap = await db.collection('patients')
+          .where('nameLower', '>=', qLower)
+          .where('nameLower', '<=', qLower + '\uf8ff')
+          .limit(20)
+          .get();
+
+        nameLowerSnap.docs.forEach((doc) => {
+          patientsFound.push({ id: doc.id, ...doc.data() });
+        });
+      }
+
+      if (patientsFound.length === 0) {
+        const allPatientsSnap = await db.collection('patients').limit(50).get();
+        allPatientsSnap.docs.forEach((doc) => {
+          const data = doc.data();
+          const fn = (data.fullName || data.name || '').toLowerCase();
+          if (fn.includes(qLower) && !patientsFound.some((p) => p.id === doc.id)) {
+            patientsFound.push({ id: doc.id, ...data });
+          }
+        });
+      }
+    }
+
+    // Map each patient to formatted response with computed age and last visit date
+    const results = await Promise.all(
+      patientsFound.map(async (p) => {
+        const healthId = p.healthId || p.patientHealthId || p.id;
+        const computedYears = calculateAge(p.dob);
+        const age = computedYears !== null ? `${computedYears} years` : (p.age ? `${p.age} years` : 'N/A');
+
+        let lastVisitDate = 'None';
+        const lastApptSnap = await db.collection('appointments')
+          .where('patientHealthId', '==', healthId)
+          .where('status', '==', 'completed')
+          .limit(1)
+          .get();
+        if (!lastApptSnap.empty) {
+          lastVisitDate = lastApptSnap.docs[0].data().date || 'Recent';
+        }
+
+        return {
+          id: p.id || healthId,
+          healthId,
+          patientHealthId: healthId,
+          name: p.fullName || p.name || 'Unknown',
+          fullName: p.fullName || p.name || 'Unknown',
+          age,
+          gender: p.gender || 'other',
+          lastVisitDate
+        };
+      })
+    );
+
+    // Audit log this search
+    await writeAuditLog({
+      actorUid: doctorUid,
+      actorRole: req.user?.role || 'doctor',
+      action: 'DOCTOR_PATIENT_SEARCH',
+      targetType: 'patient_search',
+      targetId: qTrim,
+      requestId: req.requestId
+    });
+
+    res.status(200).json({
+      success: true,
+      count: results.length,
+      data: results
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * GET /api/doctor/patients/my-patients (PRD Task A Requirement 3)
+ * Patients seen by this doctor in the last 12 months (20 per page).
+ */
+export const doctorGetMyPatients = async (req, res, next) => {
+  try {
+    const user = req.user;
+    const db = assertDbConnected();
+    let targetDoctorId = user.doctorId;
+    if (!targetDoctorId) {
+      const docSnap = await db.collection('doctors').doc(user.uid).get();
+      targetDoctorId = docSnap.exists ? docSnap.data().doctorId : user.uid;
+    }
+
+    const oneYearAgo = new Date();
+    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+    const oneYearAgoStr = oneYearAgo.toISOString().split('T')[0];
+
+    const apptsSnap = await db.collection('appointments')
+      .where('doctorId', '==', targetDoctorId)
+      .where('status', '==', 'completed')
+      .where('date', '>=', oneYearAgoStr)
+      .limit(100)
+      .get();
+
+    const patientVisits = new Map();
+    apptsSnap.docs.forEach((doc) => {
+      const data = doc.data();
+      const hId = data.patientHealthId;
+      if (hId) {
+        if (!patientVisits.has(hId) || data.date > patientVisits.get(hId)) {
+          patientVisits.set(hId, data.date);
+        }
+      }
+    });
+
+    const uniqueHealthIds = Array.from(patientVisits.keys()).slice(0, 20);
+
+    const patients = await Promise.all(
+      uniqueHealthIds.map(async (healthId) => {
+        const pSnap = await db.collection('patients').doc(healthId).get();
+        const pData = pSnap.exists ? pSnap.data() : { name: 'Patient' };
+        const computedYears = calculateAge(pData.dob);
+        const age = computedYears !== null ? `${computedYears} years` : (pData.age || 'N/A');
+
+        return {
+          healthId,
+          patientHealthId: healthId,
+          name: pData.name || pData.fullName || 'Patient',
+          fullName: pData.name || pData.fullName || 'Patient',
+          age,
+          gender: pData.gender || 'other',
+          lastVisitDate: patientVisits.get(healthId) || 'Recent'
+        };
+      })
+    );
+
+    res.status(200).json(formatSuccessResponse(patients));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * GET /api/doctor/patients/:healthId/access-check (PRD Task A Requirement 3)
+ * Verifies if doctor has appointment in last 90 days or an active share.
+ * Writes audit log if access is denied.
+ */
+export const doctorCheckPatientAccess = async (req, res, next) => {
+  try {
+    const { healthId } = req.params;
+    const user = req.user;
+    const db = assertDbConnected();
+    const doctorUid = user.uid;
+
+    let targetDoctorId = user.doctorId;
+    if (!targetDoctorId) {
+      const docSnap = await db.collection('doctors').doc(doctorUid).get();
+      targetDoctorId = docSnap.exists ? docSnap.data().doctorId : doctorUid;
+    }
+
+    // 1. Check share grant in accessGrants
+    const grantSnap = await db.collection('accessGrants')
+      .where('granteeUid', '==', doctorUid)
+      .where('patientHealthId', '==', healthId)
+      .where('status', '==', 'active')
+      .limit(1)
+      .get();
+
+    const hasActiveGrant = !grantSnap.empty && (
+      !grantSnap.docs[0].data().expiryDate || new Date(grantSnap.docs[0].data().expiryDate) > new Date()
+    );
+
+    if (hasActiveGrant) {
+      return res.status(200).json(formatSuccessResponse({ hasAccess: true, reason: 'active_share_grant' }));
+    }
+
+    // 2. Check appointment in last 90 days
+    const ninetyDaysAgo = new Date();
+    ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+    const ninetyDaysAgoStr = ninetyDaysAgo.toISOString().split('T')[0];
+
+    const apptSnap = await db.collection('appointments')
+      .where('doctorId', '==', targetDoctorId)
+      .where('patientHealthId', '==', healthId)
+      .where('date', '>=', ninetyDaysAgoStr)
+      .limit(1)
+      .get();
+
+    if (!apptSnap.empty) {
+      return res.status(200).json(formatSuccessResponse({ hasAccess: true, reason: 'treating_doctor_90days' }));
+    }
+
+    const apptUidSnap = await db.collection('appointments')
+      .where('doctorId', '==', doctorUid)
+      .where('patientHealthId', '==', healthId)
+      .where('date', '>=', ninetyDaysAgoStr)
+      .limit(1)
+      .get();
+
+    if (!apptUidSnap.empty) {
+      return res.status(200).json(formatSuccessResponse({ hasAccess: true, reason: 'treating_doctor_90days' }));
+    }
+
+    // No access: Write audit log
+    await writeAuditLog({
+      actorUid: doctorUid,
+      actorRole: user.role || 'doctor',
+      action: 'PATIENT_HISTORY_ACCESS_DENIED',
+      targetType: 'patient',
+      targetId: healthId,
+      healthId,
+      requestId: req.requestId
+    });
+
+    return res.status(200).json(formatSuccessResponse({
+      hasAccess: false,
+      message: 'No access. Ask the patient to share their history'
+    }));
   } catch (error) {
     next(error);
   }

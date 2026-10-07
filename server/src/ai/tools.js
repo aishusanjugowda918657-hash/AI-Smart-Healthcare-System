@@ -179,22 +179,94 @@ export async function executePatientChatTool(toolName, args, context) {
 
       const appts = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       const active = appts.find(a => ['checked_in', 'called', 'in_consultation'].includes(a.status)) || appts[0];
+      const live = active.live || {};
+
+      const waitMinLow = live.waitMinLow ?? active.estimatedWaitMinutes ?? 15;
+      const waitMinHigh = live.waitMinHigh ?? (waitMinLow + 10);
+      const waitDisplay = waitMinLow === 0 ? 'No wait – it is your turn!' : `${waitMinLow} to ${waitMinHigh} minutes`;
 
       return {
         appointmentId: active.id,
-        tokenNumber: active.tokenNumber || active.queueNumber || 'T-101',
+        tokenNumber: active.tokenNumber || active.queueNumber || active.tokenLabel || 'T-001',
+        tokenLabel: active.tokenLabel || active.tokenNumber,
         status: active.status,
         doctorName: active.doctorName || 'Doctor',
-        estimatedWaitMinutes: active.live?.remainingMinutes || active.estimatedWaitMinutes || 15
+        estimatedWaitMinutes: waitMinLow,
+        waitMinLow,
+        waitMinHigh,
+        waitDisplay,
+        predictedCallAt: live.predictedCallAt || null,
+        position: live.position || null,
+        reasonText: live.reasonText || null
       };
     }
 
     case 'get_wait_time': {
-      return {
-        estimatedWaitMinutes: 20,
-        currentQueueLength: 4,
-        message: 'Current estimated wait time is approximately 20 minutes.'
-      };
+      // Read live queue data for this patient's doctor/dept to return real wait estimates
+      const today = new Date().toISOString().split('T')[0];
+      try {
+        // Get patient's own appointment to find their doctor + queue position
+        const mySnap = await db.collection('appointments')
+          .where('patientHealthId', '==', selectedPatientHealthId)
+          .where('date', '==', today)
+          .get();
+
+        if (!mySnap.empty) {
+          const myAppts = mySnap.docs.map(d => ({ id: d.id, ...d.data() }));
+          const myAppt = myAppts.find(a =>
+            !['cancelled', 'completed', 'no_show'].includes(a.status)
+          ) || myAppts[0];
+
+          if (myAppt) {
+            const live = myAppt.live || {};
+            const waitMinLow = live.waitMinLow ?? myAppt.estimatedWaitMinutes ?? null;
+            const waitMinHigh = live.waitMinHigh ?? (waitMinLow !== null ? waitMinLow + 10 : null);
+
+            if (waitMinLow !== null) {
+              const waitDisplay = waitMinLow === 0
+                ? 'No wait — it is your turn now!'
+                : `${waitMinLow} to ${waitMinHigh} minutes`;
+
+              return {
+                estimatedWaitMinutes: waitMinLow,
+                waitMinLow,
+                waitMinHigh,
+                message: `Your current estimated wait is ${waitDisplay}.${live.reasonText ? ' ' + live.reasonText : ''}`,
+                currentQueueLength: live.position || 1,
+                predictedCallAt: live.predictedCallAt || null,
+                reasonText: live.reasonText || null
+              };
+            }
+          }
+        }
+
+        // Fallback: query general queue length for the requested doctor/dept
+        const qSnap = await db.collection('appointments')
+          .where('doctorId', '==', args.doctorId || '')
+          .where('date', '==', today)
+          .get();
+
+        const queueLength = qSnap.docs.filter(d =>
+          ['checked_in', 'called', 'in_consultation', 'rejoined', 'waiting'].includes(d.data().status)
+        ).length;
+
+        const estimatedMin = Math.round(queueLength * 12); // 12-min dept average fallback
+        return {
+          estimatedWaitMinutes: estimatedMin,
+          waitMinLow: estimatedMin,
+          waitMinHigh: estimatedMin + 10,
+          currentQueueLength: queueLength,
+          message: `Current estimated wait time is approximately ${estimatedMin} to ${estimatedMin + 10} minutes (${queueLength} patients in queue).`
+        };
+      } catch {
+        return {
+          estimatedWaitMinutes: 15,
+          waitMinLow: 10,
+          waitMinHigh: 20,
+          currentQueueLength: null,
+          message: 'Estimated wait time is approximately 10 to 20 minutes.'
+        };
+      }
     }
 
     case 'get_doctor_timings': {

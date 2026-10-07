@@ -64,6 +64,9 @@ export function checkQuickChipIntent(message = '') {
   if (lower.includes('my token status') || lower.includes('token status') || lower.includes('queue status') || lower.includes('मेरा टोकन') || lower.includes('ನನ್ನ ಟೋಕನ್') || lower.includes('என் டோக்கன்')) {
     return 'TOKEN_STATUS';
   }
+  if (lower.includes('wait time') || lower.includes('how long') || lower.includes('when is my turn') || lower.includes('how much wait') || lower.includes('kitna wait') || lower.includes('कितना इंतज़ार') || lower.includes('ಎಷ್ಟು ಕಾಯಬೇಕು') || lower.includes('எவ்வளவு நேரம்')) {
+    return 'WAIT_TIME';
+  }
   if (lower.includes('doctor timings') || lower.includes('hospital hours') || lower.includes('timing') || lower.includes('डॉक्टर का समय') || lower.includes('ವೈದ್ಯರ ಸಮಯ') || lower.includes('டாக்டர் நேரம்')) {
     return 'DOCTOR_TIMINGS';
   }

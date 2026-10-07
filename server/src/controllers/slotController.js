@@ -19,12 +19,30 @@ export const getSlots = async (req, res, next) => {
     const db = assertDbConnected();
     const nowMs = Date.now();
 
+    // Resolve canonical doctorId & document
+    let docDoc = await db.collection('doctors').doc(doctorId).get();
+    if (!docDoc.exists) {
+      const querySnap = await db.collection('doctors').where('doctorId', '==', doctorId).limit(1).get();
+      if (!querySnap.empty) {
+        docDoc = querySnap.docs[0];
+      }
+    }
+    const resolvedDoctorId = docDoc.exists ? (docDoc.data().doctorId || docDoc.id) : doctorId;
+
     // 1. Query existing slots from Firestore
-    const slotsSnapshot = await db
+    let slotsSnapshot = await db
       .collection('slots')
-      .where('doctorId', '==', doctorId)
+      .where('doctorId', '==', resolvedDoctorId)
       .where('date', '==', date)
       .get();
+
+    if (slotsSnapshot.empty && doctorId !== resolvedDoctorId) {
+      slotsSnapshot = await db
+        .collection('slots')
+        .where('doctorId', '==', doctorId)
+        .where('date', '==', date)
+        .get();
+    }
 
     let slots = slotsSnapshot.docs.map((doc) => ({
       id: doc.id,
@@ -33,15 +51,6 @@ export const getSlots = async (req, res, next) => {
 
     // 2. If no slots exist in DB yet, auto-generate them
     if (slots.length === 0) {
-      // Fetch Doctor document to get schedule
-      let docDoc = await db.collection('doctors').doc(doctorId).get();
-      if (!docDoc.exists) {
-        // Query by doctorId field fallback
-        const querySnap = await db.collection('doctors').where('doctorId', '==', doctorId).limit(1).get();
-        if (!querySnap.empty) {
-          docDoc = querySnap.docs[0];
-        }
-      }
 
       const doctorData = docDoc.exists ? docDoc.data() : {};
       const schedule = doctorData.schedule || {
@@ -60,14 +69,14 @@ export const getSlots = async (req, res, next) => {
       // Fetch overlapping leaves for doctor
       const leavesSnapshot = await db
         .collection('leaves')
-        .where('doctorId', '==', doctorId)
+        .where('doctorId', '==', resolvedDoctorId)
         .get();
 
       const leaves = leavesSnapshot.docs.map((d) => d.data());
 
       // Generate slot domain models
       slots = generateSlotsForDoctorDate({
-        doctorId,
+        doctorId: resolvedDoctorId,
         date,
         schedule,
         leaves,

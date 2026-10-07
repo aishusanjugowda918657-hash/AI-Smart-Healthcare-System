@@ -26,6 +26,7 @@ import {
   fetchPatientRecords,
   generateAnswerResponse
 } from '../services/patientAgentService.js';
+import { writeAuditLog } from '../utils/audit.js';
 
 const router = express.Router();
 
@@ -108,6 +109,15 @@ router.post('/query', async (req, res) => {
       intent,
       question,
       records
+    });
+
+    await writeAuditLog({
+      actorUid: req.user?.uid,
+      actorRole: req.user?.role || 'doctor',
+      action: 'PATIENT_AGENT_LOOKUP',
+      targetType: 'patient',
+      targetId: patient.id,
+      healthId: patient.patientHealthId || patient.id
     });
 
     return res.json({

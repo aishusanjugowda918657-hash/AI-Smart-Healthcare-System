@@ -6,6 +6,7 @@ import {
   CheckCircle, Stethoscope, Compass, RefreshCw
 } from 'lucide-react';
 import QRCode from 'qrcode';
+import { ActiveAppointmentsBanner } from './ActiveAppointmentsBanner';
 
 const DEPARTMENT_NAMES = {
   'dept-gen': 'General Medicine',
@@ -141,7 +142,13 @@ export const AppointmentBookingForm = () => {
     const deptId = triageData?.departmentId || 'dept-gen';
 
     try {
-      const res = await API.get(`/booking/doctor-options?departmentId=${deptId}`);
+      const queryParams = new URLSearchParams({
+        departmentId: deptId,
+        reasonText: `${reasonChips.join(', ')}. ${reasonText}`.trim(),
+        urgencySuggested: triageData?.urgencySuggested || 'routine',
+        visitType: triageData?.visitType || 'new'
+      });
+      const res = await API.get(`/booking/doctor-options?${queryParams.toString()}`);
       const options = res.data?.data || [];
       setDoctorOptions(options);
       if (options.length > 0) {
@@ -171,22 +178,38 @@ export const AppointmentBookingForm = () => {
   };
 
   // Step 4 -> Step 5: Fetch Smart Slot Suggestions & Slot List
-  const handleProceedToSlots = async () => {
-    if (!selectedDoctorId) return;
+  const fetchSlotsForDoctorDate = async (docId, dateVal) => {
+    if (!docId || !dateVal) return;
     setSlotsLoading(true);
-
+    setSelectedSlotId(''); // Clear stale slot selection when fetching new doctor/date
     try {
       const travelParam = travelMinutes ? `&travelMinutes=${travelMinutes}` : '';
-      const res = await API.get(`/booking/suggestions?doctorId=${selectedDoctorId}&date=${appointmentDate}${travelParam}`);
+      const res = await API.get(`/booking/suggestions?doctorId=${docId}&date=${dateVal}${travelParam}`);
       const data = res.data?.data || { cards: [], fullList: [] };
       setSlotsData(data);
-      setCurrentStep(5);
     } catch (err) {
       console.warn('Slots fetch error:', err.message);
-      setCurrentStep(5);
+      setSlotsData({ cards: [], fullList: [] });
     } finally {
       setSlotsLoading(false);
     }
+  };
+
+  const handleProceedToSlots = async (overrideDocId = null, overrideDate = null) => {
+    const docIdToUse = overrideDocId || selectedDoctorId;
+    if (!docIdToUse) return;
+
+    let targetDate = overrideDate || appointmentDate;
+    const selectedDocObj = doctorOptions.find((d) => (d.doctorId || d.id) === docIdToUse);
+    if (selectedDocObj && selectedDocObj.nextAvailable && selectedDocObj.nextAvailable.date) {
+       if (targetDate < selectedDocObj.nextAvailable.date) {
+          targetDate = selectedDocObj.nextAvailable.date;
+          setAppointmentDate(targetDate);
+       }
+    }
+
+    await fetchSlotsForDoctorDate(docIdToUse, targetDate);
+    setCurrentStep(5);
   };
 
   // Step 6: Submit Booking Transaction
@@ -576,42 +599,97 @@ export const AppointmentBookingForm = () => {
     <div className="space-y-6">
       <div>
         <h3 className="text-xl font-bold text-slate-100">Step 4: Choose Doctor</h3>
-        <p className="text-xs text-slate-400 mt-1">Select a doctor for {formatDepartmentName(triageData?.departmentId)}.</p>
+        <p className="text-xs text-slate-400 mt-1">Recommendations are based on specialty, experience and availability.</p>
       </div>
 
       {doctorsLoading ? (
         <div className="p-8 text-center text-slate-400 text-sm">Loading doctors...</div>
       ) : doctorOptions.length > 0 ? (
-        <div className="space-y-3">
-          {doctorOptions.map((doc) => {
+        <div className="space-y-4">
+          {doctorOptions.map((doc, idx) => {
             const docId = doc.doctorId || doc.id;
             const isSelected = selectedDoctorId === docId;
+            const isTopRecommended = idx === 0 && doc.recommended;
+            
             return (
-              <div
-                key={docId}
-                onClick={() => setSelectedDoctorId(docId)}
-                className={`p-4 rounded-2xl border cursor-pointer transition-all ${
-                  isSelected
-                    ? 'bg-teal-500/10 border-teal-500 text-slate-100 ring-2 ring-teal-500/30'
-                    : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:border-slate-600'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h4 className="font-bold text-base text-slate-100">{doc.name}</h4>
-                      {doc.isPreviousDoctor && (
-                        <span className="px-2.5 py-0.5 bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 rounded-full text-[10px] font-bold">
-                          ★ Your usual doctor
-                        </span>
+              <div key={docId} className="space-y-2">
+                {isTopRecommended && (
+                  <div className="bg-teal-950/30 border-2 border-teal-500/50 rounded-t-2xl p-4 flex justify-between items-center pb-2">
+                    <div>
+                      <h4 className="text-sm text-teal-400 font-bold">Recommended for you</h4>
+                      <p className="text-xs text-slate-300">Best match based on your symptoms</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedDoctorId(docId);
+                        handleProceedToSlots();
+                      }}
+                      className="px-3 py-1.5 bg-teal-500 hover:bg-teal-400 text-slate-950 text-xs font-bold rounded-lg"
+                    >
+                      Let the system choose for me
+                    </button>
+                  </div>
+                )}
+                
+                <div
+                  onClick={() => setSelectedDoctorId(docId)}
+                  className={`p-4 rounded-2xl border cursor-pointer transition-all ${
+                    isTopRecommended ? 'rounded-t-none border-t-0 border-teal-500/50' : ''
+                  } ${
+                    isSelected && !isTopRecommended
+                      ? 'bg-teal-500/10 border-teal-500 text-slate-100 ring-2 ring-teal-500/30'
+                      : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:border-slate-600'
+                  }`}
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2 mb-1">
+                        <h4 className="font-bold text-base text-slate-100">{doc.name}</h4>
+                        {doc.badgeText && (
+                          <span className={`px-2.5 py-0.5 border rounded-full text-[10px] font-bold ${doc.badgeText === 'Recommended' ? 'bg-teal-500/20 text-teal-300 border-teal-500/30' : 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30'}`}>
+                            {doc.badgeText === 'Recommended' ? '✨' : '★'} {doc.badgeText}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-400">
+                        {[doc.qualification, doc.experienceYears ? `${doc.experienceYears} years exp.` : null].filter(Boolean).join(' • ')}
+                      </p>
+                      {doc.specialties && doc.specialties.length > 0 && (
+                        <p className="text-[10px] text-slate-500 mt-1">Expertise: {doc.specialties.join(', ')}</p>
+                      )}
+                      {doc.languages && doc.languages.length > 0 && (
+                        <p className="text-[10px] text-slate-500 mt-0.5">Speaks: {doc.languages.join(', ')}</p>
                       )}
                     </div>
-                    <p className="text-xs text-slate-400 mt-0.5">{doc.qualification || 'Medical Specialist'}</p>
+                    <div className="sm:text-right text-xs">
+                      {!doc.hasSlotsToday ? (
+                        <span className="text-amber-400 font-semibold block">{doc.nextFreeSlotTime}</span>
+                      ) : (
+                        <span className="text-emerald-400 font-semibold block">Next: {doc.nextFreeSlotTime}</span>
+                      )}
+                      <p className="text-slate-400 text-[10px] mt-0.5">Wait queue: {doc.queueLength || 0}</p>
+                      {isTopRecommended && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedDoctorId(docId);
+                          }}
+                          className="mt-2 px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 text-[10px] rounded"
+                        >
+                          Choose this doctor
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <div className="text-right text-xs">
-                    <span className="text-emerald-400 font-semibold">{doc.nextFreeSlotTime}</span>
-                    <p className="text-slate-400 text-[10px]">Avg Wait: {doc.avgWaitMin || 15}m</p>
-                  </div>
+                  
+                  {isSelected && doc.matchReasons && doc.matchReasons.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-slate-700 text-[11px] text-teal-200/80">
+                      <ul className="list-disc pl-4">
+                        {doc.matchReasons.map((reason, i) => <li key={i}>{reason}</li>)}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               </div>
             );
@@ -631,14 +709,23 @@ export const AppointmentBookingForm = () => {
         </div>
       ) : (
         <div className="p-6 bg-slate-800/60 rounded-2xl border border-slate-700 text-slate-300 space-y-3 text-center">
-          <p className="text-sm font-semibold text-amber-300">No doctors available for this department yet.</p>
-          <button
-            type="button"
-            onClick={() => setCurrentStep(2)}
-            className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-100 text-xs font-bold rounded-xl"
-          >
-            Choose another department
-          </button>
+          <p className="text-sm font-semibold text-amber-300">No doctors are available for this department yet.</p>
+          <div className="flex justify-center gap-3 mt-4">
+            <button
+              type="button"
+              onClick={() => setCurrentStep(2)}
+              className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-100 text-xs font-bold rounded-xl"
+            >
+              Choose another department
+            </button>
+            <button
+              type="button"
+              onClick={() => alert('Waitlist joined')}
+              className="px-4 py-2 bg-teal-700 hover:bg-teal-600 text-slate-100 text-xs font-bold rounded-xl"
+            >
+              Join waiting list
+            </button>
+          </div>
         </div>
       )}
 
@@ -651,15 +738,34 @@ export const AppointmentBookingForm = () => {
           <ArrowLeft className="w-4 h-4" /> Back
         </button>
 
-        <button
-          type="button"
-          disabled={!selectedDoctorId || doctorOptions.length === 0}
-          onClick={handleProceedToSlots}
-          className="flex items-center gap-2 px-6 py-3 bg-teal-500 hover:bg-teal-400 disabled:opacity-40 text-slate-950 font-bold text-sm rounded-xl transition-all shadow-lg shadow-teal-500/20"
-        >
-          <span>Choose Slot</span>
-          <ArrowRight className="w-4 h-4" />
-        </button>
+        {selectedDoctorId && doctorOptions.find(d => (d.doctorId || d.id) === selectedDoctorId)?.nextFreeSlotTime === 'No slots in the next 14 days' ? (
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => alert('Waitlist joined')}
+              className="px-4 py-2.5 bg-slate-700 hover:bg-slate-600 text-slate-100 text-xs font-bold rounded-xl transition-all"
+            >
+              Join waiting list
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedDoctorId('')}
+              className="px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold text-xs rounded-xl transition-all"
+            >
+              Choose another doctor
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            disabled={!selectedDoctorId || doctorOptions.length === 0}
+            onClick={() => handleProceedToSlots()}
+            className="flex items-center gap-2 px-6 py-3 bg-teal-500 hover:bg-teal-400 disabled:opacity-40 text-slate-950 font-bold text-sm rounded-xl transition-all shadow-lg shadow-teal-500/20"
+          >
+            <span>Choose Slot</span>
+            <ArrowRight className="w-4 h-4" />
+          </button>
+        )}
       </div>
     </div>
   );
@@ -678,7 +784,11 @@ export const AppointmentBookingForm = () => {
           <input
             type="date"
             value={appointmentDate}
-            onChange={(e) => setAppointmentDate(e.target.value)}
+            onChange={(e) => {
+              const newDate = e.target.value;
+              setAppointmentDate(newDate);
+              fetchSlotsForDoctorDate(selectedDoctorId, newDate);
+            }}
             className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 font-mono"
           />
         </div>
@@ -750,7 +860,29 @@ export const AppointmentBookingForm = () => {
                 })}
               </div>
             ) : (
-              <div className="p-4 bg-slate-800/50 rounded-xl text-slate-400 text-xs">No available slots found for this date.</div>
+              <div className="space-y-3">
+                <div className="p-4 bg-slate-800/50 rounded-xl text-slate-400 text-xs">No available slots found for this date.</div>
+                {slotsData.upcomingAvailableDates && slotsData.upcomingAvailableDates.length > 0 && (
+                  <div className="pt-2">
+                    <p className="text-xs text-slate-300 mb-2">Nearest dates with available slots:</p>
+                    <div className="flex flex-wrap gap-2">
+                      {slotsData.upcomingAvailableDates.map(d => (
+                        <button
+                          key={d}
+                          type="button"
+                          onClick={() => {
+                            setAppointmentDate(d);
+                            setTimeout(handleProceedToSlots, 0); // re-fetch slots for this new date
+                          }}
+                          className="px-3 py-1.5 bg-slate-700 hover:bg-teal-600 text-slate-200 text-xs font-bold rounded-lg transition-colors"
+                        >
+                          {d}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -857,39 +989,52 @@ export const AppointmentBookingForm = () => {
 
       <div>
         <h3 className="text-2xl font-bold text-slate-100">Appointment Confirmed!</h3>
-        <p className="text-xs text-slate-400 mt-1">Your token and dynamic check-in pass have been issued.</p>
+        <p className="text-xs text-slate-400 mt-1">Your token and hospital check-in QR code have been issued.</p>
       </div>
 
       {bookedAppointment && (
-        <div className="bg-slate-800/90 border border-slate-700 rounded-3xl p-6 shadow-2xl max-w-md mx-auto space-y-4">
-          <div className="bg-teal-500/10 border border-teal-500/30 p-3 rounded-2xl">
-            <span className="text-[10px] font-bold text-teal-400 uppercase tracking-widest block">Queue Token Number</span>
-            <span className="text-3xl font-black font-mono text-teal-300">{bookedAppointment.tokenNumber || 'T-101'}</span>
+        <div className="bg-slate-800/90 border border-slate-700 rounded-3xl p-6 shadow-2xl max-w-lg mx-auto space-y-4 text-left">
+
+          {/* Token */}
+          <div className="bg-teal-500/10 border border-teal-500/30 p-3 rounded-2xl text-center">
+            <span className="text-[10px] font-bold text-teal-400 uppercase tracking-widest block">Queue Token</span>
+            <span className="text-3xl font-black font-mono text-teal-300">
+              {bookedAppointment.tokenLabel || `#${bookedAppointment.tokenNumber}`}
+            </span>
           </div>
 
+          {/* QR Code — for staff to scan at reception */}
           {qrCodeDataUrl && (
-            <div className="p-3 bg-white rounded-2xl inline-block shadow-md">
-              <img src={qrCodeDataUrl} alt="Check-in QR Code" className="w-44 h-44 mx-auto" />
+            <div className="text-center">
+              <p className="text-[10px] text-amber-400 font-bold uppercase tracking-widest mb-2">
+                🏥 Hospital Check-In QR — Show this to Reception / Nurse
+              </p>
+              <div className="p-3 bg-white rounded-2xl inline-block shadow-md">
+                <img src={qrCodeDataUrl} alt="Hospital Check-in QR Code" className="w-48 h-48 mx-auto" />
+              </div>
+              <p className="text-[10px] text-slate-500 mt-1">Staff will scan this QR at the check-in desk to register your arrival</p>
             </div>
           )}
 
-          <div className="text-xs text-slate-300 space-y-1.5 text-left border-t border-slate-700 pt-3">
-            <div className="flex justify-between">
-              <span className="text-slate-400">Patient:</span>
-              <span className="font-bold text-slate-100">{bookedAppointment.patientName}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-400">Doctor:</span>
-              <span className="font-bold text-slate-100">{bookedAppointment.doctorName || 'Dr. SmartCare'}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-400">Department:</span>
-              <span className="font-bold text-slate-100 uppercase">{formatDepartmentName(bookedAppointment.departmentId)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-400">Appointment Date:</span>
-              <span className="font-bold text-teal-400">{bookedAppointment.date}</span>
-            </div>
+          {/* Full Appointment Details */}
+          <div className="text-xs space-y-1.5 border-t border-slate-700 pt-3">
+            {[
+              ['Appointment ID', bookedAppointment.id],
+              ['Patient', bookedAppointment.patientName],
+              ['Health ID', bookedAppointment.patientHealthId],
+              ['Doctor', bookedAppointment.doctorName || 'Dr. SmartCare'],
+              ['Department', formatDepartmentName(bookedAppointment.departmentId)],
+              ['Date', bookedAppointment.date],
+              ['Time', bookedAppointment.bookedStartAt && bookedAppointment.bookedStartAt !== 'NOW' ? bookedAppointment.bookedStartAt : 'Walk-in Queue'],
+              ['Visit Type', bookedAppointment.visitType || 'New'],
+              ['Clinical Urgency', bookedAppointment.urgencySuggested || 'Routine'],
+              ['Status', (bookedAppointment.status || 'booked').toUpperCase()],
+            ].map(([label, value]) => (
+              <div key={label} className="flex justify-between items-start gap-2">
+                <span className="text-slate-400 shrink-0">{label}:</span>
+                <span className="font-bold text-slate-100 text-right font-mono text-[11px] break-all">{value || '\u2014'}</span>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -910,8 +1055,11 @@ export const AppointmentBookingForm = () => {
     </div>
   );
 
+
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-8" id="booking-form-container">
+      <ActiveAppointmentsBanner />
+      
       {/* Step Progress Bar */}
       <div className="flex justify-between items-center max-w-2xl mx-auto border-b border-slate-800 pb-4">
         {[1, 2, 3, 4, 5, 6, 7].map((step) => (

@@ -75,7 +75,8 @@ describe('Safe Registration & Login Error Fix Unit Tests', () => {
       runTransaction: vi.fn(async (cb) => {
         return cb({
           get: async (ref) => ref.get(),
-          create: async (ref, data) => ref.set(data)
+          create: async (ref, data) => ref.set(data),
+          set: async (ref, data, opts) => ref.set(data, opts)
         });
       })
     };
@@ -176,12 +177,9 @@ describe('Safe Registration & Login Error Fix Unit Tests', () => {
     });
 
     it('rolls back newly created Auth user if Firestore setup fails', async () => {
-      mockDb.batch = vi.fn(() => ({
-        set: vi.fn(),
-        commit: vi.fn(async () => {
-          throw new Error('Simulated Firestore Batch Failure');
-        })
-      }));
+      mockDb.runTransaction = vi.fn(async () => {
+        throw new Error('Simulated Firestore Transaction Failure');
+      });
 
       const req = {
         body: {

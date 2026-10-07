@@ -3,7 +3,6 @@ import { auth } from '../config/firebase';
 import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
   signOut
 } from 'firebase/auth';
 import API from '../services/api';
@@ -178,20 +177,23 @@ export const AuthProvider = ({ children }) => {
       throw new Error('Firebase Auth unavailable.');
     }
 
-    const credential = await createUserWithEmailAndPassword(auth, cleanEmail, formData.password);
-    const uid = credential.user.uid;
+    // Step 1: Server creates the Auth user + Firestore docs atomically
+    const res = await API.post('/auth/register', cleanData);
+
+    if (!res.data || !res.data.success) {
+      throw new Error(res.data?.error?.message || 'Registration failed.');
+    }
+
+    // Step 2: Now sign in on the client side with the same credentials
+    const credential = await signInWithEmailAndPassword(auth, cleanEmail, formData.password);
     setCurrentUser(credential.user);
     setUserRole('patient');
 
-    const res = await API.post('/auth/register', cleanData);
+    // Step 3: Sync session with backend (fetches role, profile)
     try {
       await syncUserSession(credential.user);
     } catch (e) {
-      // sync fallback
-    }
-
-    if (res.data && res.data.data) {
-      setPatientProfile(res.data.data);
+      // sync fallback — profile was created server-side, non-fatal
     }
 
     setWelcomeAnimation({

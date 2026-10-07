@@ -7,6 +7,7 @@ function clamp(val, min, max) {
 }
 
 export function roundTo5(num) {
+  if (num <= 0) return 0;
   return Math.max(5, Math.round(num / 5) * 5);
 }
 
@@ -35,6 +36,7 @@ export function getExpectedDuration({ consultationStats, department, visitType =
     if (visitType === 'followup') baseMin = 10;
     else if (visitType === 'report_review') baseMin = 5;
     else if (visitType === 'procedure') baseMin = 20;
+    else if (visitType === 'emergency') baseMin = 20;
     else baseMin = 15;
   }
 

@@ -125,10 +125,10 @@ export const registerUser = async (req, res, next) => {
         updatedAt: new Date()
       };
 
-      const batch = db.batch();
-      batch.set(db.collection('users').doc(uid), userDoc);
-      batch.set(db.collection('patients').doc(healthId), patientDoc);
-      await batch.commit();
+      await db.runTransaction(async (transaction) => {
+        transaction.set(db.collection('users').doc(uid), userDoc);
+        transaction.set(db.collection('patients').doc(healthId), patientDoc);
+      });
 
       return res.status(201).json(formatSuccessResponse({
         uid,

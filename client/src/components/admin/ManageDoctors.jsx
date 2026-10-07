@@ -26,12 +26,23 @@ export const ManageDoctors = () => {
 
   const fetchDoctors = async () => {
     try {
-      const res = await API.get('/doctors');
+      const res = await API.get('/doctors?includeSlotStatus=true');
       if (res.data?.data && res.data.data.length > 0) {
         setDoctors(res.data.data);
       }
     } catch (err) {
       console.warn('Fetch doctors fallback:', err.message);
+    }
+  };
+
+  const handleGenerateSlots = async (doctorId) => {
+    try {
+      await API.post('/admin/slots/generate', { doctorId, daysAhead: 14 });
+      setMessage({ type: 'success', text: `Generated slots for 14 days successfully!` });
+      fetchDoctors();
+    } catch (err) {
+      console.error('Failed to generate slots:', err);
+      setMessage({ type: 'error', text: 'Failed to generate slots.' });
     }
   };
 
@@ -45,7 +56,8 @@ export const ManageDoctors = () => {
       departmentName: formData.departmentId === 'dept-card' ? 'Cardiology' : formData.departmentId === 'dept-ped' ? 'Pediatrics' : 'General Medicine',
       qualification: formData.qualification,
       fee: Number(formData.fee),
-      status: 'active'
+      status: 'active',
+      hasFutureSlots: false
     };
 
     setDoctors([...doctors, newDoc]);
@@ -77,8 +89,8 @@ export const ManageDoctors = () => {
       </div>
 
       {message && (
-        <div className="p-4 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-2xl text-xs font-semibold flex items-center space-x-2">
-          <CheckCircle className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+        <div className={`p-4 rounded-2xl text-xs font-semibold flex items-center space-x-2 ${message.type === 'error' ? 'bg-red-50 text-red-800 border border-red-200' : 'bg-emerald-50 text-emerald-800 border border-emerald-200'}`}>
+          <CheckCircle className="w-4 h-4 flex-shrink-0" />
           <span>{message.text}</span>
         </div>
       )}
@@ -134,6 +146,56 @@ export const ManageDoctors = () => {
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none"
               />
             </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">Experience (Years)</label>
+              <input
+                type="number"
+                value={formData.experienceYears}
+                onChange={(e) => setFormData({ ...formData, experienceYears: e.target.value })}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">Specialties (comma-separated)</label>
+              <input
+                type="text"
+                value={formData.specialties}
+                onChange={(e) => setFormData({ ...formData, specialties: e.target.value })}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">Languages (comma-separated)</label>
+              <input
+                type="text"
+                value={formData.languages}
+                onChange={(e) => setFormData({ ...formData, languages: e.target.value })}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">Age Groups (comma-separated)</label>
+              <input
+                type="text"
+                value={formData.ageGroups}
+                onChange={(e) => setFormData({ ...formData, ageGroups: e.target.value })}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none"
+              />
+            </div>
+
+            <div className="sm:col-span-2">
+              <label className="block font-bold text-slate-700 mb-1">Bio</label>
+              <textarea
+                value={formData.bio}
+                onChange={(e) => setFormData({ ...formData, bio: e.target.value })}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none"
+                rows={2}
+              ></textarea>
+            </div>
           </div>
 
           <button
@@ -147,16 +209,16 @@ export const ManageDoctors = () => {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {doctors.map((doc) => (
-          <div key={doc.doctorId} className="bg-white p-5 rounded-3xl border border-slate-200 shadow-lg space-y-3">
+          <div key={doc.doctorId || doc.id} className="bg-white p-5 rounded-3xl border border-slate-200 shadow-lg space-y-3">
             <div className="flex items-center justify-between">
               <span className="font-mono text-xs font-bold text-brand-700 bg-brand-50 px-2.5 py-0.5 rounded-full border border-brand-200">
-                {doc.doctorId}
+                {doc.doctorId || doc.id}
               </span>
               <Badge variant="success">ACTIVE</Badge>
             </div>
 
             <div>
-              <h3 className="font-bold text-slate-800 text-sm">{doc.fullName}</h3>
+              <h3 className="font-bold text-slate-800 text-sm">{doc.name || doc.fullName}</h3>
               <p className="text-xs text-slate-500">{doc.qualification}</p>
             </div>
 
@@ -165,8 +227,21 @@ export const ManageDoctors = () => {
                 <Building className="w-3.5 h-3.5 mr-1 text-slate-400" />
                 {doc.departmentName || doc.departmentId}
               </span>
-              <span className="font-bold text-emerald-600">${doc.fee} / visit</span>
+              <span className="font-bold text-emerald-600">${doc.fee || 100} / visit</span>
             </div>
+
+            {doc.hasFutureSlots === false && (
+              <div className="mt-2 p-2 bg-red-50 text-red-700 text-xs font-semibold rounded border border-red-200">
+                Warning: {doc.name || doc.fullName} has no future slots
+              </div>
+            )}
+
+            <button
+              onClick={() => handleGenerateSlots(doc.doctorId || doc.id)}
+              className="mt-2 w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all"
+            >
+              Generate slots (next 14 days)
+            </button>
           </div>
         ))}
       </div>

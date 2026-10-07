@@ -282,6 +282,17 @@ export const getPatientMedicalHistory = async (req, res, next) => {
     // Verify Access Control Rights
     const access = await verifyRecordAccess({ db, uid, role, patientHealthId, reqQuery: req.query });
     if (!access.authorized) {
+      await db.collection('auditLogs').add({
+        actorUid: uid,
+        actorRole: role,
+        userId: uid,
+        userRole: role,
+        action: 'PATIENT_HISTORY_ACCESS_DENIED',
+        targetType: 'patient',
+        patientHealthId,
+        reason: access.message || access.reason,
+        timestamp: new Date()
+      });
       return res.status(403).json({
         success: false,
         message: access.message || access.reason

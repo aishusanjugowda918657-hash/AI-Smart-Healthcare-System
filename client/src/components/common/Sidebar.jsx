@@ -38,11 +38,13 @@ export const Sidebar = () => {
   ];
 
   const doctorLinks = [
-    { to: '/doctor-dashboard', label: 'Doctor Dashboard', icon: LayoutDashboard },
-    { to: '/today-queue', label: "Today's Patient Queue", icon: UserCheck },
-    { to: '/consultation-workspace', label: 'Consultation & Prescribe', icon: Stethoscope },
-    { to: '/schedule-config', label: 'Manage Schedule', icon: Calendar },
-    { to: '/followups', label: 'Upcoming Follow-ups', icon: Bell }
+    { to: '/doctor/dashboard', label: 'Doctor Dashboard', icon: LayoutDashboard },
+    { to: '/doctor/queue', label: "Today's Patient Queue", icon: UserCheck },
+    { to: '/doctor/patients', label: 'Patients Directory', icon: Users },
+    { to: '/doctor/alerts', label: 'Clinical Alerts', icon: Bell },
+    { to: '/doctor/schedule', label: 'Schedule & Leaves', icon: Calendar },
+    { to: '/doctor/ask-agent', label: 'AI Data Agent', icon: Bot },
+    { to: '/doctor/notifications', label: 'Notifications', icon: Bell }
   ];
 
   const adminLinks = [

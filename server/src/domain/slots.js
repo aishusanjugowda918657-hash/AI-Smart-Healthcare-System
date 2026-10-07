@@ -319,7 +319,20 @@ export function getSmartSlotSuggestions({
   currentDoctorId = null,
   nowMs = Date.now()
 }) {
-  const availableSlots = slots.filter((s) => s.status === SlotStatus.FREE || s.status === SlotStatus.RESERVED);
+  // For today's date, exclude slots whose start time has already passed (with 5-min buffer)
+  const today = new Date(nowMs).toISOString().split('T')[0];
+  const isToday = dateStr === today;
+  const nowMinutes = new Date(nowMs).getHours() * 60 + new Date(nowMs).getMinutes();
+
+  const availableSlots = slots.filter((s) => {
+    if (s.status !== SlotStatus.FREE && s.status !== SlotStatus.RESERVED) return false;
+    if (isToday) {
+      const slotStartMinutes = HHmmToMinutes(s.startAt);
+      // Require at least 5 minutes before slot start
+      if (slotStartMinutes <= nowMinutes + 5) return false;
+    }
+    return true;
+  });
 
   if (availableSlots.length === 0) {
     return {
@@ -383,6 +396,7 @@ export function getSmartSlotSuggestions({
       label: 'Earliest Available',
       slotId: earliestCandidate.id,
       startAt: earliestCandidate.startAt,
+      timeStr: earliestCandidate.startAt,
       reason: 'Gets you seen as soon as possible today.'
     });
   }
@@ -393,6 +407,7 @@ export function getSmartSlotSuggestions({
       label: 'Shortest Expected Wait',
       slotId: quietestCandidate.id,
       startAt: quietestCandidate.startAt,
+      timeStr: quietestCandidate.startAt,
       reason: 'Lowest expected clinic workload window.'
     });
   }
@@ -412,6 +427,13 @@ export function getSmartSlotSuggestions({
 
   return {
     cards: cards.slice(0, 3),
-    fullList: slots
+    fullList: slots.filter((s) => {
+      if (s.status !== SlotStatus.FREE && s.status !== SlotStatus.RESERVED) return true; // keep booked/blocked for display
+      if (isToday) {
+        const slotStartMinutes = HHmmToMinutes(s.startAt);
+        if (slotStartMinutes <= nowMinutes + 5) return false;
+      }
+      return true;
+    })
   };
 }

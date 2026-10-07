@@ -68,13 +68,24 @@ export const aiChat = async (req, res, next) => {
 
         case 'TOKEN_STATUS': {
           const result = await executePatientChatTool('get_token_status', {}, { userId: uid, selectedPatientHealthId });
+          const waitMsg = result.status === 'no_appointment_today'
+            ? result.message
+            : `Your token is **${result.tokenLabel || result.tokenNumber}** · Status: ${result.status?.replace('_', ' ')}. Estimated wait: **${result.waitDisplay || `~${result.estimatedWaitMinutes} minutes`}**${result.reasonText ? '\n> ' + result.reasonText : ''}`;
           return res.status(200).json({
             success: true,
             language,
-            message: result.status === 'no_appointment_today'
-              ? result.message
-              : `Your token number is ${result.tokenNumber}. Estimated wait time: ${result.estimatedWaitMinutes} minutes.`,
+            message: waitMsg,
             tokenData: result
+          });
+        }
+
+        case 'WAIT_TIME': {
+          const result = await executePatientChatTool('get_wait_time', {}, { userId: uid, selectedPatientHealthId });
+          return res.status(200).json({
+            success: true,
+            language,
+            message: result.message || `Estimated wait: approximately ${result.estimatedWaitMinutes} minutes.`,
+            waitData: result
           });
         }
 

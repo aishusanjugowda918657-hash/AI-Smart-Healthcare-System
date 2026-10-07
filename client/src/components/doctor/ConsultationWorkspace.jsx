@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   Stethoscope,
   Save,
@@ -16,15 +16,19 @@ import {
   FileText,
   Clock,
   ShieldCheck,
-  CheckSquare
+  CheckSquare,
+  AlertTriangle
 } from 'lucide-react';
 import API from '../../services/api';
 import PatientLookup from './PatientLookup';
 
 export const ConsultationWorkspace = () => {
+  const { appointmentId: paramAppointmentId } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
   const state = location.state || {};
+
+  const effectiveAppointmentId = paramAppointmentId || state.appointmentId || '';
 
   // Patient & Appointment Context
   const [patientHealthId, setPatientHealthId] = useState(state.patientHealthId || '');
@@ -33,60 +37,40 @@ export const ConsultationWorkspace = () => {
   const [patientGender, setPatientGender] = useState(state.patientGender || 'N/A');
   const [tokenNumber, setTokenNumber] = useState(state.tokenNumber || 'N/A');
   const [tokenId, setTokenId] = useState(state.tokenId || '');
-  const [appointmentId, setAppointmentId] = useState(state.appointmentId || '');
-  const [departmentName, setDepartmentName] = useState('Cardiology');
-  const [doctorName, setDoctorName] = useState('Dr. Sarah Smith');
+  const [appointmentId, setAppointmentId] = useState(effectiveAppointmentId);
+  const [departmentName, setDepartmentName] = useState(state.departmentName || '');
+  const [doctorName, setDoctorName] = useState(state.doctorName || '');
   const [appointmentDateTime, setAppointmentDateTime] = useState(`${new Date().toISOString().split('T')[0]}`);
   const [reasonForConsultation, setReasonForConsultation] = useState(
-    state.reason || 'Consultation & Clinical Evaluation'
+    state.reason || ''
   );
 
   const [recordId, setRecordId] = useState('');
+  const [patientFlags, setPatientFlags] = useState(state.flags || []);
 
-  // Vitals State
+  // Vitals State - Real empty initial state
   const [vitals, setVitals] = useState({
-    bp: '128/84',
-    hr: '82 bpm',
-    temp: '98.6 °F',
-    weight: '72 kg',
-    height: '165 cm'
+    bp: '',
+    hr: '',
+    temp: '',
+    weight: '',
+    height: ''
   });
 
-  // Clinical Information State
-  const [symptoms, setSymptoms] = useState('Chest tightness, mild dyspnea, exertional fatigue');
-  const [diagnosisNotes, setDiagnosisNotes] = useState('Mild stable angina, sinus tachycardia. Recommended ECG and follow-up in 10 days.');
+  // Clinical Information State - Real empty initial state
+  const [symptoms, setSymptoms] = useState('');
+  const [diagnosisNotes, setDiagnosisNotes] = useState('');
 
-  // Digital Prescription State
-  const [includePrescription, setIncludePrescription] = useState(true);
-  const [medicines, setMedicines] = useState([
-    {
-      name: 'Aspirin',
-      dosage: '75 mg',
-      frequency: 'Once Daily (1-0-0)',
-      durationDays: '7',
-      timing: 'after_food',
-      notes: 'Take after breakfast with water'
-    },
-    {
-      name: 'Atorvastatin',
-      dosage: '10 mg',
-      frequency: 'Once Nightly (0-0-1)',
-      durationDays: '30',
-      timing: 'after_food',
-      notes: 'Take at bedtime'
-    }
-  ]);
-  const [verifiedByDoctor, setVerifiedByDoctor] = useState(true);
+  // Digital Prescription State - Real empty initial state
+  const [includePrescription, setIncludePrescription] = useState(false);
+  const [medicines, setMedicines] = useState([]);
+  const [verifiedByDoctor, setVerifiedByDoctor] = useState(false);
 
-  // Follow-up State
-  const [followUpRequired, setFollowUpRequired] = useState(true);
-  const [followUpDate, setFollowUpDate] = useState(() => {
-    const future = new Date();
-    future.setDate(future.getDate() + 10);
-    return future.toISOString().split('T')[0];
-  });
-  const [followUpReason, setFollowUpReason] = useState('ECG Review & Cardiac Evaluation');
-  const [followUpInstructions, setFollowUpInstructions] = useState('Maintain low-sodium diet and log morning BP daily');
+  // Follow-up State - Real empty initial state
+  const [followUpRequired, setFollowUpRequired] = useState(false);
+  const [followUpDate, setFollowUpDate] = useState('');
+  const [followUpReason, setFollowUpReason] = useState('');
+  const [followUpInstructions, setFollowUpInstructions] = useState('');
 
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState(null);
@@ -133,13 +117,70 @@ export const ConsultationWorkspace = () => {
   };
 
   useEffect(() => {
-
     if (location.state?.patientHealthId) setPatientHealthId(location.state.patientHealthId);
     if (location.state?.patientName) setPatientName(location.state.patientName);
     if (location.state?.tokenNumber) setTokenNumber(location.state.tokenNumber);
     if (location.state?.tokenId) setTokenId(location.state.tokenId);
     if (location.state?.appointmentId) setAppointmentId(location.state.appointmentId);
   }, [location.state]);
+
+  // Load pre-consultation summary and flags if effectiveAppointmentId is present
+  useEffect(() => {
+    if (!effectiveAppointmentId) return;
+    setAppointmentId(effectiveAppointmentId);
+
+    const fetchPreSummary = async () => {
+      try {
+        const res = await API.get(`/doctor/appointments/${effectiveAppointmentId}/pre-consultation-summary`);
+        if (res.data?.success) {
+          const s = res.data;
+          if (s.patientName && (!patientName || patientName === 'Select Patient')) {
+            setPatientName(s.patientName);
+          }
+          if (s.patientHealthId && !patientHealthId) {
+            setPatientHealthId(s.patientHealthId);
+          }
+          if (s.age && patientAge === 'N/A') {
+            setPatientAge(String(s.age));
+          }
+          if (s.token && tokenNumber === 'N/A') {
+            setTokenNumber(s.token);
+          }
+          if (s.summary?.flags) {
+            setPatientFlags(s.summary.flags);
+          } else if (s.flags) {
+            setPatientFlags(s.flags);
+          }
+        }
+      } catch (err) {
+        console.warn('Pre-consultation summary load notice:', err.message);
+      }
+    };
+    fetchPreSummary();
+  }, [effectiveAppointmentId]);
+
+  const handleFinishConsultation = async () => {
+    const targetApptId = appointmentId || effectiveAppointmentId;
+    if (!targetApptId) {
+      alert('No active appointment ID linked to finish.');
+      return;
+    }
+    try {
+      setLoading(true);
+      await API.post('/queue/finish', { appointmentId: targetApptId });
+      setMessage({ type: 'success', text: 'Consultation completed successfully.' });
+      setTimeout(() => {
+        navigate('/doctor/queue');
+      }, 800);
+    } catch (err) {
+      setMessage({
+        type: 'error',
+        text: err.response?.data?.message || err.message || 'Failed to finish consultation'
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Load existing medical record if available
   useEffect(() => {
@@ -251,7 +292,7 @@ export const ConsultationWorkspace = () => {
       });
 
       setTimeout(() => {
-        navigate('/today-queue');
+        navigate('/doctor/queue');
       }, 1200);
     } catch (err) {
       console.warn('Save clinical record API fallback:', err.message);
@@ -260,7 +301,7 @@ export const ConsultationWorkspace = () => {
         text: `Clinical record for ${patientHealthId} saved locally. Patient remains IN ROOM / SERVING.`
       });
       setTimeout(() => {
-        navigate('/today-queue');
+        navigate('/doctor/queue');
       }, 1200);
     } finally {
       setLoading(false);
@@ -271,7 +312,7 @@ export const ConsultationWorkspace = () => {
     <div className="bg-slate-50 min-h-screen pb-12">
       <div className="max-w-4xl mx-auto space-y-6">
         {/* Header Navigation & Banner */}
-        <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm flex items-center justify-between">
+        <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center space-x-3">
             <div className="p-3 bg-teal-50 text-teal-600 rounded-2xl">
               <Stethoscope className="w-6 h-6" />
@@ -284,13 +325,24 @@ export const ConsultationWorkspace = () => {
             </div>
           </div>
 
-          <button
-            onClick={() => navigate('/today-queue')}
-            className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition-all flex items-center space-x-1.5"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span>Back to Queue</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleFinishConsultation}
+              disabled={loading}
+              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition flex items-center space-x-1.5"
+            >
+              <CheckCircle className="w-4 h-4" />
+              <span>Finish Consultation</span>
+            </button>
+            <button
+              onClick={() => navigate('/doctor/queue')}
+              className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition flex items-center space-x-1.5"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Back to Queue</span>
+            </button>
+          </div>
         </div>
 
         {message && (
@@ -346,6 +398,22 @@ export const ConsultationWorkspace = () => {
                 </span>
               </div>
             </div>
+
+            {/* Computed Clinical Flags */}
+            {patientFlags && patientFlags.length > 0 && (
+              <div className="pt-3 border-t border-slate-100 flex flex-wrap gap-2 items-center">
+                <span className="text-[10px] font-bold text-slate-400 uppercase">Clinical Flags:</span>
+                {patientFlags.map((flag, idx) => (
+                  <span
+                    key={idx}
+                    className="px-2.5 py-1 text-xs font-bold rounded-lg bg-amber-50 text-amber-900 border border-amber-200 flex items-center space-x-1"
+                  >
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                    <span>{typeof flag === 'string' ? flag : flag.label || flag.flag || 'Flag'}</span>
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* SECTION 2: APPOINTMENT INFORMATION */}
@@ -669,14 +737,25 @@ export const ConsultationWorkspace = () => {
             )}
           </div>
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full py-4 bg-teal-600 hover:bg-teal-700 text-white font-extrabold text-xs uppercase tracking-wider rounded-2xl shadow-lg transition-all flex items-center justify-center space-x-2"
-          >
-            <Save className="w-5 h-5" />
-            <span>{loading ? 'Saving Clinical Record & Medical History...' : 'Save Clinical Record to Patient Medical History'}</span>
-          </button>
+          <div className="flex flex-col sm:flex-row gap-3">
+            <button
+              type="submit"
+              disabled={loading}
+              className="flex-1 py-4 bg-teal-600 hover:bg-teal-700 text-white font-extrabold text-xs uppercase tracking-wider rounded-2xl shadow-lg transition-all flex items-center justify-center space-x-2"
+            >
+              <Save className="w-5 h-5" />
+              <span>{loading ? 'Saving Clinical Record & Medical History...' : 'Save Clinical Record to Patient Medical History'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleFinishConsultation}
+              disabled={loading}
+              className="py-4 px-6 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs uppercase tracking-wider rounded-2xl shadow-lg transition-all flex items-center justify-center space-x-2"
+            >
+              <CheckCircle className="w-5 h-5" />
+              <span>Finish Consultation & Next</span>
+            </button>
+          </div>
         </form>
       </div>
     </div>

@@ -80,26 +80,23 @@ export const ALLOWED_TRANSITIONS = Object.freeze({
     'waiting',
     'called',
     'cancelled',
-    'no_show',
     'late'
   ],
   waiting: [
     'called',
     'cancelled',
-    'no_show',
     'late'
   ],
   called: [
     'in_room',
     'in_consultation',
     'not_arrived',
-    'no_show',
     'late',
-    'waiting'
+    'waiting',
+    'no_show'
   ],
   in_room: [
-    'completed',
-    'cancelled'
+    'completed'
   ],
   not_arrived: [
     'checked_in',
@@ -120,7 +117,6 @@ export const ALLOWED_TRANSITIONS = Object.freeze({
     'waiting',
     'called',
     'checked_in',
-    'no_show',
     'cancelled'
   ],
   cancelled: [
@@ -164,8 +160,8 @@ export function canTransition(from, to) {
 export function assertTransition(from, to) {
   if (!canTransition(from, to)) {
     const error = new Error(`Invalid status transition from '${from}' to '${to}'`);
-    error.statusCode = 400;
-    error.code = 'INVALID_STATUS_TRANSITION';
+    error.statusCode = 422;
+    error.code = 'INVALID_TRANSITION';
     throw error;
   }
   return true;

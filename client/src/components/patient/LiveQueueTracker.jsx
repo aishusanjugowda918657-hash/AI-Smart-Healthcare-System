@@ -64,6 +64,7 @@ export const LiveQueueTracker = () => {
     const interval = setInterval(() => fetchQueueStatus(false), 5000);
 
     let unsubscribe = null;
+    let unsubAppts = null;
     if (db) {
       try {
         const todayStr = new Date().toISOString().split('T')[0];
@@ -71,6 +72,18 @@ export const LiveQueueTracker = () => {
         unsubscribe = onSnapshot(q, () => {
           fetchQueueStatus(false);
         });
+
+        // Also listen on appointments for immediate notification when recalculateQueue updates live
+        if (currentUser?.uid) {
+          const apptsQ = query(
+            collection(db, 'appointments'),
+            where('patientId', '==', currentUser.uid),
+            where('date', '==', todayStr)
+          );
+          unsubAppts = onSnapshot(apptsQ, () => {
+            fetchQueueStatus(false);
+          });
+        }
       } catch (err) {
         console.warn('LiveQueueTracker onSnapshot error (using polling fallback):', err.message);
       }
@@ -79,8 +92,9 @@ export const LiveQueueTracker = () => {
     return () => {
       clearInterval(interval);
       if (unsubscribe) unsubscribe();
+      if (unsubAppts) unsubAppts();
     };
-  }, [fetchQueueStatus]);
+  }, [fetchQueueStatus, currentUser?.uid]);
 
   // Turn Alert Banner Logic
   const renderTurnAlert = () => {
@@ -174,7 +188,10 @@ export const LiveQueueTracker = () => {
     currentlyServing,
     queueTimeline = [],
     isCancelled,
-    isCompleted
+    isCompleted,
+    liveWait,
+    leaveHome,
+    earlyOptIn
   } = queueData;
 
   const priorityColorClass =
@@ -319,12 +336,16 @@ export const LiveQueueTracker = () => {
               <span className="text-[11px] font-bold uppercase tracking-wider text-teal-800">Estimated Wait</span>
             </div>
             <p className="text-2xl font-extrabold text-teal-950">
-              {queueSummary?.estimatedWaitMinutes !== null && queueSummary?.estimatedWaitMinutes !== undefined
+              {liveWait?.waitMinLow != null && liveWait?.waitMinHigh != null
+                ? `${liveWait.waitMinLow}–${liveWait.waitMinHigh} mins`
+                : queueSummary?.estimatedWaitMinutes !== null && queueSummary?.estimatedWaitMinutes !== undefined
                 ? `~${queueSummary.estimatedWaitMinutes} mins`
                 : 'Calculating...'}
             </p>
             <p className="text-[10px] font-medium text-teal-600/80 mt-1">
-              {queueSummary?.isEstimate ? '★ Dynamic Rolling Average' : 'Live Pace Estimate'}
+              {liveWait?.timeFactor
+                ? `Pace Factor: ${Number(liveWait.timeFactor).toFixed(2)}x`
+                : queueSummary?.isEstimate ? '★ Dynamic Rolling Average' : 'Live Pace Estimate'}
             </p>
           </div>
 
@@ -343,17 +364,34 @@ export const LiveQueueTracker = () => {
         </div>
 
         {/* Dynamic Calculation Basis Note */}
-        {queueSummary?.calculationBasis && (
+        {(liveWait?.reasonText || queueSummary?.calculationBasis) && (
           <div className="bg-slate-50 rounded-xl p-3 border border-slate-100 text-xs text-slate-500 flex items-center justify-between">
             <span className="flex items-center gap-1.5">
               <Activity className="w-3.5 h-3.5 text-indigo-500" />
-              <strong>Calculation Method:</strong> {queueSummary.calculationBasis}
+              {liveWait?.reasonText
+                ? <><strong>Queue Info:</strong> {liveWait.reasonText}</>
+                : <><strong>Calculation Method:</strong> {queueSummary.calculationBasis}</>}
             </span>
-            {queueSummary.isEstimate && (
+            {(queueSummary?.isEstimate || liveWait?.timeFactor) && (
               <span className="text-[10px] bg-slate-200 text-slate-700 px-2 py-0.5 rounded-full font-bold">
-                Estimating
+                {liveWait?.timeFactor ? `${Number(liveWait.timeFactor).toFixed(2)}x pace` : 'Estimating'}
               </span>
             )}
+          </div>
+        )}
+
+        {/* Leave Home Now Widget */}
+        {leaveHome?.leaveAt && (
+          <div className="p-4 bg-emerald-50/80 border border-emerald-200 rounded-xl space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-emerald-900 uppercase tracking-wide">LEAVE HOME NOW ESTIMATE</span>
+              <span className="text-sm font-extrabold text-emerald-700">
+                {new Date(leaveHome.leaveAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            </div>
+            <p className="text-[10px] text-emerald-800">
+              Based on your travel duration ({leaveHome.travelMinutes || 15} mins) + 10 min check-in buffer.
+            </p>
           </div>
         )}
       </div>

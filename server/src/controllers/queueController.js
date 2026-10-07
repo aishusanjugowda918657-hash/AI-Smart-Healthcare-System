@@ -6,12 +6,64 @@ import { getReadyCandidates } from '../domain/priority.js';
 import { writeAuditLog } from '../utils/audit.js';
 
 /**
+ * Verifies if the authenticated doctor owns the target queue/doctor.
+ * Admins, nurses, and receptionists are allowed (staff override).
+ */
+export async function assertDoctorOwnership(req, targetDoctorId) {
+  const user = req.user;
+  if (!user) {
+    throw new AppError('UNAUTHORIZED', 'Authentication required.', 401);
+  }
+  if (['admin', 'nurse', 'reception'].includes(user.role)) {
+    return true; // staff override
+  }
+  if (user.role !== 'doctor') {
+    throw new AppError('FORBIDDEN', 'Access restricted to doctors.', 403);
+  }
+
+  const doctorUid = user.uid;
+  if (!targetDoctorId || targetDoctorId === doctorUid) {
+    return true;
+  }
+
+  const db = assertDbConnected();
+  // Check if caller is registered as a doctor with a specific doctorId
+  const callerDoc = await db.collection('doctors').doc(doctorUid).get();
+  if (callerDoc.exists) {
+    const dData = callerDoc.data();
+    const callerDoctorId = dData.doctorId || dData.doctorUid || callerDoc.id;
+    if (callerDoctorId !== targetDoctorId && dData.uid !== targetDoctorId) {
+      throw new AppError('FORBIDDEN', "Access forbidden: You cannot access or modify another doctor's queue.", 403);
+    }
+    return true;
+  }
+
+  // Check if target is a registered doctor belonging to someone else
+  const targetDoc = await db.collection('doctors').doc(targetDoctorId).get();
+  if (targetDoc.exists) {
+    const tData = targetDoc.data();
+    if ((tData.uid && tData.uid !== doctorUid) || (tData.doctorUid && tData.doctorUid !== doctorUid)) {
+      throw new AppError('FORBIDDEN', "Access forbidden: You cannot access or modify another doctor's queue.", 403);
+    }
+  }
+
+  // If caller explicitly has a different doctorId in user object
+  if (user.doctorId && user.doctorId !== targetDoctorId) {
+    throw new AppError('FORBIDDEN', "Access forbidden: You cannot access or modify another doctor's queue.", 403);
+  }
+
+  return true;
+}
+
+/**
  * GET /api/queue/doctor/:doctorId/today (PRD F6)
  * Returns today's queue status, current consultation, sorted ready list & un-checked-in list
  */
 export const getDoctorQueueToday = async (req, res, next) => {
   try {
     const { doctorId } = req.params;
+    await assertDoctorOwnership(req, doctorId);
+
     const date = req.query.date || clock.now().toISOString().split('T')[0];
     const db = assertDbConnected();
 
@@ -75,6 +127,8 @@ export const callNextPatient = async (req, res, next) => {
       const docSnap = await db.collection('doctors').doc(doctorUid).get();
       targetDoctorId = docSnap.exists ? docSnap.data().doctorId : 'DOC-001';
     }
+
+    await assertDoctorOwnership(req, targetDoctorId);
 
     const now = clock.now();
     const nowIso = now.toISOString();
@@ -168,6 +222,8 @@ export const callSpecificToken = async (req, res, next) => {
     }
 
     const apt = snap.data();
+    await assertDoctorOwnership(req, apt.doctorId);
+
     if (!['checked_in', 'rejoined', 'booked', 'confirmed'].includes(apt.status)) {
       throw new AppError('INVALID_TRANSITION', `Cannot call appointment in status ${apt.status}.`, 422);
     }
@@ -216,6 +272,8 @@ export const holdToken = async (req, res, next) => {
     }
 
     const apt = snap.data();
+    await assertDoctorOwnership(req, apt.doctorId);
+
     const now = clock.now();
 
     await apptRef.update({
@@ -282,6 +340,8 @@ export const finishConsultation = async (req, res, next) => {
       apt = current;
       apptRef = db.collection('appointments').doc(apt.id);
     }
+
+    await assertDoctorOwnership(req, apt.doctorId);
 
     // Calculate duration
     let durationMin = actualDurationMinutes ? parseInt(actualDurationMinutes, 10) : 15;
@@ -392,6 +452,8 @@ export const finishConsultation = async (req, res, next) => {
 export const extendConsultation = async (req, res, next) => {
   try {
     const { doctorId, minutes = 5 } = req.body;
+    await assertDoctorOwnership(req, doctorId);
+
     const db = assertDbConnected();
     const date = clock.now().toISOString().split('T')[0];
     const now = clock.now();
@@ -414,6 +476,8 @@ export const extendConsultation = async (req, res, next) => {
 export const undoExtendConsultation = async (req, res, next) => {
   try {
     const { doctorId } = req.body;
+    await assertDoctorOwnership(req, doctorId);
+
     const db = assertDbConnected();
     const date = clock.now().toISOString().split('T')[0];
 
@@ -434,6 +498,8 @@ export const undoExtendConsultation = async (req, res, next) => {
 export const startBreak = async (req, res, next) => {
   try {
     const { doctorId, minutes = 15 } = req.body;
+    await assertDoctorOwnership(req, doctorId);
+
     const db = assertDbConnected();
     const now = clock.now();
     const date = now.toISOString().split('T')[0];
@@ -453,6 +519,8 @@ export const startBreak = async (req, res, next) => {
 export const endBreak = async (req, res, next) => {
   try {
     const { doctorId } = req.body;
+    await assertDoctorOwnership(req, doctorId);
+
     const db = assertDbConnected();
     const date = clock.now().toISOString().split('T')[0];
 
@@ -473,6 +541,8 @@ export const endBreak = async (req, res, next) => {
 export const doctorLateStart = async (req, res, next) => {
   try {
     const { doctorId, minutes = 15 } = req.body;
+    await assertDoctorOwnership(req, doctorId);
+
     const db = assertDbConnected();
     const date = clock.now().toISOString().split('T')[0];
 
@@ -502,6 +572,8 @@ export const markProcedure = async (req, res, next) => {
     }
 
     const apt = snap.data();
+    await assertDoctorOwnership(req, apt.doctorId);
+
     const newExpected = (apt.expectedDurationMin || 15) + parseInt(extraMinutes, 10);
 
     await apptRef.update({
@@ -514,6 +586,71 @@ export const markProcedure = async (req, res, next) => {
     await recalculateQueue(apt.doctorId, apt.date);
 
     res.status(200).json(formatSuccessResponse({ appointmentId, expectedDurationMin: newExpected }));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * POST /api/queue/emergency (PRD F4 / F6)
+ * Nurse or doctor marks an existing patient as emergency with required reason.
+ */
+export const markEmergency = async (req, res, next) => {
+  try {
+    const { appointmentId, reason } = req.body;
+    if (!appointmentId) {
+      throw new AppError('VALIDATION_ERROR', 'appointmentId is required.', 400);
+    }
+    if (!reason || !reason.trim()) {
+      throw new AppError('VALIDATION_ERROR', 'A clinical reason is mandatory to mark emergency priority.', 400);
+    }
+
+    const db = assertDbConnected();
+    const apptRef = db.collection('appointments').doc(appointmentId);
+    const snap = await apptRef.get();
+
+    if (!snap.exists) {
+      throw new AppError('NOT_FOUND', 'Appointment not found.', 404);
+    }
+
+    const apt = snap.data();
+    await assertDoctorOwnership(req, apt.doctorId);
+
+    const now = clock.now();
+    const nowIso = now.toISOString();
+
+    await apptRef.update({
+      clinicalLevel: 3,
+      priorityCategory: 'EMERGENCY',
+      isEmergency: true,
+      emergencyReason: reason.trim(),
+      emergencyMarkedAt: nowIso,
+      emergencyMarkedBy: req.user.uid,
+      statusHistory: [
+        ...(apt.statusHistory || []),
+        { status: 'emergency_marked', at: nowIso, by: req.user.uid, reason: reason.trim() }
+      ],
+      updatedAt: now
+    });
+
+    await writeAuditLog({
+      actorUid: req.user.uid,
+      actorRole: req.user.role,
+      action: 'MARK_PATIENT_EMERGENCY',
+      targetType: 'appointment',
+      targetId: appointmentId,
+      reason: reason.trim(),
+      healthId: apt.patientHealthId
+    });
+
+    await recalculateQueue(apt.doctorId, apt.date);
+
+    res.status(200).json(formatSuccessResponse({
+      appointmentId,
+      clinicalLevel: 3,
+      priorityCategory: 'EMERGENCY',
+      emergencyReason: reason.trim()
+    }, 'Emergency priority successfully assigned. Patient moved to calling queue head.'));
   } catch (error) {
     next(error);
   }
@@ -616,3 +753,54 @@ export const getPublicDisplayBoard = async (req, res, next) => {
     next(error);
   }
 };
+
+/**
+ * GET /api/queue/doctor/:doctorId/wait-prediction (Chatbot / Quick Lookups)
+ * Returns current queue length, estimated wait range, and reason text for doctor.
+ */
+export const getDoctorWaitPrediction = async (req, res, next) => {
+  try {
+    const { doctorId } = req.params;
+    const { visitType = 'new', date = clock.now().toISOString().split('T')[0] } = req.query;
+    const db = assertDbConnected();
+
+    // Fetch queue document
+    const queueSnap = await db.collection('queues').doc(`${doctorId}_${date}`).get();
+    const queueData = queueSnap.exists ? queueSnap.data() : {};
+
+    // Fetch active appointments
+    const apptsSnap = await db
+      .collection('appointments')
+      .where('doctorId', '==', doctorId)
+      .where('date', '==', date)
+      .get();
+
+    const activeAppts = apptsSnap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(a => ['checked_in', 'waiting', 'called', 'in_consultation', 'rejoined'].includes(a.status));
+
+    const queueLength = activeAppts.length;
+    const timeFactor = queueData.timeFactor || 1.0;
+    const baseDuration = visitType === 'followup' ? 10 : visitType === 'report_review' ? 5 : 15;
+    const estimatedMinutes = Math.round(queueLength * baseDuration * timeFactor);
+
+    const waitMinLow = Math.max(5, Math.round((estimatedMinutes * 0.8) / 5) * 5);
+    const waitMinHigh = Math.max(waitMinLow + 5, Math.round((estimatedMinutes * 1.2) / 5) * 5);
+
+    res.status(200).json(formatSuccessResponse({
+      doctorId,
+      date,
+      queueLength,
+      timeFactor,
+      visitType,
+      estimatedMinutes,
+      waitMinLow,
+      waitMinHigh,
+      waitDisplay: queueLength === 0 ? 'No wait' : `${waitMinLow} to ${waitMinHigh} minutes`,
+      reasonText: queueData.runningLateMsg || (timeFactor > 1.15 ? 'Consultations running slightly long today' : 'Queue is proceeding on schedule')
+    }));
+  } catch (error) {
+    next(error);
+  }
+};
+

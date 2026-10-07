@@ -5,6 +5,7 @@ import {
   calculateTimeFactor,
   calculateRemainingCurrentTime,
   calculateWaitForPatient,
+  getExpectedDuration,
   calculateLeaveAt,
   selectReasonText
 } from '../domain/waitTime.js';
@@ -53,18 +54,62 @@ export async function recalculateQueue(doctorId, date) {
     .map((d) => d.data())
     .filter((a) => a.status === 'completed');
 
-  // 3. Compute time factor
+  // 3. Compute time factor (pace factor: ratio of actual vs expected durations today)
   const timeFactor = calculateTimeFactor(completedAppts);
+
+  // 3b. Load per-visitType consultationStats cache (avgMin + stdMin for CoV-based range width)
+  //     Keyed as doctorId_deptId_visitType_complexity in consultationStats collection
+  const visitTypes = [...new Set(allAppts.map(a => a.visitType || 'new'))];
+  const departmentIds = [...new Set(allAppts.map(a => a.departmentId).filter(Boolean))];
+  const statsCache = {};
+
+  for (const vt of visitTypes) {
+    for (const deptId of (departmentIds.length ? departmentIds : ['_'])) {
+      const statsDocId = `${doctorId}_${deptId}_${vt}_moderate`;
+      try {
+        const statsSnap = await db.collection('consultationStats').doc(statsDocId).get();
+        if (statsSnap.exists) {
+          statsCache[`${vt}_${deptId}`] = statsSnap.data();
+        }
+      } catch { /* non-blocking — graceful degradation to defaults */ }
+    }
+  }
+
+  // Helper: get consultationStats for a given appointment (visitType + deptId)
+  const getStatsForAppt = (apt) => {
+    const vt = apt.visitType || 'new';
+    const deptId = apt.departmentId || '_';
+    return statsCache[`${vt}_${deptId}`] || statsCache[`${vt}_`] || null;
+  };
+
+  // Helper: resolve expected duration using the fallback chain (stats > dept config > system defaults)
+  const getExpectedForAppt = (apt) => {
+    if (apt.expectedDurationMin && apt.expectedDurationMin > 0) return apt.expectedDurationMin;
+    const consultStats = getStatsForAppt(apt);
+    return getExpectedDuration({
+      consultationStats: consultStats,
+      visitType: apt.visitType || 'new',
+      complexity: apt.complexity || 'moderate',
+      extraProcedureMin: apt.extraProcedureMin || 0
+    });
+  };
 
   // 4. Identify current active consultation (in_consultation or called)
   const currentConsultation = allAppts.find((a) => a.status === 'in_consultation') ||
     allAppts.find((a) => a.status === 'called');
 
   const currentAppointmentId = currentConsultation ? currentConsultation.id : null;
+
+  // Enrich current consultation with expectedDurationMin before computing remaining time
+  if (currentConsultation && !currentConsultation.expectedDurationMin) {
+    currentConsultation.expectedDurationMin = getExpectedForAppt(currentConsultation);
+  }
   const remainingCurrentMin = calculateRemainingCurrentTime(currentConsultation, now);
 
-  // 5. Separate ready candidates (checked_in & rejoined) vs others
-  const readyCandidates = getReadyCandidates(allAppts, now);
+  // 5. Separate ready candidates (checked_in & rejoined) vs others,
+  //    enriched with per-visitType expectedDurationMin
+  const readyCandidates = getReadyCandidates(allAppts, now)
+    .map(c => ({ ...c, expectedDurationMin: getExpectedForAppt(c) }));
 
   // 6. Compute wait and live payload for each active appointment
   const writesBatch = db.batch();
@@ -85,12 +130,16 @@ export async function recalculateQueue(doctorId, date) {
     const aheadCount = idx;
     const aheadList = readyCandidates.slice(0, idx);
 
-    // Candidates booked earlier or same slot window but not yet checked in
-    const notYetHereList = allAppts.filter(
-      (a) =>
+    // Candidates booked earlier or same slot window but not yet checked in, enriched
+    const notYetHereList = allAppts
+      .filter((a) =>
         ['booked', 'confirmed', 'on_the_way', 'nearby', 'not_arrived'].includes(a.status) &&
         a.bookedStartAt <= candidate.bookedStartAt
-    );
+      )
+      .map(a => ({ ...a, expectedDurationMin: getExpectedForAppt(a) }));
+
+    // Per-patient stats for CoV-based range width
+    const candidateStats = getStatsForAppt(candidate);
 
     const waitResult = calculateWaitForPatient({
       aheadCandidates: aheadList,
@@ -99,6 +148,7 @@ export async function recalculateQueue(doctorId, date) {
       timeFactor,
       breakRemainingMin,
       lateStartDelayMin: delayMin,
+      stats: candidateStats,
       now
     });
 
@@ -117,6 +167,10 @@ export async function recalculateQueue(doctorId, date) {
       waitMinHigh: waitResult.waitMinHigh,
       predictedCallAt: waitResult.predictedCallAt,
       reasonText,
+      // Pace context for debugging / UI display
+      timeFactor,
+      breakRemainingMin,
+      lateStartDelayMin: delayMin,
       updatedAt: nowIso
     };
 
@@ -155,6 +209,23 @@ export async function recalculateQueue(doctorId, date) {
           reasonText
         });
       }
+
+      // Record first-prediction accuracy snapshot (non-blocking; resolved later when patient is called)
+      if (!candidate.live?.predictedCallAt && waitResult.predictedCallAt) {
+        const predDocId = `pred_${candidate.id}_${Date.now()}`;
+        writesBatch.set(db.collection('waitPredictions').doc(predDocId), {
+          appointmentId: candidate.id,
+          doctorId,
+          date,
+          visitType: candidate.visitType || 'new',
+          predictionTime: nowIso,
+          predictedWaitMinLow: waitResult.waitMinLow,
+          predictedWaitMinHigh: waitResult.waitMinHigh,
+          predictedCallAt: waitResult.predictedCallAt,
+          position,
+          timeFactor
+        });
+      }
     }
   });
 
@@ -164,11 +235,14 @@ export async function recalculateQueue(doctorId, date) {
   );
 
   notCheckedIn.forEach((apt) => {
-    const notCheckedInAhead = allAppts.filter(
-      (a) =>
+    const notCheckedInAhead = allAppts
+      .filter((a) =>
         ['checked_in', 'rejoined'].includes(a.status) ||
         (['booked', 'confirmed', 'on_the_way', 'nearby'].includes(a.status) && a.bookedStartAt < apt.bookedStartAt)
-    );
+      )
+      .map(a => ({ ...a, expectedDurationMin: getExpectedForAppt(a) }));
+
+    const candidateStats = getStatsForAppt(apt);
 
     const waitResult = calculateWaitForPatient({
       aheadCandidates: notCheckedInAhead,
@@ -176,6 +250,7 @@ export async function recalculateQueue(doctorId, date) {
       timeFactor,
       breakRemainingMin,
       lateStartDelayMin: delayMin,
+      stats: candidateStats,
       now
     });
 
@@ -217,10 +292,32 @@ export async function recalculateQueue(doctorId, date) {
       completedCount: completedAppts.length,
       delayMin,
       breakUntil: queueData.breakUntil || null,
-      lastRecalcAt: now
+      lastRecalcAt: now,
+      // Human-readable running-late message for doctor UI
+      runningLateMsg: delayMin > 0
+        ? `Running late by ${delayMin} minutes`
+        : (timeFactor > 1.15
+          ? `Consultations running ~${Math.round((timeFactor - 1) * 100)}% slower today`
+          : null)
     },
     { merge: true }
   );
+
+  // Pre-generate summary for next ready candidate so it's ready before call
+  if (readyCandidates.length > 0) {
+    const nextCandidate = readyCandidates[0];
+    if (!nextCandidate.summary || !nextCandidate.summary.text) {
+      import('./patientSummaryService.js')
+        .then(({ preparePatientSummary }) => {
+          preparePatientSummary({
+            appointmentId: nextCandidate.id,
+            doctorUid: doctorId,
+            doctorRole: 'doctor'
+          }).catch(err => console.warn('Background summary pre-generation notice:', err.message));
+        })
+        .catch(() => {});
+    }
+  }
 
   return {
     updatedCount,
@@ -230,7 +327,9 @@ export async function recalculateQueue(doctorId, date) {
       date,
       currentAppointmentId,
       timeFactor,
-      completedCount: completedAppts.length
+      completedCount: completedAppts.length,
+      delayMin,
+      breakRemainingMin
     }
   };
 }

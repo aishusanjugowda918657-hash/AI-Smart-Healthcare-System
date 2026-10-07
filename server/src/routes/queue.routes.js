@@ -13,15 +13,18 @@ import {
   endBreak,
   doctorLateStart,
   markProcedure,
+  markEmergency,
   setLeaveHomeParams,
   toggleEarlyOptIn,
-  getPublicDisplayBoard
+  getPublicDisplayBoard,
+  getDoctorWaitPrediction
 } from '../controllers/queueController.js';
 
 const router = express.Router();
 
 // Doctor Queue & Controls
 router.get('/doctor/:doctorId/today', requireAuth, getDoctorQueueToday);
+router.get('/doctor/:doctorId/wait-prediction', getDoctorWaitPrediction);
 router.post('/call-next', requireAuth, requireRole('doctor', 'admin'), callNextPatient);
 router.post('/call/:id', requireAuth, requireRole('doctor', 'admin'), callSpecificToken);
 router.post('/hold/:id', requireAuth, holdToken);
@@ -32,6 +35,7 @@ router.post('/break', requireAuth, requireRole('doctor', 'admin'), startBreak);
 router.post('/end-break', requireAuth, requireRole('doctor', 'admin'), endBreak);
 router.post('/late-start', requireAuth, requireRole('doctor', 'admin'), doctorLateStart);
 router.post('/procedure', requireAuth, markProcedure);
+router.post('/emergency', requireAuth, requireRole('doctor', 'nurse', 'admin'), markEmergency);
 
 // Patient Controls
 router.post('/appointments/:id/leave-home', requireAuth, setLeaveHomeParams);

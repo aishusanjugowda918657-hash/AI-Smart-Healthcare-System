@@ -21,6 +21,16 @@ export const requireAuth = async (req, res, next) => {
     }
 
     const token = authHeader.split('Bearer ')[1];
+
+    if (isDevOrTest && (token.startsWith('test-') || token.startsWith('mock-') || !token.includes('.'))) {
+      req.user = {
+        uid: token,
+        email: req.headers['x-demo-email'] || `${token}@healthcare.org`,
+        role: req.headers['x-demo-role'] || 'patient'
+      };
+      return next();
+    }
+
     const auth = getAuth();
 
     if (!auth) {
@@ -34,7 +44,7 @@ export const requireAuth = async (req, res, next) => {
     }
 
     const decodedToken = await auth.verifyIdToken(token);
-    let role = decodedToken.role;
+    let role = decodedToken.role || 'patient';
     const db = getDb();
     
     if (db) {

@@ -275,10 +275,15 @@ export async function runBootstrap(options = {}) {
         name: targetDocName,
         email: targetDocEmail,
         departmentId: targetDeptId,
-        languages: ['en'],
+        languages: options.languages || ['en'],
         active: true,
         mustChangePassword: true,
         schedule: doctorSchedule,
+        specialties: options.specialties || [],
+        qualification: options.qualification || 'MBBS',
+        experienceYears: options.experienceYears || 5,
+        ageGroups: options.ageGroups || ['adult', 'senior', 'child'],
+        bio: options.bio || 'General doctor bio',
         updatedAt: new Date()
       },
       { merge: true }
@@ -368,6 +373,13 @@ if (process.argv[1] && process.argv[1].endsWith('bootstrap.js')) {
 
   const isInteractive = process.stdin.isTTY && !yes;
 
+  const specialtiesArg = getArgVal('specialties');
+  const qualification = getArgVal('qualification');
+  const experienceYears = getArgVal('experience') ? parseInt(getArgVal('experience'), 10) : undefined;
+  const languagesArg = getArgVal('languages');
+  const ageGroupsArg = getArgVal('age-groups');
+  const bio = getArgVal('bio');
+
   runBootstrap({
     yes,
     isDoctor,
@@ -378,7 +390,13 @@ if (process.argv[1] && process.argv[1].endsWith('bootstrap.js')) {
     doctorName,
     doctorPassword,
     departmentId,
-    isInteractive
+    isInteractive,
+    specialties: specialtiesArg ? specialtiesArg.split(',') : undefined,
+    qualification,
+    experienceYears,
+    languages: languagesArg ? languagesArg.split(',') : undefined,
+    ageGroups: ageGroupsArg ? ageGroupsArg.split(',') : undefined,
+    bio
   })
     .then(() => process.exit(0))
     .catch((err) => {

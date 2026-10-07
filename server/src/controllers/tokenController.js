@@ -757,6 +757,21 @@ export const getMyQueueStatus = async (req, res, next) => {
         isEstimate: waitResult.isEstimate || false,
         calculationBasis: waitResult.calculationBasis || 'Calculating...'
       },
+      // Live wait-time engine range data (written by recalculateQueue)
+      liveWait: activeAppt.live ? {
+        waitMinLow: activeAppt.live.waitMinLow,
+        waitMinHigh: activeAppt.live.waitMinHigh,
+        predictedCallAt: activeAppt.live.predictedCallAt,
+        reasonText: activeAppt.live.reasonText,
+        timeFactor: activeAppt.live.timeFactor,
+        position: activeAppt.live.position,
+        aheadCount: activeAppt.live.aheadCount,
+        breakRemainingMin: activeAppt.live.breakRemainingMin,
+        lateStartDelayMin: activeAppt.live.lateStartDelayMin,
+        updatedAt: activeAppt.live.updatedAt
+      } : null,
+      leaveHome: activeAppt.leaveHome || null,
+      earlyOptIn: activeAppt.earlyOptIn || false,
       currentlyServing: currentlyServingData,
       queueTimeline: queueTimeline.slice(0, 7)
     });

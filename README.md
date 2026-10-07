@@ -155,6 +155,8 @@ npm run smoke:test --prefix server
 > See [docs/QUOTA_AUDIT.md](docs/QUOTA_AUDIT.md) for the full breakdown.
 > **Always use `npm run dev:emulator` for local development.**
 
+**Note:** With `FLAG_SCHEDULER=false` (to save quota on the real project), background tasks like slot generation and expiry do not run automatically. You must trigger a scheduler tick manually at least every few days, or use the "Generate slots (next 14 days)" button in the Admin UI for each doctor.
+
 Trigger a scheduler tick manually (any plan):
 ```bash
 curl -X POST http://localhost:5000/api/internal/tick \
