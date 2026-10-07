@@ -32,6 +32,7 @@ import bookingRoutes from './routes/booking.routes.js';
 import checkinRoutes from './routes/checkin.routes.js';
 import queueRoutes from './routes/queue.routes.js';
 import reportRoutes from './routes/report.routes.js';
+import visitRoutes from './routes/visit.routes.js';
 
 const app = express();
 
@@ -144,6 +145,7 @@ app.use('/api/checkin', checkinRoutes);
 app.use('/api/queue', queueRoutes);
 app.use('/api/display', queueRoutes);
 app.use('/api/reports', reportRoutes);
+app.use('/api/visits', visitRoutes);
 app.use('/api/waitlist', waitlistRoutes);
 app.use('/api/offers', offerRoutes);
 

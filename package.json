@@ -12,6 +12,7 @@
     "bootstrap": "npm run bootstrap --prefix server",
     "reset:everything": "npm run reset:everything --prefix server",
     "seed": "npm run seed --prefix server",
-    "test": "npm run test --prefix server"
+    "test": "npm run test --prefix server",
+    "test:emu": "npm run test:emu --prefix server"
   }
 }

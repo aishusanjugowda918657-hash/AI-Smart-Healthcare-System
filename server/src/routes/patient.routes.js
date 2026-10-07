@@ -21,10 +21,37 @@ import {
 import { requireAuth } from '../middleware/authMiddleware.js';
 import { requireRole } from '../middleware/roleMiddleware.js';
 
+import {
+  getPatientHistory,
+  getPatientVitalsTrend,
+  sharePatientHistory,
+  revokePatientShare,
+  getActivePatientShares,
+  getPatientAccessLog,
+  exportMedicalHistoryPdf,
+  addPatientAllergy,
+  addPatientCondition,
+  confirmPatientAllergy,
+  confirmPatientCondition
+} from '../controllers/medicalController.js';
+
 const router = express.Router();
 
 router.post('/profile', requireAuth, createOrUpdatePatientProfile);
 router.get('/me', requireAuth, getMyPatientProfile);
+
+// Task B: Medical History & Longitudinal Records (PRD 4.2 / F9 / Section 8)
+router.get('/:healthId/history', requireAuth, getPatientHistory);
+router.get('/:healthId/history.pdf', requireAuth, exportMedicalHistoryPdf);
+router.get('/:healthId/vitals', requireAuth, getPatientVitalsTrend);
+router.get('/:healthId/access-log', requireAuth, getPatientAccessLog);
+router.post('/:healthId/share', requireAuth, sharePatientHistory);
+router.delete('/:healthId/share/:shareId', requireAuth, revokePatientShare);
+router.get('/:healthId/shares', requireAuth, getActivePatientShares);
+router.post('/:healthId/allergies', requireAuth, addPatientAllergy);
+router.post('/:healthId/conditions', requireAuth, addPatientCondition);
+router.post('/:healthId/confirm-allergy', requireAuth, confirmPatientAllergy);
+router.post('/:healthId/confirm-condition', requireAuth, confirmPatientCondition);
 
 // Family & Caregivers
 router.get('/family', requireAuth, getFamilyMembers);

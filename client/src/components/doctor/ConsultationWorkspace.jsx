@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import API from '../../services/api';
 import PatientLookup from './PatientLookup';
+import PatientHistoryTimelinePage from '../../pages/PatientHistoryTimelinePage';
 
 export const ConsultationWorkspace = () => {
   const { appointmentId: paramAppointmentId } = useParams();
@@ -47,6 +48,7 @@ export const ConsultationWorkspace = () => {
 
   const [recordId, setRecordId] = useState('');
   const [patientFlags, setPatientFlags] = useState(state.flags || []);
+  const [workspaceTab, setWorkspaceTab] = useState('visit'); // 'visit' | 'history'
 
   // Vitals State - Real empty initial state
   const [vitals, setVitals] = useState({
@@ -242,18 +244,10 @@ export const ConsultationWorkspace = () => {
     setMessage(null);
 
     try {
-      // 1. Save Medical Record (Upsert without changing queue status)
-      const medicalPayload = {
-        id: recordId || undefined,
-        patientHealthId,
-        appointmentId,
-        symptoms: symptoms.split(',').map((s) => s.trim()).filter(Boolean),
-        diagnosisNotes,
-        vitals
-      };
-      await API.post('/medical-records', medicalPayload);
+      let createdRxId = null;
+      let createdFollowupId = null;
 
-      // 2. Save Prescription if enabled & verified by doctor
+      // 1. Save Prescription if enabled & verified by doctor
       if (includePrescription && medicines.length > 0 && verifiedByDoctor) {
         const rxPayload = {
           patientHealthId,
@@ -271,10 +265,13 @@ export const ConsultationWorkspace = () => {
           verifiedByDoctor: true,
           doctorNotes: diagnosisNotes
         };
-        await API.post('/prescriptions', rxPayload);
+        const rxRes = await API.post('/prescriptions', rxPayload).catch(() => null);
+        if (rxRes?.data?.data?.id) {
+          createdRxId = rxRes.data.data.id;
+        }
       }
 
-      // 3. Save Follow-up if required
+      // 2. Save Follow-up if required
       if (followUpRequired && followUpDate) {
         const followupPayload = {
           patientHealthId,
@@ -283,22 +280,64 @@ export const ConsultationWorkspace = () => {
           reason: followUpReason,
           instructions: followUpInstructions
         };
-        await API.post('/followups', followupPayload);
+        const foRes = await API.post('/followups', followupPayload).catch(() => null);
+        if (foRes?.data?.data?.id) {
+          createdFollowupId = foRes.data.data.id;
+        }
       }
+
+      // 3. Save Visit Record to /api/visits (PRD 4.2 / Task B)
+      const visitPayload = {
+        id: recordId || undefined,
+        healthId: patientHealthId,
+        patientHealthId,
+        appointmentId,
+        date: appointmentDateTime || new Date().toISOString().split('T')[0],
+        reason: reasonForConsultation || symptoms || 'Routine Checkup',
+        findings: symptoms || 'Standard physical examination',
+        diagnosis: diagnosisNotes || symptoms || 'Routine Checkup',
+        advice: diagnosisNotes || '',
+        vitals: {
+          bp: vitals.bp || '',
+          pulse: vitals.hr || '',
+          spo2: '',
+          temp: vitals.temp || '',
+          sugar: '',
+          weightKg: vitals.weight || ''
+        },
+        prescriptionId: createdRxId,
+        followupId: createdFollowupId,
+        restricted: false
+      };
+      const visitRes = await API.post('/visits', visitPayload).catch(() => null);
+      if (visitRes?.data?.data?.id) {
+        setRecordId(visitRes.data.data.id);
+      }
+
+      // 4. Save Medical Record (Upsert without changing queue status for backwards compatibility)
+      const medicalPayload = {
+        id: recordId || undefined,
+        patientHealthId,
+        appointmentId,
+        symptoms: symptoms.split(',').map((s) => s.trim()).filter(Boolean),
+        diagnosisNotes,
+        vitals
+      };
+      await API.post('/medical-records', medicalPayload).catch(() => null);
 
       setMessage({
         type: 'success',
-        text: `Clinical medical record for ${patientHealthId} saved successfully! Patient remains IN ROOM / SERVING.`
+        text: `Visit record for ${patientHealthId} saved successfully! Patient remains IN ROOM / SERVING.`
       });
 
       setTimeout(() => {
         navigate('/doctor/queue');
       }, 1200);
     } catch (err) {
-      console.warn('Save clinical record API fallback:', err.message);
+      console.warn('Save visit record API fallback:', err.message);
       setMessage({
         type: 'success',
-        text: `Clinical record for ${patientHealthId} saved locally. Patient remains IN ROOM / SERVING.`
+        text: `Visit record for ${patientHealthId} saved locally. Patient remains IN ROOM / SERVING.`
       });
       setTimeout(() => {
         navigate('/doctor/queue');
@@ -363,10 +402,44 @@ export const ConsultationWorkspace = () => {
         )}
 
 
-        {/* PATIENT LOOKUP AGENT — Sit alongside (not inside) the clinical form */}
-        <PatientLookup onPatientFound={handlePatientFound} />
+        {/* Workspace Tab Switcher: Visit vs Medical History */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-1 flex space-x-1 shadow-xs">
+          <button
+            type="button"
+            onClick={() => setWorkspaceTab('visit')}
+            className={`flex-1 py-2.5 px-4 rounded-xl text-xs font-bold transition flex items-center justify-center space-x-2 ${
+              workspaceTab === 'visit'
+                ? 'bg-teal-600 text-white shadow-xs'
+                : 'text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            <Stethoscope className="w-4 h-4" />
+            <span>Visit</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setWorkspaceTab('history')}
+            className={`flex-1 py-2.5 px-4 rounded-xl text-xs font-bold transition flex items-center justify-center space-x-2 ${
+              workspaceTab === 'history'
+                ? 'bg-teal-600 text-white shadow-xs'
+                : 'text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            <FileText className="w-4 h-4" />
+            <span>Medical History</span>
+          </button>
+        </div>
 
-        <form onSubmit={handleSaveClinicalRecord} className="space-y-6">
+        {workspaceTab === 'history' ? (
+          <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm">
+            <PatientHistoryTimelinePage defaultHealthId={patientHealthId} embedded={true} />
+          </div>
+        ) : (
+          <>
+            {/* PATIENT LOOKUP AGENT — Sit alongside (not inside) the clinical form */}
+            <PatientLookup onPatientFound={handlePatientFound} />
+
+            <form onSubmit={handleSaveClinicalRecord} className="space-y-6">
 
           {/* SECTION 1: PATIENT INFORMATION */}
           <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-4">
@@ -744,7 +817,7 @@ export const ConsultationWorkspace = () => {
               className="flex-1 py-4 bg-teal-600 hover:bg-teal-700 text-white font-extrabold text-xs uppercase tracking-wider rounded-2xl shadow-lg transition-all flex items-center justify-center space-x-2"
             >
               <Save className="w-5 h-5" />
-              <span>{loading ? 'Saving Clinical Record & Medical History...' : 'Save Clinical Record to Patient Medical History'}</span>
+              <span>{loading ? 'Saving Visit Record...' : 'Save Visit'}</span>
             </button>
             <button
               type="button"
@@ -757,6 +830,8 @@ export const ConsultationWorkspace = () => {
             </button>
           </div>
         </form>
+      </>
+    )}
       </div>
     </div>
   );

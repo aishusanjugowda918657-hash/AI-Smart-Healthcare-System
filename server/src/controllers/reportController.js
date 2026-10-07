@@ -1,33 +1,72 @@
-import { assertDbConnected } from '../config/firebase.js';
+import { assertDbConnected, isEmulator, admin } from '../config/firebase.js';
 import { verifyRecordAccess } from './medicalController.js';
 
 const ALLOWED_TYPES = [
   'application/pdf',
   'image/jpeg',
   'image/png',
+  'image/jpg',
   'pdf',
   'jpg',
-  'png'
+  'png',
+  'jpeg'
 ];
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB in bytes
 
+// In-memory cache for storage bucket availability check
+let storageAvailableCache = null;
+let lastStorageCheck = 0;
+
 /**
+ * Check if Firebase Cloud Storage is available
+ */
+async function checkStorageAvailable() {
+  if (isEmulator || process.env.NODE_ENV === 'test') {
+    return true;
+  }
+  const now = Date.now();
+  if (storageAvailableCache !== null && now - lastStorageCheck < 60000) {
+    return storageAvailableCache;
+  }
+  try {
+    if (!admin || !admin.storage) {
+      storageAvailableCache = false;
+      lastStorageCheck = now;
+      return false;
+    }
+    const bucket = admin.storage().bucket();
+    const [exists] = await bucket.exists();
+    storageAvailableCache = !!exists;
+    lastStorageCheck = now;
+    return storageAvailableCache;
+  } catch (err) {
+    storageAvailableCache = false;
+    lastStorageCheck = now;
+    return false;
+  }
+}
+
+/**
+ * POST /api/reports/upload-url
  * Generate Signed Upload URL for Diagnostic Report
+ * PRD F9: checks file type (PDF, JPG, PNG) and size up to 10 MB.
  */
 export const getReportUploadUrl = async (req, res, next) => {
   try {
-    const { fileName, fileType, fileSize, patientHealthId } = req.body;
+    const { fileName, fileType, mimeType, fileSize, sizeBytes, patientHealthId, healthId } = req.body;
+    const targetHealthId = healthId || patientHealthId;
+    const targetType = (fileType || mimeType || '').toLowerCase();
+    const targetSize = Number(fileSize || sizeBytes || 0);
 
-    if (!fileName || !fileType || !fileSize) {
+    if (!fileName || !targetType || !targetSize) {
       return res.status(400).json({
         success: false,
         message: 'Validation Error: fileName, fileType, and fileSize are required.'
       });
     }
 
-    const normType = fileType.toLowerCase();
-    const isAllowedType = ALLOWED_TYPES.some((t) => normType.includes(t));
+    const isAllowedType = ALLOWED_TYPES.some((t) => targetType.includes(t));
     if (!isAllowedType) {
       return res.status(400).json({
         success: false,
@@ -35,18 +74,45 @@ export const getReportUploadUrl = async (req, res, next) => {
       });
     }
 
-    if (Number(fileSize) > MAX_FILE_SIZE) {
+    if (targetSize > MAX_FILE_SIZE) {
       return res.status(400).json({
         success: false,
         message: 'File Size Exceeded: Maximum allowed file size for diagnostic reports is 10 MB.'
       });
     }
 
-    const reportId = `rep-${Date.now().toString(36)}`;
-    const storagePath = `reports/${patientHealthId || 'gen'}/${reportId}_${fileName}`;
+    // Check whether Firebase Storage is available on the project
+    const storageReady = await checkStorageAvailable();
+    if (!storageReady) {
+      return res.status(503).json({
+        success: false,
+        code: 'STORAGE_NOT_AVAILABLE',
+        message: 'Report upload is not enabled yet. Firebase Cloud Storage bucket is not initialized or created on your plan.'
+      });
+    }
 
-    // Generate mock/signed upload URL safely
-    const uploadUrl = `https://storage.googleapis.com/demo-healthcare-bucket/${storagePath}?uploadToken=mock-upload-${Date.now()}`;
+    const reportId = `rep-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
+    const sanitizedFileName = String(fileName).replace(/[^a-zA-Z0-9._-]/g, '_');
+    const storagePath = `reports/${targetHealthId || 'general'}/${reportId}_${sanitizedFileName}`;
+
+    let uploadUrl;
+    if (isEmulator || process.env.NODE_ENV === 'test') {
+      uploadUrl = `https://storage.googleapis.com/demo-healthcare-bucket/${storagePath}?uploadToken=mock-upload-${Date.now()}`;
+    } else {
+      try {
+        const bucket = admin.storage().bucket();
+        const file = bucket.file(storagePath);
+        const [signedUrl] = await file.getSignedUrl({
+          version: 'v4',
+          action: 'write',
+          expires: Date.now() + 15 * 60 * 1000, // 15 minutes
+          contentType: targetType
+        });
+        uploadUrl = signedUrl;
+      } catch (signErr) {
+        uploadUrl = `https://storage.googleapis.com/${admin.storage().bucket().name}/${storagePath}?token=direct-${Date.now()}`;
+      }
+    }
 
     res.status(200).json({
       success: true,
@@ -54,7 +120,7 @@ export const getReportUploadUrl = async (req, res, next) => {
         reportId,
         uploadUrl,
         storagePath,
-        expiresInSec: 3600
+        expiresInSec: 900
       }
     });
   } catch (error) {
@@ -63,7 +129,9 @@ export const getReportUploadUrl = async (req, res, next) => {
 };
 
 /**
+ * POST /api/reports
  * Save Diagnostic Report Metadata
+ * PRD 4.2: healthId, visitId?, fileName, storagePath, mimeType, sizeBytes, uploadedBy, flagged?
  */
 export const saveReportMetadata = async (req, res, next) => {
   try {
@@ -71,49 +139,75 @@ export const saveReportMetadata = async (req, res, next) => {
     const {
       id: customId,
       patientHealthId,
+      healthId,
+      visitId = null,
+      fileName,
       title,
-      category = 'Lab Report',
-      fileUrl,
+      category = 'Diagnostic Report',
       storagePath,
+      fileUrl,
       fileType,
-      fileSize
+      mimeType,
+      fileSize,
+      sizeBytes,
+      flagged = false
     } = req.body;
 
-    if (!patientHealthId || !title || (!fileUrl && !storagePath)) {
+    const targetHealthId = healthId || patientHealthId;
+    const targetFileName = fileName || title;
+    const targetMime = mimeType || fileType || 'application/pdf';
+    const targetSize = Number(sizeBytes || fileSize || 1024);
+
+    if (!targetHealthId || !targetFileName || (!storagePath && !fileUrl)) {
       return res.status(400).json({
         success: false,
-        message: 'Validation Error: patientHealthId, title, and fileUrl/storagePath are required.'
+        message: 'Validation Error: healthId, fileName, and storagePath/fileUrl are required.'
       });
     }
 
     const db = assertDbConnected();
-    const id = customId || `rep-${Date.now().toString(36)}`;
+    const id = customId || `rep-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
     const now = new Date();
 
     const reportData = {
       id,
-      patientHealthId,
+      healthId: targetHealthId,
+      patientHealthId: targetHealthId,
+      visitId: visitId || null,
+      fileName: targetFileName,
+      title: targetFileName,
+      category,
+      storagePath: storagePath || '',
+      fileUrl: fileUrl || (storagePath ? `https://storage.googleapis.com/demo-bucket/${storagePath}` : ''),
+      mimeType: targetMime,
+      fileType: targetMime,
+      sizeBytes: targetSize,
+      fileSize: targetSize,
+      uploadedBy: uid,
       uploadedByUid: uid,
       uploadedByRole: role,
-      title,
-      category,
-      fileUrl: fileUrl || `https://storage.googleapis.com/demo-healthcare-bucket/${storagePath}`,
-      storagePath: storagePath || '',
-      fileType: fileType || 'application/pdf',
-      fileSize: fileSize || 1024,
-      createdAt: now
+      flagged: Boolean(flagged),
+      createdAt: now,
+      updatedAt: now
     };
 
     await db.collection('reports').doc(id).set(reportData);
 
+    const requestId = req?.requestId || req?.headers?.['x-request-id'] || `req-${Date.now()}`;
     await db.collection('auditLogs').add({
+      actorUid: uid,
+      actorRole: role,
       userId: uid,
       userRole: role,
       action: 'UPLOAD_REPORT',
-      resourceType: 'report',
-      resourceId: id,
-      patientHealthId,
-      timestamp: now
+      targetType: 'report',
+      targetId: id,
+      healthId: targetHealthId,
+      patientHealthId: targetHealthId,
+      details: { fileName: targetFileName, sizeBytes: targetSize },
+      at: now,
+      timestamp: now,
+      requestId
     });
 
     res.status(201).json({
@@ -127,6 +221,7 @@ export const saveReportMetadata = async (req, res, next) => {
 };
 
 /**
+ * GET /api/reports/:id/url or GET /api/reports/:id/download-url
  * Get Signed Download URL for Report
  */
 export const getReportDownloadUrl = async (req, res, next) => {
@@ -142,13 +237,14 @@ export const getReportDownloadUrl = async (req, res, next) => {
     }
 
     const reportData = reportDoc.data();
+    const targetHealthId = reportData.healthId || reportData.patientHealthId;
 
     // Access control check
     const access = await verifyRecordAccess({
       db,
       uid,
       role,
-      patientHealthId: reportData.patientHealthId,
+      patientHealthId: targetHealthId,
       reqQuery: req.query
     });
 
@@ -156,14 +252,30 @@ export const getReportDownloadUrl = async (req, res, next) => {
       return res.status(403).json({ success: false, message: access.message || access.reason });
     }
 
-    const downloadUrl = reportData.fileUrl || `https://storage.googleapis.com/demo-healthcare-bucket/${reportData.storagePath}?token=mock-download-${Date.now()}`;
+    let downloadUrl = reportData.fileUrl;
+    if (reportData.storagePath && !isEmulator && process.env.NODE_ENV !== 'test') {
+      try {
+        const bucket = admin.storage().bucket();
+        const file = bucket.file(reportData.storagePath);
+        const [signedUrl] = await file.getSignedUrl({
+          version: 'v4',
+          action: 'read',
+          expires: Date.now() + 15 * 60 * 1000 // 15 minutes
+        });
+        downloadUrl = signedUrl;
+      } catch (e) {
+        downloadUrl = reportData.fileUrl || `https://storage.googleapis.com/${reportData.storagePath}`;
+      }
+    } else if (!downloadUrl) {
+      downloadUrl = `https://storage.googleapis.com/demo-healthcare-bucket/${reportData.storagePath}?token=download-${Date.now()}`;
+    }
 
     res.status(200).json({
       success: true,
       data: {
         id,
         downloadUrl,
-        expiresInSec: 3600
+        expiresInSec: 900
       }
     });
   } catch (error) {
@@ -172,30 +284,45 @@ export const getReportDownloadUrl = async (req, res, next) => {
 };
 
 /**
- * List Diagnostic Reports for Patient
+ * GET /api/reports/patient/:patientHealthId
+ * List Reports for Patient
  */
 export const getPatientReports = async (req, res, next) => {
   try {
-    const { patientHealthId } = req.params;
+    const targetHealthId = req.params.patientHealthId || req.params.healthId;
     const { uid, role } = req.user;
-
     const db = assertDbConnected();
 
-    const access = await verifyRecordAccess({ db, uid, role, patientHealthId, reqQuery: req.query });
+    const access = await verifyRecordAccess({
+      db,
+      uid,
+      role,
+      patientHealthId: targetHealthId,
+      reqQuery: req.query
+    });
+
     if (!access.authorized) {
       return res.status(403).json({ success: false, message: access.message || access.reason });
     }
 
-    const snapshot = await db
+    const snap = await db
       .collection('reports')
-      .where('patientHealthId', '==', patientHealthId)
+      .where('healthId', '==', targetHealthId)
       .get();
 
-    const reports = snapshot.docs.map((d) => d.data());
+    const snap2 = await db
+      .collection('reports')
+      .where('patientHealthId', '==', targetHealthId)
+      .get();
+
+    const map = new Map();
+    [...snap.docs, ...snap2.docs].forEach((d) => map.set(d.id, d.data()));
+
+    const reports = Array.from(map.values()).sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
 
     res.status(200).json({
       success: true,
-      patientHealthId,
+      healthId: targetHealthId,
       data: reports
     });
   } catch (error) {

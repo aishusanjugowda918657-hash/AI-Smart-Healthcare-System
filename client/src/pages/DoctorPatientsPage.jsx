@@ -70,30 +70,15 @@ export const DoctorPatientsPage = () => {
     }
   };
 
-  const handleOpenPatient = async (patient) => {
+  const handleOpenPatient = (patient) => {
     setAccessError(null);
     const healthId = patient.healthId || patient.patientHealthId;
-
-    try {
-      // Access check: appointment in last 90 days or active share
-      const checkRes = await API.get(`/doctor/patients/${healthId}/access-check`);
-      if (checkRes.data?.success && checkRes.data.data?.hasAccess) {
-        navigate(`/patient-history`, {
-          state: {
-            patientHealthId: healthId,
-            patientName: patient.name || patient.fullName
-          }
-        });
-      } else {
-        setAccessError(
-          checkRes.data?.data?.message || t('noAccessHistory') || 'No access. Ask the patient to share their history'
-        );
+    navigate(`/patient-history`, {
+      state: {
+        patientHealthId: healthId,
+        patientName: patient.name || patient.fullName
       }
-    } catch (err) {
-      setAccessError(
-        err.response?.data?.message || t('noAccessHistory') || 'No access. Ask the patient to share their history'
-      );
-    }
+    });
   };
 
   return (
