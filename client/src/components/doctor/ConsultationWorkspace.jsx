@@ -22,6 +22,7 @@ import {
 import API from '../../services/api';
 import PatientLookup from './PatientLookup';
 import PatientHistoryTimelinePage from '../../pages/PatientHistoryTimelinePage';
+import DigitalPrescriptionForm from './DigitalPrescriptionForm';
 
 export const ConsultationWorkspace = () => {
   const { appointmentId: paramAppointmentId } = useParams();
@@ -402,7 +403,7 @@ export const ConsultationWorkspace = () => {
         )}
 
 
-        {/* Workspace Tab Switcher: Visit vs Medical History */}
+        {/* Workspace Tab Switcher: Visit vs Prescription vs Medical History */}
         <div className="bg-white rounded-2xl border border-slate-200 p-1 flex space-x-1 shadow-xs">
           <button
             type="button"
@@ -415,6 +416,18 @@ export const ConsultationWorkspace = () => {
           >
             <Stethoscope className="w-4 h-4" />
             <span>Visit</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setWorkspaceTab('prescription')}
+            className={`flex-1 py-2.5 px-4 rounded-xl text-xs font-bold transition flex items-center justify-center space-x-2 ${
+              workspaceTab === 'prescription'
+                ? 'bg-teal-600 text-white shadow-xs'
+                : 'text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            <Pill className="w-4 h-4" />
+            <span>Prescription</span>
           </button>
           <button
             type="button"
@@ -434,6 +447,18 @@ export const ConsultationWorkspace = () => {
           <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm">
             <PatientHistoryTimelinePage defaultHealthId={patientHealthId} embedded={true} />
           </div>
+        ) : workspaceTab === 'prescription' ? (
+          <DigitalPrescriptionForm
+            initialPatientHealthId={patientHealthId}
+            appointmentId={appointmentId}
+            medicalRecordId={recordId}
+            onSaved={(rx) => {
+              setMessage({
+                type: 'success',
+                text: `Prescription ${rx.prescriptionId} issued and digitally signed successfully!`
+              });
+            }}
+          />
         ) : (
           <>
             {/* PATIENT LOOKUP AGENT — Sit alongside (not inside) the clinical form */}

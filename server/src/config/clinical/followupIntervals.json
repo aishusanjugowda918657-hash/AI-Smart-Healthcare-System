@@ -1,5 +1,5 @@
 {
-  "_notice": "Clinical Follow-up Interval Recommendation Dataset (PRD F9)",
+  "_notice": "Small sample reference data: a doctor or pharmacist must review before real use. Do not claim they are complete.",
   "intervals": [
     {
       "category": "acute_infection",

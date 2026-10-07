@@ -132,8 +132,31 @@ app.use('/api/appointments', appointmentRoutes);
 app.use('/api/tokens', tokenRoutes);
 app.use('/api/medical-records', medicalRoutes);
 app.use('/api/prescriptions', prescriptionRoutes);
+app.use('/prescriptions', prescriptionRoutes);
+app.use('/api/medicines', prescriptionRoutes);
+app.use('/medicines', prescriptionRoutes);
+app.use('/api/verify', prescriptionRoutes);
+app.use('/verify', prescriptionRoutes);
 app.use('/api/reminders', reminderRoutes);
+app.use('/reminders', reminderRoutes);
 app.use('/api/followups', followupRoutes);
+app.use('/followups', followupRoutes);
+
+import {
+  getDoctorAlerts,
+  resolveDoctorAlert,
+  snoozeDoctorAlert,
+  sendPatientReminderAlert
+} from './controllers/doctorController.js';
+
+app.get('/api/alerts', requireAuth, requireRole('doctor', 'admin', 'nurse'), getDoctorAlerts);
+app.get('/alerts', requireAuth, requireRole('doctor', 'admin', 'nurse'), getDoctorAlerts);
+app.post('/api/alerts/:id/resolve', requireAuth, requireRole('doctor', 'admin'), resolveDoctorAlert);
+app.post('/alerts/:id/resolve', requireAuth, requireRole('doctor', 'admin'), resolveDoctorAlert);
+app.post('/api/alerts/:id/snooze', requireAuth, requireRole('doctor', 'admin'), snoozeDoctorAlert);
+app.post('/alerts/:id/snooze', requireAuth, requireRole('doctor', 'admin'), snoozeDoctorAlert);
+app.post('/api/alerts/:id/send-reminder', requireAuth, requireRole('doctor', 'admin'), sendPatientReminderAlert);
+app.post('/alerts/:id/send-reminder', requireAuth, requireRole('doctor', 'admin'), sendPatientReminderAlert);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/admin', adminRoutes);

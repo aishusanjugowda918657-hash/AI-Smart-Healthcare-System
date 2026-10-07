@@ -1,5 +1,31 @@
 {
-  "_notice": "Clinical Dose Limits & Threshold Dataset (PRD F9)",
+  "_notice": "Small sample reference data: a doctor or pharmacist must review before real use. Do not claim they are complete.",
+  "pediatricLimits": [
+    {
+      "medicine": "Paracetamol",
+      "maxSingleMgPerKg": 15,
+      "maxDailyMgPerKg": 60,
+      "maxChildSingleDoseMg": 500,
+      "maxChildDailyDoseMg": 2000,
+      "warning": "Pediatric Paracetamol exceeds weight-based safe threshold (15 mg/kg single or 60 mg/kg daily)."
+    },
+    {
+      "medicine": "Amoxicillin",
+      "maxSingleMgPerKg": 25,
+      "maxDailyMgPerKg": 50,
+      "maxChildSingleDoseMg": 500,
+      "maxChildDailyDoseMg": 1500,
+      "warning": "Pediatric Amoxicillin dose exceeds recommended weight-based ceiling (50 mg/kg/day)."
+    },
+    {
+      "medicine": "Ibuprofen",
+      "maxSingleMgPerKg": 10,
+      "maxDailyMgPerKg": 30,
+      "maxChildSingleDoseMg": 400,
+      "maxChildDailyDoseMg": 1200,
+      "warning": "Pediatric Ibuprofen dose exceeds recommended pediatric weight-based limit (30 mg/kg/day)."
+    }
+  ],
   "doseLimits": [
     {
       "medicine": "Paracetamol",

@@ -87,7 +87,19 @@ export const translations = {
     markRestricted: "Mark Restricted",
     saveVisit: "Save Visit",
     visitTab: "Visit",
-    historyTab: "Medical History"
+    historyTab: "Medical History",
+    rx_prescriptionTab: "Prescription",
+    rx_digitalPrescription: "Digital Prescription",
+    rx_medications: "Medications",
+    rx_addMedication: "Add Medication",
+    rx_dosage: "Dosage",
+    rx_frequency: "Frequency",
+    rx_duration: "Duration",
+    rx_saveAndSign: "Issue & Sign Prescription",
+    rx_safetyCheckPassed: "Clinical Safety Check Passed",
+    rx_criticalWarning: "Critical Safety Warning",
+    rx_showToPharmacy: "Show to Pharmacy",
+    rx_dispensed: "Dispensed"
   },
   hi: {
     appName: "एआई स्मार्ट हेल्थकेयर",
@@ -177,7 +189,19 @@ export const translations = {
     markRestricted: "प्रतिबंधित चिह्नित करें",
     saveVisit: "विजिट सहेजें",
     visitTab: "विजिट",
-    historyTab: "चिकित्सा इतिहास"
+    historyTab: "चिकित्सा इतिहास",
+    rx_prescriptionTab: "पर्चा",
+    rx_digitalPrescription: "डिजिटल पर्चा",
+    rx_medications: "दवाइयां",
+    rx_addMedication: "दवा जोड़ें",
+    rx_dosage: "खुराक",
+    rx_frequency: "आवृत्ति",
+    rx_duration: "अवधि",
+    rx_saveAndSign: "पर्चा जारी व हस्ताक्षर करें",
+    rx_safetyCheckPassed: "क्लिनिकल सुरक्षा जांच सफल",
+    rx_criticalWarning: "गंभीर सुरक्षा चेतावनी",
+    rx_showToPharmacy: "फार्मेसी को दिखाएं",
+    rx_dispensed: "वितरित"
   },
   kn: {
     appName: "ಎಐ ಸ್ಮಾರ್ಟ್ ಹೆಲ್ತ್‌ಕೇರ್",
@@ -267,7 +291,19 @@ export const translations = {
     markRestricted: "ನಿರ್ಬಂಧಿಸಲಾಗಿದೆ ಎಂದು ಗುರುತಿಸಿ",
     saveVisit: "ಭೇಟಿ ಉಳಿಸಿ",
     visitTab: "ಭೇಟಿ",
-    historyTab: "ವೈದ್ಯಕೀಯ ಇತಿಹಾಸ"
+    historyTab: "ವೈದ್ಯಕೀಯ ಇತಿಹಾಸ",
+    rx_prescriptionTab: "ಪ್ರಿಸ್ಕ್ರಿಪ್ಷನ್",
+    rx_digitalPrescription: "ಡಿಜಿಟಲ್ ಪ್ರಿಸ್ಕ್ರಿಪ್ಷನ್",
+    rx_medications: "ಔಷಧಿಗಳು",
+    rx_addMedication: "ಔಷಧಿ ಸೇರಿಸಿ",
+    rx_dosage: "ಡೋಸೇಜ್",
+    rx_frequency: "ಆವರ್ತನ",
+    rx_duration: "ಅವಧಿ",
+    rx_saveAndSign: "ಪ್ರಿಸ್ಕ್ರಿಪ್ಷನ್ ನೀಡಿ ಮತ್ತು ಸಹಿ ಮಾಡಿ",
+    rx_safetyCheckPassed: "ಕ್ಲಿನಿಕಲ್ ಸುರಕ್ಷತಾ ತಪಾಸಣೆ ಪೂರ್ಣಗೊಂಡಿದೆ",
+    rx_criticalWarning: "ನಿರ್ಣಾಯಕ ಸುರಕ್ಷತಾ ಎಚ್ಚರಿಕೆ",
+    rx_showToPharmacy: "ಫಾರ್ಮಸಿಗೆ ತೋರಿಸಿ",
+    rx_dispensed: "ವಿತರಿಸಲಾಗಿದೆ"
   },
   ta: {
     appName: "ஏஐ ஸ்மார்ட் ஹெல்த்கேர்",
@@ -357,6 +393,18 @@ export const translations = {
     markRestricted: "வரம்பிடப்பட்டதாகக் குறிக்கவும்",
     saveVisit: "பார்வையைச் சேமிக்கவும்",
     visitTab: "பார்வை",
-    historyTab: "மருத்துவ வரலாறு"
+    historyTab: "மருத்துவ வரலாறு",
+    rx_prescriptionTab: "மருந்துச்சீட்டு",
+    rx_digitalPrescription: "டிஜிட்டல் மருந்துச்சீட்டு",
+    rx_medications: "மருந்துகள்",
+    rx_addMedication: "மருந்து சேர்",
+    rx_dosage: "அளவு",
+    rx_frequency: "அதிர்வெண்",
+    rx_duration: "கால அளவு",
+    rx_saveAndSign: "மருந்துச்சீட்டை வழங்கி கையொப்பமிடவும்",
+    rx_safetyCheckPassed: "மருத்துவ பாதுகாப்பு சோதனை முடிந்தது",
+    rx_criticalWarning: "முக்கிய பாதுகாப்பு எச்சரிக்கை",
+    rx_showToPharmacy: "மருந்தகத்தில் காட்டவும்",
+    rx_dispensed: "வழங்கப்பட்டது"
   }
 };

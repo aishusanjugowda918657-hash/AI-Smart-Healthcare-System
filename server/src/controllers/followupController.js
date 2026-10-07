@@ -2,18 +2,22 @@ import { assertDbConnected } from '../config/firebase.js';
 
 /**
  * Schedule a Patient Follow-up Checkup (Doctor/Admin only)
+ * PRD F12: importance 'serious' for chronic or high-risk conditions
  */
 export const createFollowUp = async (req, res, next) => {
   try {
-    const { uid: doctorUid, role } = req.user;
+    const { uid: doctorUid, role, displayName: docName } = req.user;
     const {
       patientUid,
       patientHealthId,
+      patientName = 'Patient',
       appointmentId,
       scheduledDate,
       dueDate,
       notes = 'Routine checkup follow-up',
-      isSerious = false
+      reason,
+      isSerious = false,
+      importance
     } = req.body;
 
     const targetDate = scheduledDate || dueDate;
@@ -42,36 +46,45 @@ export const createFollowUp = async (req, res, next) => {
     const followUpId = `FLW-2026-${paddedSeq}`;
     const id = `flw-${Date.now().toString(36)}`;
     const now = new Date();
+    const finalImportance = importance || (isSerious ? 'serious' : 'routine');
 
     const followUpData = {
       id,
       followUpId,
-      patientUid: patientUid || 'demo-patient-001',
+      healthId: patientHealthId,
       patientHealthId,
+      patientUid: patientUid || '',
+      patientName,
+      doctorId: doctorUid,
       doctorUid,
+      doctorName: docName || 'Doctor',
       appointmentId: appointmentId || '',
       scheduledDate: targetDate,
       dueDate: targetDate,
-      notes,
-      isSerious: Boolean(isSerious),
+      reason: reason || notes,
+      notes: reason || notes,
+      importance: finalImportance,
+      isSerious: finalImportance === 'serious',
+      source: 'doctor',
       snoozeCount: 0,
-      overdueNoticeCount: 0,
+      reminderCount: 0,
       status: 'scheduled',
-      doctorNotified: false,
-      createdAt: now,
-      updatedAt: now
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString()
     };
 
+    // Save in canonical 'followups' and mirror in legacy 'followUps'
+    await db.collection('followups').doc(id).set(followUpData);
     await db.collection('followUps').doc(id).set(followUpData);
 
     await db.collection('auditLogs').add({
       userId: doctorUid,
       userRole: role,
       action: 'SCHEDULE_FOLLOWUP',
-      resourceType: 'followUp',
+      resourceType: 'followup',
       resourceId: followUpId,
       patientHealthId,
-      timestamp: now
+      timestamp: now.toISOString()
     });
 
     res.status(201).json({
@@ -85,24 +98,31 @@ export const createFollowUp = async (req, res, next) => {
 };
 
 /**
- * Handle Follow-up Actions (Book Now, Remind Me Later, Not Needed)
+ * Handle Follow-up Actions (Book Now, Remind Me Later, Not Needed, Mark Done)
+ * PRD F12: PATCH /followups/:id ('book', 'later', 'not_needed', 'done')
  */
 export const handleFollowUpAction = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { action } = req.body;
+    const { action, appointmentId, reason } = req.body;
     const { uid, role } = req.user;
 
     const db = assertDbConnected();
-    const flwRef = db.collection('followUps').doc(id);
+    let flwRef = db.collection('followups').doc(id);
     let flwDoc = await flwRef.get();
 
     let targetId = id;
     if (!flwDoc.exists) {
-      const snap = await db.collection('followUps').where('followUpId', '==', id).limit(1).get();
-      if (!snap.empty) {
-        flwDoc = snap.docs[0];
-        targetId = flwDoc.id;
+      flwRef = db.collection('followUps').doc(id);
+      flwDoc = await flwRef.get();
+
+      if (!flwDoc.exists) {
+        const snap = await db.collection('followups').where('followUpId', '==', id).limit(1).get();
+        if (!snap.empty) {
+          flwDoc = snap.docs[0];
+          targetId = flwDoc.id;
+          flwRef = db.collection('followups').doc(targetId);
+        }
       }
     }
 
@@ -113,9 +133,26 @@ export const handleFollowUpAction = async (req, res, next) => {
     const flwData = flwDoc.data();
     const now = new Date();
 
-    // 1. Action: Book Now -> Generate Deep Link
-    if (action === 'book_now') {
-      const deepLink = `/book-appointment?doctorId=${flwData.doctorUid}&patientHealthId=${flwData.patientHealthId}&followupId=${flwData.followUpId || targetId}`;
+    // 1. Action: Book Now -> Generate Deep Link & mark booked if appointmentId given
+    if (action === 'book_now' || action === 'book') {
+      if (appointmentId) {
+        const updatePayload = {
+          status: 'booked',
+          bookedAppointmentId: appointmentId,
+          updatedAt: now.toISOString()
+        };
+        await flwRef.update(updatePayload);
+        try { await db.collection('followUps').doc(targetId).update(updatePayload); } catch {}
+        return res.status(200).json({
+          success: true,
+          action: 'book',
+          status: 'booked',
+          bookedAppointmentId: appointmentId,
+          message: 'Follow-up linked to booked appointment.'
+        });
+      }
+
+      const deepLink = `/book-appointment?doctorId=${flwData.doctorId || flwData.doctorUid}&patientHealthId=${flwData.healthId || flwData.patientHealthId}&followupId=${flwData.followUpId || targetId}`;
       return res.status(200).json({
         success: true,
         action: 'book_now',
@@ -124,8 +161,8 @@ export const handleFollowUpAction = async (req, res, next) => {
       });
     }
 
-    // 2. Action: Remind Me Later -> Snooze (+3 days, max 2 snoozes)
-    if (action === 'remind_later') {
+    // 2. Action: Remind Me Later (+1 day, maximum 2 times)
+    if (action === 'remind_later' || action === 'later') {
       const currentSnoozeCount = Number(flwData.snoozeCount) || 0;
       if (currentSnoozeCount >= 2) {
         return res.status(400).json({
@@ -135,56 +172,131 @@ export const handleFollowUpAction = async (req, res, next) => {
         });
       }
 
-      const newDueDate = new Date(flwData.dueDate || flwData.scheduledDate);
-      newDueDate.setDate(newDueDate.getDate() + 3);
+      const currentDue = new Date(flwData.dueDate || flwData.scheduledDate);
+      const newDueDate = new Date(currentDue);
+      newDueDate.setDate(newDueDate.getDate() + 1);
+      const newDueDateStr = newDueDate.toISOString().split('T')[0];
 
-      await db.collection('followUps').doc(targetId).update({
-        dueDate: newDueDate.toISOString().split('T')[0],
+      const updatePayload = {
+        dueDate: newDueDateStr,
+        scheduledDate: newDueDateStr,
         snoozeCount: currentSnoozeCount + 1,
-        updatedAt: now
-      });
+        status: 'scheduled',
+        updatedAt: now.toISOString()
+      };
+
+      await flwRef.update(updatePayload);
+      try { await db.collection('followUps').doc(targetId).update(updatePayload); } catch {}
 
       return res.status(200).json({
         success: true,
         action: 'remind_later',
         snoozeCount: currentSnoozeCount + 1,
-        newDueDate: newDueDate.toISOString().split('T')[0],
-        message: `Follow-up reminder snoozed by 3 days until ${newDueDate.toISOString().split('T')[0]}.`
+        newDueDate: newDueDateStr,
+        message: `Follow-up reminder snoozed by 1 day until ${newDueDateStr}.`
       });
     }
 
-    // 3. Action: Not Needed -> Mark DISMISSED. If serious, raise doctor alert.
+    // 3. Action: Not Needed -> Mark not_needed. If serious, raise doctor alert.
     if (action === 'not_needed') {
-      await db.collection('followUps').doc(targetId).update({
-        status: 'DISMISSED',
+      const updatePayload = {
+        status: 'not_needed',
+        notNeededReason: reason || 'Patient declined',
         dismissedAt: now.toISOString(),
-        updatedAt: now
-      });
+        updatedAt: now.toISOString()
+      };
 
-      if (flwData.isSerious || (flwData.notes && flwData.notes.toLowerCase().includes('cardiac'))) {
-        await db.collection('doctorAlerts').add({
-          id: `alert-${Date.now().toString(36)}`,
-          doctorUid: flwData.doctorUid,
-          patientUid: flwData.patientUid,
-          patientHealthId: flwData.patientHealthId,
-          kind: 'FLAG_PATIENT_DECLINED_FOLLOWUP',
+      await flwRef.update(updatePayload);
+      try { await db.collection('followUps').doc(targetId).update(updatePayload); } catch {}
+
+      const isSerious = flwData.importance === 'serious' || flwData.isSerious;
+      if (isSerious) {
+        const alertId = `alert-declined-${targetId}`;
+        const alertData = {
+          id: alertId,
+          doctorId: flwData.doctorId || flwData.doctorUid,
+          healthId: flwData.healthId || flwData.patientHealthId,
+          patientHealthId: flwData.healthId || flwData.patientHealthId,
+          patientName: flwData.patientName || 'Patient',
+          kind: 'urgent',
           riskLevel: 'high',
-          title: 'Patient Declined Recommended Follow-up',
-          message: `Patient ${flwData.patientHealthId} marked recommended follow-up (${flwData.followUpId}) as "Not Needed".`,
+          reasons: [`Patient marked serious follow-up as Not Needed${reason ? `: ${reason}` : ''}`],
           status: 'open',
-          createdAt: now
-        });
+          createdAt: now.toISOString(),
+          updatedAt: now.toISOString()
+        };
+
+        await db.collection('alerts').doc(alertId).set(alertData);
+        try { await db.collection('doctorAlerts').doc(alertId).set(alertData); } catch {}
       }
 
       return res.status(200).json({
         success: true,
         action: 'not_needed',
         status: 'DISMISSED',
+        data: { id: targetId, status: 'DISMISSED' },
         message: 'Follow-up marked as Not Needed.'
       });
     }
 
-    res.status(400).json({ success: false, message: 'Invalid action. Allowed: [book_now, remind_later, not_needed]' });
+    // 4. Action: Done / Mark Done
+    if (action === 'done' || action === 'mark_done') {
+      const updatePayload = {
+        status: 'done',
+        completedAt: now.toISOString(),
+        updatedAt: now.toISOString()
+      };
+
+      await flwRef.update(updatePayload);
+      try { await db.collection('followUps').doc(targetId).update(updatePayload); } catch {}
+
+      return res.status(200).json({
+        success: true,
+        action: 'done',
+        status: 'done',
+        message: 'Follow-up marked as Done.'
+      });
+    }
+
+    res.status(400).json({
+      success: false,
+      message: 'Invalid action. Allowed: [book_now, remind_later, not_needed, done]'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get followups list (PRD: GET /followups)
+ */
+export const getFollowUpsList = async (req, res, next) => {
+  try {
+    const { uid, role, doctorUid } = req.user;
+    const { status, healthId } = req.query;
+    const db = assertDbConnected();
+
+    let query = db.collection('followups');
+
+    if (role === 'doctor') {
+      query = query.where('doctorId', '==', doctorUid || uid);
+    } else if (healthId) {
+      query = query.where('healthId', '==', healthId);
+    } else {
+      query = query.where('patientUid', '==', uid);
+    }
+
+    const snap = await query.get();
+    let followups = snap.docs.map((d) => d.data());
+
+    if (status) {
+      followups = followups.filter((f) => f.status === status);
+    }
+
+    res.status(200).json({
+      success: true,
+      data: followups
+    });
   } catch (error) {
     next(error);
   }
@@ -195,12 +307,12 @@ export const handleFollowUpAction = async (req, res, next) => {
  */
 export const getDoctorUpcomingFollowUps = async (req, res, next) => {
   try {
-    const { uid: doctorUid } = req.user;
+    const doctorUid = req.user.doctorUid || req.user.uid;
     const db = assertDbConnected();
 
     const snapshot = await db
-      .collection('followUps')
-      .where('doctorUid', '==', doctorUid)
+      .collection('followups')
+      .where('doctorId', '==', doctorUid)
       .where('status', '==', 'scheduled')
       .get();
 
@@ -220,13 +332,21 @@ export const getDoctorUpcomingFollowUps = async (req, res, next) => {
  */
 export const getPatientUpcomingFollowUps = async (req, res, next) => {
   try {
-    const { uid: patientUid } = req.user;
+    const { uid: patientUid, patientHealthId } = req.user;
     const db = assertDbConnected();
 
-    const snapshot = await db
-      .collection('followUps')
-      .where('patientUid', '==', patientUid)
-      .get();
+    let snapshot;
+    if (patientHealthId) {
+      snapshot = await db
+        .collection('followups')
+        .where('healthId', '==', patientHealthId)
+        .get();
+    } else {
+      snapshot = await db
+        .collection('followups')
+        .where('patientUid', '==', patientUid)
+        .get();
+    }
 
     const followUps = snapshot.docs.map((d) => d.data());
 

@@ -61,14 +61,22 @@ function parseDailyFrequency(freqStr) {
 export function evaluatePrescriptionSafety({
   candidateMedicines = [],
   existingMedicines = [],
-  patientAllergies = []
+  patientAllergies = [],
+  patientAge = null,
+  patientWeightKg = null,
+  patientConditions = [],
+  patientFlags = {}
 }) {
   const alerts = [];
   const normalizedAllergies = (patientAllergies || []).map(normalizeName);
+  const normalizedConditions = (patientConditions || []).map((c) =>
+    typeof c === 'string' ? normalizeName(c) : normalizeName(c.name || '')
+  );
 
   const masterMeds = medicinesConfig.medicines || [];
   const interactionRules = interactionsConfig.interactions || [];
   const doseLimits = doseRangesConfig.doseLimits || [];
+  const pediatricLimits = doseRangesConfig.pediatricLimits || [];
 
   // Helper to get master metadata for a medicine name
   const findMasterMed = (medName) => {
@@ -81,10 +89,7 @@ export function evaluatePrescriptionSafety({
     );
   };
 
-  // Combine candidates and existing for interaction & duplicate checks
-  const allProposedNames = candidateMedicines.map((m) => typeof m === 'string' ? m : m.name || '');
-
-  // 1. ALLERGY CHECK
+  // 1. ALLERGY CHECK (severe - red)
   for (const candidate of candidateMedicines) {
     const medName = typeof candidate === 'string' ? candidate : candidate.name;
     if (!medName) continue;
@@ -103,28 +108,20 @@ export function evaluatePrescriptionSafety({
     );
 
     if (matchedAllergy) {
-      const isSevereAllergy =
-        matchedAllergy.includes('penicillin') ||
-        matchedAllergy.includes('anaphylaxis') ||
-        matchedAllergy.includes('severe') ||
-        normName.includes('penicillin') ||
-        normName.includes('amoxicillin');
-
-      const alertSeverity = isSevereAllergy ? 'red' : 'amber';
       alerts.push({
         type: 'allergy',
-        severity: alertSeverity,
+        severity: 'red',
         medicine: medName,
-        details: `Patient has documented allergy to "${matchedAllergy}" which triggers reaction for "${medName}".`,
+        details: `Patient has documented allergy to "${matchedAllergy}" which matches "${medName}".`,
         recommendation: 'Select an alternative drug class not cross-reactive with patient allergy profile.'
       });
     }
   }
 
-  // 2. DRUG-DRUG INTERACTION CHECK
+  // 3. DRUG-DRUG INTERACTION CHECK (severe or moderate)
   const combinedMedicines = [
-    ...candidateMedicines.map((m) => ({ ...m, source: 'candidate' })),
-    ...existingMedicines.map((m) => ({ ...m, source: 'existing' }))
+    ...candidateMedicines.map((m) => (typeof m === 'string' ? { name: m, source: 'candidate' } : { ...m, source: 'candidate' })),
+    ...existingMedicines.map((m) => (typeof m === 'string' ? { name: m, source: 'existing' } : { ...m, source: 'existing' }))
   ];
 
   for (let i = 0; i < combinedMedicines.length; i++) {
@@ -142,7 +139,6 @@ export function evaluatePrescriptionSafety({
       const activeA = masterA ? normalizeName(masterA.activeIngredient) : normA;
       const activeB = masterB ? normalizeName(masterB.activeIngredient) : normB;
 
-      // Match rules
       const rule = interactionRules.find((r) => {
         const rA = normalizeName(r.drugA);
         const rB = normalizeName(r.drugB);
@@ -166,12 +162,15 @@ export function evaluatePrescriptionSafety({
     }
   }
 
-  // 3. DOSE LIMIT CHECK
+  // 4. DOSE LIMIT & PEDIATRIC RANGE CHECK
+  const isChild = (patientAge !== null && Number(patientAge) < 18) || (patientWeightKg !== null && Number(patientWeightKg) < 40);
+  const numericWeight = patientWeightKg ? parseFloat(patientWeightKg) : null;
+
   for (const candidate of candidateMedicines) {
     if (typeof candidate === 'string') continue;
     const medName = candidate.name;
-    const dosageStr = candidate.dosage;
-    const freqStr = candidate.frequency;
+    const dosageStr = candidate.dosage || candidate.dose;
+    const freqStr = candidate.frequency || candidate.frequencyCode;
 
     if (!medName || !dosageStr) continue;
 
@@ -182,6 +181,40 @@ export function evaluatePrescriptionSafety({
     const master = findMasterMed(medName);
     const activeName = master ? master.activeIngredient : medName;
 
+    // Pediatric Dose Range Check
+    if (isChild) {
+      const pedRule = pediatricLimits.find(
+        (l) => normalizeName(l.medicine) === normalizeName(medName) || normalizeName(l.medicine) === normalizeName(activeName)
+      );
+
+      if (pedRule) {
+        let childExceeded = false;
+        let reason = '';
+
+        if (numericWeight && pedRule.maxSingleMgPerKg && singleDoseMg > pedRule.maxSingleMgPerKg * numericWeight) {
+          childExceeded = true;
+          reason = `Single dose (${singleDoseMg} mg) exceeds pediatric ceiling of ${pedRule.maxSingleMgPerKg * numericWeight} mg (${pedRule.maxSingleMgPerKg} mg/kg for ${numericWeight} kg).`;
+        } else if (numericWeight && pedRule.maxDailyMgPerKg && dailyDoseMg > pedRule.maxDailyMgPerKg * numericWeight) {
+          childExceeded = true;
+          reason = `Daily dose (${dailyDoseMg} mg/day) exceeds pediatric ceiling of ${pedRule.maxDailyMgPerKg * numericWeight} mg/day (${pedRule.maxDailyMgPerKg} mg/kg/day).`;
+        } else if (pedRule.maxChildSingleDoseMg && singleDoseMg > pedRule.maxChildSingleDoseMg) {
+          childExceeded = true;
+          reason = `Single dose (${singleDoseMg} mg) exceeds pediatric safe maximum of ${pedRule.maxChildSingleDoseMg} mg.`;
+        }
+
+        if (childExceeded) {
+          alerts.push({
+            type: 'dose',
+            severity: 'amber',
+            medicine: medName,
+            details: `Pediatric Dose Warning: ${reason} ${pedRule.warning || ''}`,
+            recommendation: 'Adjust dosage according to child age and weight guidelines.'
+          });
+        }
+      }
+    }
+
+    // Adult Maximum Dose Check
     const limitRule = doseLimits.find(
       (l) => normalizeName(l.medicine) === normalizeName(medName) || normalizeName(l.medicine) === normalizeName(activeName)
     );
@@ -200,7 +233,7 @@ export function evaluatePrescriptionSafety({
     }
   }
 
-  // 4. DUPLICATE THERAPY CHECK
+  // 5. DUPLICATE THERAPY CHECK (moderate - amber)
   const seenNormals = new Map();
   for (const item of combinedMedicines) {
     const medName = item.name;
@@ -214,7 +247,7 @@ export function evaluatePrescriptionSafety({
         type: 'duplicate',
         severity: 'amber',
         medicine: medName,
-        details: `Duplicate therapy detected: "${medName}" contains same active ingredient (${key}) as another prescribed item.`,
+        details: `Duplicate generic therapy detected: "${medName}" contains same active ingredient (${key}) as another prescribed item.`,
         recommendation: 'Review active drug list to avoid redundant dual therapy.'
       });
     } else {
@@ -222,7 +255,46 @@ export function evaluatePrescriptionSafety({
     }
   }
 
-  // Calculate aggregate status
+  // 6. PREGNANCY OR CONDITION CAUTION CHECK (moderate - amber)
+  const isPregnant = Boolean(patientFlags?.pregnant) || normalizedConditions.some((c) => c.includes('pregnant') || c.includes('pregnancy'));
+  const hasAsthma = normalizedConditions.some((c) => c.includes('asthma') || c.includes('bronchospasm'));
+
+  for (const candidate of candidateMedicines) {
+    const medName = typeof candidate === 'string' ? candidate : candidate.name;
+    if (!medName) continue;
+
+    const normName = normalizeName(medName);
+    const master = findMasterMed(medName);
+    const activeNorm = master ? normalizeName(master.activeIngredient) : normName;
+
+    if (isPregnant) {
+      const pregnancyCautionDrugs = ['warfarin', 'aspirin', 'ibuprofen', 'ciprofloxacin'];
+      if (pregnancyCautionDrugs.includes(normName) || pregnancyCautionDrugs.includes(activeNorm)) {
+        alerts.push({
+          type: 'pregnancy_caution',
+          severity: 'amber',
+          medicine: medName,
+          details: `Pregnancy Caution: "${medName}" is contraindicated or carries heightened safety cautions during pregnancy.`,
+          recommendation: 'Evaluate obstetric safety category before prescribing.'
+        });
+      }
+    }
+
+    if (hasAsthma) {
+      const nsaids = ['aspirin', 'ibuprofen'];
+      if (nsaids.includes(normName) || nsaids.includes(activeNorm)) {
+        alerts.push({
+          type: 'condition_caution',
+          severity: 'amber',
+          medicine: medName,
+          details: `Condition Caution: NSAID "${medName}" can precipitate bronchospasm in patients with asthma.`,
+          recommendation: 'Consider alternative analgesic (e.g. Paracetamol) if tolerated.'
+        });
+      }
+    }
+  }
+
+  // Aggregate status
   const hasRed = alerts.some((a) => a.severity === 'red');
   const hasAmber = alerts.some((a) => a.severity === 'amber');
 
@@ -236,6 +308,7 @@ export function evaluatePrescriptionSafety({
   return {
     safe: !hasRed,
     severity: overallSeverity,
+    blocking: false,
     alerts,
     overrideRequired: hasRed
   };

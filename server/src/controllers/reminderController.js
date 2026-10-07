@@ -78,26 +78,51 @@ export const syncPrescriptionReminders = async (req, res, next) => {
 };
 
 /**
- * Get patient's today active medicine reminders with scheduled doses
+ * Query medicine reminders for patient (GET /reminders?healthId&date and GET /api/reminders/today)
  */
 export const getTodayReminders = async (req, res, next) => {
   try {
-    const { uid: patientUid } = req.user;
+    const userUid = req.user?.uid;
+    const healthId = req.query.healthId || req.user?.patientHealthId;
+    const dateFilter = req.query.date || new Date().toISOString().split('T')[0];
     const db = assertDbConnected();
 
-    const snapshot = await db
-      .collection('medicineReminders')
-      .where('patientUid', '==', patientUid)
-      .where('active', '==', true)
-      .get();
+    let reminders = [];
 
-    const reminders = snapshot.docs.map((d) => d.data());
+    // 1. Try canonical 'reminders' collection
+    if (healthId) {
+      const snap = await db.collection('reminders')
+        .where('healthId', '==', healthId)
+        .get();
+      reminders = snap.docs.map((d) => d.data());
+    } else if (userUid) {
+      const snap = await db.collection('reminders')
+        .where('receiverUids', 'array-contains', userUid)
+        .get();
+      reminders = snap.docs.map((d) => d.data());
+    }
 
-    // Fetch today's logged doses
-    const todayStr = new Date().toISOString().split('T')[0];
+    // Filter by dateStr if available, else by dueAt prefix
+    if (reminders.length > 0 && dateFilter) {
+      reminders = reminders.filter((r) => {
+        const dStr = r.dateStr || r.dueAt?.slice(0, 10);
+        return dStr === dateFilter;
+      });
+    }
+
+    // 2. Fallback to legacy medicineReminders if canonical is empty
+    if (reminders.length === 0 && userUid) {
+      const legacySnap = await db.collection('medicineReminders')
+        .where('patientUid', '==', userUid)
+        .where('active', '==', true)
+        .get();
+      reminders = legacySnap.docs.map((d) => d.data());
+    }
+
+    // Fetch today's logged doses for adherence calculation
     const logsSnapshot = await db
       .collection('medicineLogs')
-      .where('patientUid', '==', patientUid)
+      .where('patientUid', '==', userUid || healthId)
       .get();
 
     const logs = logsSnapshot.docs.map((d) => d.data());
@@ -115,164 +140,273 @@ export const getTodayReminders = async (req, res, next) => {
 };
 
 /**
+ * General Query Endpoint (PRD: GET /reminders?healthId&date)
+ */
+export const getRemindersByQuery = async (req, res, next) => {
+  return getTodayReminders(req, res, next);
+};
+
+/**
  * Respond to Medicine Dose Action (Taken, Snooze, Skip) with 10s Undo, First-Responder-Wins & HMAC verification
+ * PRD F11: POST /reminders/:id/respond {action, token?}
  */
 export const respondToReminder = async (req, res, next) => {
   try {
-    const { id } = req.params; // reminderId or doseId
+    const { id } = req.params; // reminderId
     const {
       action = 'taken',
-      actionToken,
+      actionToken: bodyToken,
+      token: altToken,
       undo = false,
-      snoozeMinutes = 15,
-      scheduledTime
+      snoozeMinutes = 10
     } = req.body;
 
+    const tokenToVerify = bodyToken || altToken || req.query.token;
     let responderUid = req.user?.uid;
-    let responderRole = req.user?.role || 'patient';
+    let responderName = req.user?.displayName || req.user?.name || 'User';
 
-    // Verify HMAC Action Token if provided (e.g. from notification push or email link)
-    if (actionToken) {
-      const verified = verifyActionToken(actionToken);
+    // Verify HMAC Action Token if provided (valid until due time + 24 hours, only for this reminder)
+    if (tokenToVerify) {
+      const verified = verifyActionToken(tokenToVerify, undefined, id);
       if (!verified || !verified.valid) {
+        let msg = 'Invalid action token signature.';
+        if (verified?.expired) msg = 'Action token has expired.';
+        if (verified?.mismatched) msg = 'Action token cannot be used for a different reminder.';
         return res.status(401).json({
           success: false,
           code: 'INVALID_ACTION_TOKEN',
-          message: verified?.expired ? 'Action token has expired.' : 'Invalid action token signature.'
+          message: msg
         });
       }
       if (verified.payload.patientUid) responderUid = verified.payload.patientUid;
+      if (verified.payload.healthId && !responderName) responderName = verified.payload.healthId;
     }
 
     if (!responderUid) {
-      return res.status(401).json({ success: false, message: 'Authentication or actionToken required.' });
-    }
-
-    const db = assertDbConnected();
-    const doseRef = db.collection('medicineDoses').doc(id);
-    let doseDoc = await doseRef.get();
-
-    let targetDocId = id;
-    if (!doseDoc.exists) {
-      // Check if it's a reminderId, create/find dose doc
-      const remDoc = await db.collection('medicineReminders').doc(id).get();
-      if (remDoc.exists) {
-        targetDocId = `dose-${id}-${new Date().toISOString().split('T')[0]}`;
-        doseDoc = await db.collection('medicineDoses').doc(targetDocId).get();
-      }
-    }
-
-    const now = new Date();
-    const nowMs = now.getTime();
-
-    // 1. UNDO logic (within 10 seconds of previous response)
-    if (undo) {
-      if (doseDoc.exists) {
-        const dData = doseDoc.data();
-        const prevActionTime = dData.actionTime ? new Date(dData.actionTime).getTime() : 0;
-
-        if (nowMs - prevActionTime > 10000) {
-          return res.status(400).json({
-            success: false,
-            code: 'UNDO_WINDOW_EXPIRED',
-            message: '10-second undo window has expired. Action cannot be undone.'
-          });
-        }
-
-        // Revert to scheduled
-        await db.collection('medicineDoses').doc(targetDocId).update({
-          status: 'scheduled',
-          actionTime: null,
-          respondedByUid: null,
-          updatedAt: now
-        });
-
-        return res.status(200).json({
-          success: true,
-          message: 'Dose response undone successfully within 10 seconds.',
-          data: { id: targetDocId, status: 'scheduled' }
-        });
-      }
-    }
-
-    // 2. First-Responder-Wins & Double-Tick Protection
-    if (doseDoc.exists) {
-      const dData = doseDoc.data();
-      if (dData.status === 'taken' || dData.status === 'skipped') {
-        const prevTime = dData.actionTime ? new Date(dData.actionTime).toISOString() : null;
-        return res.status(200).json({
-          success: true,
-          firstResponderWins: true,
-          message: `Dose was already marked as '${dData.status}' by ${dData.respondedByUid === responderUid ? 'you' : 'another responder'}.`,
-          data: dData
-        });
-      }
-    }
-
-    // 3. Late Catch-Up Logic (20-minute late threshold)
-    let finalStatus = action;
-    let takenLate = false;
-
-    if (action === 'taken' && scheduledTime) {
-      const schedMs = new Date(scheduledTime).getTime();
-      if (nowMs - schedMs >= 20 * 60 * 1000) {
-        takenLate = true;
-        finalStatus = 'taken'; // Logged as taken with takenLate=true flag
-      }
-    }
-
-    // Handle Snooze
-    if (action === 'snooze') {
-      const snoozedUntil = new Date(nowMs + Number(snoozeMinutes) * 60 * 1000);
-      finalStatus = 'snoozed';
-
-      const updateData = {
-        status: 'snoozed',
-        snoozedUntil: snoozedUntil.toISOString(),
-        respondedByUid: responderUid,
-        actionTime: now.toISOString(),
-        updatedAt: now
-      };
-
-      await db.collection('medicineDoses').doc(targetDocId).set(updateData, { merge: true });
-
-      return res.status(200).json({
-        success: true,
-        message: `Dose snoozed for ${snoozeMinutes} minutes until ${snoozedUntil.toLocaleTimeString()}.`,
-        data: updateData
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication or valid actionToken required.'
       });
     }
 
-    // Record Action Response
-    const responsePayload = {
-      id: targetDocId,
-      status: finalStatus,
-      takenLate,
-      actionTime: now.toISOString(),
-      respondedByUid: responderUid,
-      respondedByRole: responderRole,
-      patientUid: responderUid,
-      updatedAt: now
-    };
+    const db = assertDbConnected();
+    const now = new Date();
+    const nowMs = now.getTime();
+    const timeLabel = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-    await db.collection('medicineDoses').doc(targetDocId).set(responsePayload, { merge: true });
+    // Lookup reminder in canonical reminders first, then fallback to legacy
+    let remRef = db.collection('reminders').doc(id);
+    let remDoc = await remRef.get();
+    let isLegacy = false;
 
-    // Also write to medicineLogs for adherence analytics
-    const logId = `log-${Date.now().toString(36)}`;
-    await db.collection('medicineLogs').doc(logId).set({
-      id: logId,
-      doseId: targetDocId,
-      patientUid: responderUid,
-      status: finalStatus,
-      takenLate,
-      actionTime: now.toISOString(),
-      createdAt: now
-    });
+    if (!remDoc.exists) {
+      remRef = db.collection('medicineDoses').doc(id);
+      remDoc = await remRef.get();
+      isLegacy = true;
 
-    res.status(200).json({
-      success: true,
-      message: `Dose marked as '${finalStatus}'${takenLate ? ' (Late Catch-Up)' : ''}.`,
-      data: responsePayload
+      if (!remDoc.exists) {
+        remRef = db.collection('medicineReminders').doc(id);
+        remDoc = await remRef.get();
+      }
+    }
+
+    let remData;
+    if (!remDoc.exists) {
+      remData = {
+        id,
+        reminderId: id,
+        healthId: req.user?.patientHealthId || '',
+        patientUid: responderUid || '',
+        patientName: responderName,
+        receiverUids: responderUid ? [responderUid] : [],
+        dueAt: req.body.scheduledTime || now.toISOString(),
+        scheduledTime: req.body.scheduledTime || now.toISOString(),
+        status: undo ? 'scheduled' : 'pending',
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString()
+      };
+      await remRef.set(remData);
+    } else {
+      remData = remDoc.data();
+    }
+
+    // 1. UNDO logic (within 10 seconds of previous response)
+    if (undo) {
+      const prevActionTime = remData.respondedAt
+        ? new Date(remData.respondedAt).getTime()
+        : (remData.actionTime ? new Date(remData.actionTime).getTime() : 0);
+
+      if (prevActionTime && (nowMs - prevActionTime > 10000)) {
+        return res.status(400).json({
+          success: false,
+          code: 'UNDO_WINDOW_EXPIRED',
+          message: '10-second undo window has expired. Action cannot be undone.'
+        });
+      }
+
+      await remRef.update({
+        status: 'scheduled',
+        respondedAt: null,
+        respondedByUid: null,
+        respondedByName: null,
+        takenAt: null,
+        updatedAt: now.toISOString()
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Dose response undone successfully within 10 seconds.',
+        data: { id, status: 'scheduled' }
+      });
+    }
+
+    // 2. First-Responder-Wins & Double-Tick Protection
+    if (remData.status === 'taken' || remData.status === 'skipped') {
+      const who = remData.respondedByName || (remData.respondedByUid === responderUid ? 'you' : 'another caregiver');
+      return res.status(200).json({
+        success: true,
+        firstResponderWins: true,
+        message: `Already given by ${who} at ${remData.takenAt || 'earlier'}.`,
+        data: remData
+      });
+    }
+
+    // 3. Action: Snooze (10 minutes, maximum 3)
+    if (action === 'snooze') {
+      const currentSnoozes = Number(remData.snoozeCount) || 0;
+      if (currentSnoozes >= 3) {
+        return res.status(400).json({
+          success: false,
+          code: 'MAX_SNOOZES_REACHED',
+          message: 'Maximum 3 snoozes allowed per medicine reminder.'
+        });
+      }
+
+      const snoozeMins = Number(snoozeMinutes) || 10;
+      const newDueAt = new Date(nowMs + snoozeMins * 60 * 1000);
+
+      const snoozePayload = {
+        status: 'pending',
+        dueAt: newDueAt.toISOString(),
+        scheduledTime: newDueAt.toISOString(),
+        snoozeCount: currentSnoozes + 1,
+        respondedByUid: responderUid,
+        respondedByName: responderName,
+        respondedAt: now.toISOString(),
+        updatedAt: now.toISOString()
+      };
+
+      await remRef.update(snoozePayload);
+
+      return res.status(200).json({
+        success: true,
+        message: `Reminder snoozed for ${snoozeMins} minutes.`,
+        data: { id, snoozeCount: currentSnoozes + 1, newDueAt: newDueAt.toISOString() }
+      });
+    }
+
+    // 4. Action: Skip
+    if (action === 'skip') {
+      const skipPayload = {
+        status: 'skipped',
+        respondedAt: now.toISOString(),
+        respondedByUid: responderUid,
+        respondedByName: responderName,
+        updatedAt: now.toISOString()
+      };
+      await remRef.update(skipPayload);
+
+      // Log for adherence
+      await db.collection('medicineLogs').add({
+        id: `log-${Date.now().toString(36)}`,
+        reminderId: id,
+        patientUid: responderUid,
+        healthId: remData.healthId || remData.patientHealthId || '',
+        medicineName: remData.medicineName || remData.item?.name || 'Medication',
+        status: 'skipped',
+        actionTime: now.toISOString(),
+        createdAt: now.toISOString()
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Dose marked as skipped.',
+        data: { id, status: 'skipped' }
+      });
+    }
+
+    // 5. Action: Taken
+    if (action === 'taken') {
+      const takenPayload = {
+        status: 'taken',
+        respondedAt: now.toISOString(),
+        actionTime: now.toISOString(),
+        respondedByUid: responderUid,
+        respondedByName: responderName,
+        takenAt: timeLabel,
+        updatedAt: now.toISOString()
+      };
+
+      await remRef.update(takenPayload);
+
+      // Cancel pending reminders for other caregivers for this same dose
+      if (remData.prescriptionId && remData.dueAt) {
+        try {
+          const otherSnap = await db.collection('reminders')
+            .where('prescriptionId', '==', remData.prescriptionId)
+            .where('status', '==', 'pending')
+            .get();
+
+          for (const otherDoc of otherSnap.docs) {
+            const od = otherDoc.data();
+            if (otherDoc.id !== id && od.dueAt === remData.dueAt && od.medicineName === remData.medicineName) {
+              await otherDoc.ref.update({
+                status: 'taken',
+                cancelledByOther: true,
+                respondedByUid: responderUid,
+                respondedByName: responderName,
+                takenAt: timeLabel,
+                updatedAt: now.toISOString()
+              });
+            }
+          }
+        } catch {
+          // Non-critical
+        }
+      }
+
+      // Record in medicineLogs for adherence analytics
+      await db.collection('medicineLogs').add({
+        id: `log-${Date.now().toString(36)}`,
+        reminderId: id,
+        patientUid: responderUid,
+        healthId: remData.healthId || remData.patientHealthId || '',
+        medicineName: remData.medicineName || remData.item?.name || 'Medication',
+        status: 'taken',
+        takenAt: timeLabel,
+        actionTime: now.toISOString(),
+        createdAt: now.toISOString()
+      });
+
+      const scheduledTime = req.body.scheduledTime || remData.scheduledTime || remData.dueAt;
+      let takenLate = false;
+      if (scheduledTime) {
+        const diffMs = nowMs - new Date(scheduledTime).getTime();
+        if (diffMs >= 20 * 60 * 1000) {
+          takenLate = true;
+        }
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: `Dose marked as taken at ${timeLabel}.`,
+        data: { id, status: 'taken', takenAt: timeLabel, respondedByName: responderName, takenLate }
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      message: `Invalid action '${action}'. Allowed: taken, snooze, skip.`
     });
   } catch (error) {
     next(error);
@@ -280,19 +414,25 @@ export const respondToReminder = async (req, res, next) => {
 };
 
 /**
- * Get Adherence Metrics & Current Streak (PRD F11)
+ * Get Adherence Metrics & Current Streak (PRD F11 / GET /patients/:healthId/adherence)
  */
 export const getAdherenceMetrics = async (req, res, next) => {
   try {
-    const { uid: patientUid } = req.user;
+    const healthId = req.params.healthId || req.query.healthId || req.user?.patientHealthId;
+    const patientUid = req.user?.uid;
     const db = assertDbConnected();
 
-    const snapshot = await db
-      .collection('medicineLogs')
-      .where('patientUid', '==', patientUid)
-      .get();
+    let logs = [];
+    if (healthId) {
+      const snap = await db.collection('medicineLogs').where('healthId', '==', healthId).get();
+      logs = snap.docs.map((d) => d.data());
+    }
 
-    const logs = snapshot.docs.map((d) => d.data());
+    if (logs.length === 0 && patientUid) {
+      const snap = await db.collection('medicineLogs').where('patientUid', '==', patientUid).get();
+      logs = snap.docs.map((d) => d.data());
+    }
+
     logs.sort((a, b) => new Date(b.actionTime || b.createdAt) - new Date(a.actionTime || a.createdAt));
 
     const totalDue = logs.length;
@@ -351,10 +491,10 @@ export const logMedicineAction = async (req, res, next) => {
     let resolvedMedicineName = medicineName || 'Prescribed Dose';
 
     if (reminderId) {
-      const reminderDoc = await db.collection('medicineReminders').doc(reminderId).get();
+      const reminderDoc = await db.collection('reminders').doc(reminderId).get();
       if (reminderDoc.exists) {
         const rd = reminderDoc.data();
-        patientHealthId = rd.patientHealthId || '';
+        patientHealthId = rd.healthId || rd.patientHealthId || '';
         prescriptionId = rd.prescriptionId || '';
         dosage = rd.dosage || '';
         resolvedMedicineName = rd.medicineName || resolvedMedicineName;
@@ -366,6 +506,7 @@ export const logMedicineAction = async (req, res, next) => {
       id: logId,
       reminderId: reminderId || '',
       patientUid,
+      healthId: patientHealthId,
       patientHealthId,
       prescriptionId,
       medicineName: resolvedMedicineName,

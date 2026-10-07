@@ -1,5 +1,5 @@
 {
-  "_notice": "Clinical Drug Interaction Dataset & Risk Rules (PRD F9 & Section 9)",
+  "_notice": "Small sample reference data: a doctor or pharmacist must review before real use. Do not claim they are complete.",
   "interactions": [
     {
       "drugA": "Warfarin",

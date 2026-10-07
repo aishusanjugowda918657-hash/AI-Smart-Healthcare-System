@@ -111,23 +111,23 @@ export function generateDoseSchedule({
     dailyTimes = slots.map((s) => offsetTimeStr(activeMealTimes[s] || '08:00', offsetMinutes));
   }
 
-  const start = startDate ? new Date(startDate) : new Date(referenceNow);
+  const dateBaseStr = startDate || (referenceNow instanceof Date ? referenceNow.toISOString().split('T')[0] : String(referenceNow).split('T')[0]);
+  const start = new Date(`${dateBaseStr}T00:00:00.000Z`);
   const nowMs = referenceNow.getTime();
   const minFutureMs = nowMs + 5 * 60 * 1000; // First dose at least 5 minutes ahead if today
 
   const schedule = [];
 
   for (let dayIdx = 0; dayIdx < days; dayIdx++) {
-    const currentDate = new Date(start);
-    currentDate.setDate(currentDate.getDate() + dayIdx);
-    const dateStr = currentDate.toISOString().split('T')[0];
+    const current = new Date(start);
+    current.setUTCDate(current.getUTCDate() + dayIdx);
+    const dateStr = current.toISOString().split('T')[0];
 
     for (let timeIdx = 0; timeIdx < dailyTimes.length; timeIdx++) {
       const timeStr = dailyTimes[timeIdx];
       const [h, m] = timeStr.split(':').map((n) => parseInt(n, 10) || 0);
 
-      const scheduledDateObj = new Date(currentDate);
-      scheduledDateObj.setHours(h, m, 0, 0);
+      const scheduledDateObj = new Date(`${dateStr}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00.000Z`);
 
       // Check first dose constraint for day 0
       let finalScheduledDate = scheduledDateObj;
@@ -143,7 +143,7 @@ export function generateDoseSchedule({
         medicineName,
         dosage,
         dateStr,
-        timeStr: `${String(finalScheduledDate.getHours()).padStart(2, '0')}:${String(finalScheduledDate.getMinutes()).padStart(2, '0')}`,
+        timeStr: `${String(finalScheduledDate.getUTCHours()).padStart(2, '0')}:${String(finalScheduledDate.getUTCMinutes()).padStart(2, '0')}`,
         scheduledTime: finalScheduledDate.toISOString(),
         status: 'scheduled',
         dayNumber: dayIdx + 1,
@@ -153,6 +153,146 @@ export function generateDoseSchedule({
   }
 
   return schedule;
+}
+
+/**
+ * Generate timing label string for notification text
+ */
+function getTimingLabel(timing) {
+  if (timing === 'before_food') return 'before food';
+  if (timing === 'with_food') return 'with food';
+  if (timing === 'any_time') return 'any time';
+  return 'after food';
+}
+
+/**
+ * Create complete, pure PRD-compliant reminder objects for a prescribed medicine item (PRD Part 1 / F11)
+ * @param {Object} params
+ * @param {string} params.prescriptionId
+ * @param {Object} params.item
+ * @param {string} params.healthId
+ * @param {string} [params.patientName='Patient']
+ * @param {Array<string>} [params.receiverUids=[]]
+ * @param {string} [params.startDate]
+ * @param {Object} [params.mealTimes]
+ * @param {Date} [params.referenceNow]
+ * @returns {Array<Object>} List of dose reminder records
+ */
+export function createDoseReminders({
+  prescriptionId,
+  item = {},
+  healthId,
+  patientName = 'Patient',
+  receiverUids = [],
+  startDate,
+  mealTimes = DEFAULT_MEAL_TIMES,
+  referenceNow = new Date()
+}) {
+  const medName = item.name || item.medicineName || 'Medication';
+  const dosage = item.dosage || '500 mg';
+  const frequency = item.frequency || '1-0-1';
+  const days = Math.max(1, Number(item.durationDays ?? item.days) || 5);
+  const timing = item.timing || 'after_food';
+  const timingLabel = getTimingLabel(timing);
+
+  const activeMealTimes = { ...DEFAULT_MEAL_TIMES, ...mealTimes };
+
+  let offsetMinutes = 0;
+  if (timing === 'after_food') offsetMinutes = 30;
+  else if (timing === 'before_food') offsetMinutes = -30;
+
+  // Determine daily times based on frequency code and meal times
+  let dailyTimes = [];
+  if (Array.isArray(item.reminderTimes) && item.reminderTimes.length > 0 && item.reminderTimes[0]) {
+    dailyTimes = item.reminderTimes.map((t) => offsetTimeStr(t, 0));
+  } else {
+    const { slots } = parseFrequencySlots(frequency);
+    dailyTimes = slots.map((s) => offsetTimeStr(activeMealTimes[s] || '08:00', offsetMinutes));
+  }
+
+  const dateBaseStr = startDate || (referenceNow instanceof Date ? referenceNow.toISOString().split('T')[0] : String(referenceNow).split('T')[0]);
+  const start = new Date(`${dateBaseStr}T00:00:00.000Z`);
+  const nowMs = referenceNow.getTime();
+  const minFutureMs = nowMs + 5 * 60 * 1000; // First dose at least 5 minutes ahead if today
+
+  const reminders = [];
+
+  for (let dayIdx = 0; dayIdx < days; dayIdx++) {
+    const current = new Date(start);
+    current.setUTCDate(current.getUTCDate() + dayIdx);
+    const dateStr = current.toISOString().split('T')[0];
+
+    for (let timeIdx = 0; timeIdx < dailyTimes.length; timeIdx++) {
+      const timeStr = dailyTimes[timeIdx];
+      const [h, m] = timeStr.split(':').map((n) => parseInt(n, 10) || 0);
+
+      const scheduledDateObj = new Date(`${dateStr}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00.000Z`);
+
+      // Check first dose constraint for day 0: at least 5 minutes ahead
+      let finalScheduledDate = scheduledDateObj;
+      if (dayIdx === 0 && scheduledDateObj.getTime() < minFutureMs) {
+        finalScheduledDate = new Date(minFutureMs);
+      }
+
+      const dueAtIso = finalScheduledDate.toISOString();
+      const dueMinute = dueAtIso.slice(0, 16); // YYYY-MM-DDTHH:mm
+      const groupKey = `${healthId}_${dueMinute}`;
+      const doseIdx = dayIdx * dailyTimes.length + timeIdx + 1;
+      const remId = `rem-${prescriptionId}-${medName.replace(/\s+/g, '_')}-${doseIdx}`;
+
+      // Expiry: valid until due time + 24 hours
+      const tokenExp = finalScheduledDate.getTime() + 24 * 60 * 60 * 1000;
+      const actionToken = generateActionToken({
+        reminderId: remId,
+        healthId,
+        patientUid: receiverUids[0] || '',
+        dueAt: dueAtIso,
+        exp: tokenExp
+      });
+
+      reminders.push({
+        id: remId,
+        reminderId: remId,
+        healthId,
+        patientHealthId: healthId,
+        patientUid: receiverUids[0] || '',
+        patientName,
+        receiverUids: Array.isArray(receiverUids) ? receiverUids : [receiverUids].filter(Boolean),
+        dueAt: dueAtIso,
+        scheduledTime: dueAtIso,
+        dateStr,
+        status: 'pending',
+        type: 'medicine',
+        prescriptionId,
+        item: {
+          name: medName,
+          medicineName: medName,
+          dosage,
+          frequency,
+          timing,
+          durationDays: days,
+          notes: item.notes || ''
+        },
+        medicineName: medName,
+        dosage,
+        frequency,
+        timing,
+        title: `${patientName}: Time for ${medName} ${dosage} (${timingLabel})`,
+        body: `${patientName}: Time for ${medName} ${dosage} (${timingLabel})`,
+        privacyBody: `${patientName}: Medicine reminder`,
+        actionToken,
+        groupKey,
+        snoozeCount: 0,
+        retryCount: 0,
+        dayNumber: dayIdx + 1,
+        doseNumber: doseIdx,
+        createdAt: referenceNow.toISOString(),
+        updatedAt: referenceNow.toISOString()
+      });
+    }
+  }
+
+  return reminders;
 }
 
 /**
@@ -168,7 +308,7 @@ export function generateActionToken(payload, secret = ACTION_SECRET) {
 /**
  * Verify HMAC Action Token
  */
-export function verifyActionToken(tokenStr, secret = ACTION_SECRET) {
+export function verifyActionToken(tokenStr, secret = ACTION_SECRET, expectedReminderId = null) {
   if (!tokenStr || typeof tokenStr !== 'string') return null;
   const parts = tokenStr.split('.');
   if (parts.length !== 2) return null;
@@ -189,8 +329,68 @@ export function verifyActionToken(tokenStr, secret = ACTION_SECRET) {
       return { expired: true, payload };
     }
 
+    // Check if token belongs to expected reminder
+    if (expectedReminderId && payload.reminderId && payload.reminderId !== expectedReminderId) {
+      return { mismatched: true, payload };
+    }
+
     return { valid: true, payload };
   } catch (err) {
     return null;
   }
+}
+
+/**
+ * Create follow-up reminders (2 days before, day of, overdue)
+ * PRD F12: Max 3 reminders per follow-up. Quiet hours apply (default 09:00).
+ */
+export function createFollowUpReminders({
+  followupId,
+  healthId,
+  patientName = 'Patient',
+  doctorName = 'your doctor',
+  dueDate,
+  receiverUids = [],
+  referenceNow = new Date()
+}) {
+  const reminders = [];
+  const dateStr = String(dueDate).split('T')[0];
+  const due = new Date(`${dateStr}T09:00:00.000Z`);
+
+  // 1. 2 days before
+  const twoDaysBefore = new Date(due);
+  twoDaysBefore.setUTCDate(twoDaysBefore.getUTCDate() - 2);
+
+  // 2. Day of
+  const dayOf = new Date(due);
+
+  const configs = [
+    { suffix: '2d', dateObj: twoDaysBefore },
+    { suffix: 'today', dateObj: dayOf }
+  ];
+
+  for (const cfg of configs) {
+    const remId = `rem-flw-${followupId}-${cfg.suffix}`;
+    reminders.push({
+      id: remId,
+      reminderId: remId,
+      healthId,
+      patientHealthId: healthId,
+      patientName,
+      receiverUids: Array.isArray(receiverUids) ? receiverUids : [receiverUids].filter(Boolean),
+      dueAt: cfg.dateObj.toISOString(),
+      status: 'pending',
+      type: 'followup',
+      followupId,
+      title: `${patientName}: Follow-up due on ${dueDate} with ${doctorName}`,
+      body: `${patientName}: Follow-up due on ${dueDate} with ${doctorName}`,
+      privacyBody: `${patientName}: Follow-up checkup reminder`,
+      attempts: 0,
+      snoozeCount: 0,
+      createdAt: referenceNow.toISOString(),
+      updatedAt: referenceNow.toISOString()
+    });
+  }
+
+  return reminders;
 }

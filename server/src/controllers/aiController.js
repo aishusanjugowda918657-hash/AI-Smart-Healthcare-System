@@ -22,6 +22,7 @@ import { createAppointment } from './bookingController.js';
 import { cancelAppointment } from './appointmentController.js';
 import { evaluatePrescriptionSafety } from '../domain/safety.js';
 import flags from '../config/flags.js';
+import medicinesConfig from '../config/clinical/medicines.json' with { type: 'json' };
 
 /**
  * ----------------------------------------------------
@@ -456,35 +457,70 @@ export const aiSmartSlotRecommendation = async (req, res, next) => {
 export const aiDictate = async (req, res, next) => {
   try {
     const { dictationText = '', patientHealthId } = req.body;
-    if (!dictationText) {
+    if (!dictationText || !dictationText.trim()) {
       return res.status(400).json({ success: false, message: 'dictationText is required.' });
     }
 
+    const lowerText = dictationText.toLowerCase();
+    const masterMeds = medicinesConfig.medicines || [];
+
     let draft = {
-      symptoms: ['Fever', 'Cough'],
-      diagnosisNotes: 'Acute upper respiratory tract infection.',
-      proposedMedicines: [
-        { name: 'Paracetamol', dosage: '500 mg', frequency: 'Twice Daily (1-0-1)', durationDays: 5, timing: 'after_food' },
-        { name: 'Amoxicillin', dosage: '500 mg', frequency: 'Twice Daily (1-0-1)', durationDays: 7, timing: 'after_food' }
-      ],
+      symptoms: [],
+      diagnosisNotes: '',
+      proposedMedicines: [],
       followUpDays: 7,
-      doctorAdvice: 'Rest well and stay hydrated.'
+      doctorAdvice: ''
     };
 
     if (flags.ai) {
       try {
         const text = await generateText({
-          system: 'Extract structured prescription JSON from dictation text.',
+          system: 'Extract structured prescription JSON from dictation text. Only include medications explicitly mentioned in the text.',
           prompt: `Dictation: "${dictationText}"`
         });
         if (text) {
           const parsed = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] || '{}');
-          if (parsed.proposedMedicines) draft = parsed;
+          if (parsed && typeof parsed === 'object') {
+            draft = { ...draft, ...parsed };
+          }
         }
       } catch (err) {
         console.warn('Dictation parsing fallback:', err.message);
       }
+    } else {
+      // With AI off, rule-based keyword extraction for mentioned medicines
+      const foundMeds = [];
+      for (const m of masterMeds) {
+        const namesToCheck = [m.name, m.activeIngredient, ...(m.brandNames || [])];
+        if (namesToCheck.some((n) => lowerText.includes(n.toLowerCase()))) {
+          foundMeds.push({
+            name: m.name,
+            dosage: m.defaultDosage || '500 mg',
+            frequency: 'Twice Daily (1-0-1)',
+            durationDays: 5,
+            timing: 'after_food'
+          });
+        }
+      }
+      draft.proposedMedicines = foundMeds;
     }
+
+    // MANDATORY POST-CHECK: Nothing the doctor did not say may appear.
+    // Filter proposedMedicines so that only medicines explicitly mentioned in the dictation transcript are returned.
+    draft.proposedMedicines = (draft.proposedMedicines || []).filter((med) => {
+      if (!med || !med.name) return false;
+      const normName = med.name.toLowerCase();
+      const master = masterMeds.find(
+        (m) =>
+          m.name.toLowerCase() === normName ||
+          m.activeIngredient.toLowerCase() === normName ||
+          (m.brandNames || []).some((b) => b.toLowerCase() === normName)
+      );
+      const triggers = master
+        ? [master.name, master.activeIngredient, ...(master.brandNames || [])].map((s) => s.toLowerCase())
+        : [normName];
+      return triggers.some((t) => lowerText.includes(t));
+    });
 
     let safetyResult = { safe: true, severity: 'green', alerts: [], overrideRequired: false };
     if (patientHealthId) {

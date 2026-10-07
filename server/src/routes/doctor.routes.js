@@ -23,6 +23,11 @@ import {
   postDoctorPreNote,
   postChangeComplexity
 } from '../controllers/doctorSummaryController.js';
+import {
+  getDoctorPrescriptionHelpers,
+  getDoctorTemplates,
+  saveDoctorTemplate
+} from '../controllers/prescriptionController.js';
 import { requireAuth } from '../middleware/authMiddleware.js';
 import { requireRole } from '../middleware/roleMiddleware.js';
 
@@ -34,6 +39,9 @@ router.get('/leaves/impact', requireAuth, requireRole('doctor', 'admin'), getDoc
 router.get('/patients/search', requireAuth, requireRole('doctor', 'admin'), doctorSearchPatients);
 router.get('/patients/my-patients', requireAuth, requireRole('doctor', 'admin'), doctorGetMyPatients);
 router.get('/patients/:healthId/access-check', requireAuth, requireRole('doctor', 'admin'), doctorCheckPatientAccess);
+router.get('/prescription-helpers', requireAuth, requireRole('doctor', 'admin'), getDoctorPrescriptionHelpers);
+router.get('/templates', requireAuth, requireRole('doctor', 'admin'), getDoctorTemplates);
+router.post('/templates', requireAuth, requireRole('doctor', 'admin'), saveDoctorTemplate);
 
 router.get('/', getDoctors);
 router.get('/alerts', requireAuth, requireRole('doctor', 'admin'), getDoctorAlerts);

@@ -329,19 +329,43 @@ export const getDoctorAlerts = async (req, res, next) => {
     const doctorUid = req.user.doctorUid || req.user.uid;
     const db = assertDbConnected();
 
+    // 1. Check canonical 'alerts' collection
     const snapshot = await db
-      .collection('doctorAlerts')
-      .where('doctorUid', '==', doctorUid)
+      .collection('alerts')
+      .where('doctorId', '==', doctorUid)
       .get();
 
     let alerts = snapshot.docs.map((d) => d.data());
+
+    // 2. Fallback to legacy 'doctorAlerts' if empty
+    if (alerts.length === 0) {
+      const legacySnapshot = await db
+        .collection('doctorAlerts')
+        .where('doctorUid', '==', doctorUid)
+        .get();
+      alerts = legacySnapshot.docs.map((d) => d.data());
+    }
+
     alerts = alerts.filter((a) => a.status === 'open');
 
     // Risk sorting: high -> medium -> low
     const riskRank = { high: 1, medium: 2, low: 3 };
     alerts.sort((a, b) => (riskRank[a.riskLevel] || 3) - (riskRank[b.riskLevel] || 3));
 
-    res.status(200).json(formatSuccessResponse(alerts));
+    const highCount = alerts.filter((a) => a.riskLevel === 'high').length;
+    const medCount = alerts.filter((a) => a.riskLevel === 'medium').length;
+
+    res.status(200).json({
+      success: true,
+      data: alerts,
+      alerts,
+      caseloadSummary: {
+        high: highCount,
+        medium: medCount,
+        total: alerts.length,
+        text: `${highCount} high, ${medCount} medium`
+      }
+    });
   } catch (error) {
     next(error);
   }
@@ -357,17 +381,18 @@ export const resolveDoctorAlert = async (req, res, next) => {
     const { uid: doctorUid } = req.user;
 
     const db = assertDbConnected();
-    await db.collection('doctorAlerts').doc(id).set(
-      {
-        id,
-        status: 'RESOLVED',
-        resolutionNotes,
-        resolvedByUid: doctorUid,
-        resolvedAt: new Date(),
-        updatedAt: new Date()
-      },
-      { merge: true }
-    );
+    const updatePayload = {
+      id,
+      status: 'resolved',
+      resolutionNotes,
+      resolvedBy: doctorUid,
+      resolvedByUid: doctorUid,
+      resolvedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    await db.collection('alerts').doc(id).set(updatePayload, { merge: true });
+    try { await db.collection('doctorAlerts').doc(id).set(updatePayload, { merge: true }); } catch {}
 
     res.status(200).json(formatSuccessResponse({ id, status: 'RESOLVED' }));
   } catch (error) {
@@ -386,17 +411,18 @@ export const snoozeDoctorAlert = async (req, res, next) => {
     snoozedUntil.setDate(snoozedUntil.getDate() + 3);
 
     const db = assertDbConnected();
-    await db.collection('doctorAlerts').doc(id).set(
-      {
-        id,
-        status: 'snoozed',
-        snoozedUntil: snoozedUntil.toISOString(),
-        updatedAt: now
-      },
-      { merge: true }
-    );
+    const updatePayload = {
+      id,
+      status: 'snoozed',
+      snoozeUntil: snoozedUntil.toISOString(),
+      snoozedUntil: snoozedUntil.toISOString(),
+      updatedAt: now.toISOString()
+    };
 
-    res.status(200).json(formatSuccessResponse({ id, status: 'snoozed', snoozedUntil: snoozedUntil.toISOString() }));
+    await db.collection('alerts').doc(id).set(updatePayload, { merge: true });
+    try { await db.collection('doctorAlerts').doc(id).set(updatePayload, { merge: true }); } catch {}
+
+    res.status(200).json(formatSuccessResponse({ id, status: 'snoozed', snoozeUntil: snoozedUntil.toISOString() }));
   } catch (error) {
     next(error);
   }
@@ -410,18 +436,24 @@ export const sendPatientReminderAlert = async (req, res, next) => {
     const { id } = req.params;
     const db = assertDbConnected();
 
-    const doc = await db.collection('doctorAlerts').doc(id).get();
+    let doc = await db.collection('alerts').doc(id).get();
+    if (!doc.exists) {
+      doc = await db.collection('doctorAlerts').doc(id).get();
+    }
+
     if (!doc.exists) {
       throw new AppError('NOT_FOUND', 'Alert record not found', 404);
     }
 
     const alertData = doc.data();
+    const targetUid = alertData.patientUid || alertData.patientHealthId || alertData.healthId;
+    const reasonText = Array.isArray(alertData.reasons) ? alertData.reasons.join(', ') : (alertData.message || 'Attention required');
 
     // Trigger push notification to patient
     await notify({
-      uids: [alertData.patientUid || alertData.patientHealthId],
+      uids: [targetUid],
       title: 'Doctor Reminder Notice',
-      body: `Your doctor has sent a reminder: ${alertData.message}`,
+      body: `Your doctor has sent a reminder: ${reasonText}`,
       privacyBody: 'Reminder notice from your physician.',
       type: 'doctor_direct_reminder',
       urgent: true

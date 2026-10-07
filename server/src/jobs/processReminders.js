@@ -28,250 +28,299 @@ export async function processRemindersJob({ nowOverride } = {}) {
   };
 
   try {
-    // 1. Fetch active medicine reminders
-    const remindersSnap = await db
-      .collection('medicineReminders')
-      .where('active', '==', true)
-      .get();
-
-    if (remindersSnap.empty) {
-      // No medicine reminders — skip Phase 1 but still run Phase 2 (general reminders)
-    } else {
-
-    // Process reminders & dues
-    const patientDosesToGroup = new Map(); // patientUid -> array of due items
-
-    for (const doc of remindersSnap.docs) {
-      const data = doc.data();
-      const reminderId = doc.id;
-
-      // Calculate days remaining for Refill Reminder check
-      const startDate = new Date(data.startDate || data.createdAt || now);
-      const daysElapsed = Math.floor((nowMs - startDate.getTime()) / (24 * 60 * 60 * 1000));
-      const durationDays = Number(data.durationDays) || 5;
-      const daysRemaining = durationDays - daysElapsed;
-
-      if (daysRemaining === 2 && !data.refillNotified) {
-        await notify({
-          uids: [data.patientUid],
-          title: 'Prescription Refill Reminder',
-          body: `You have 2 days remaining for ${data.medicineName}. Contact your doctor for a prescription renewal.`,
-          privacyBody: 'Prescription refill reminder.',
-          type: 'refill_reminder',
-          data: { prescriptionId: data.prescriptionId, medicineName: data.medicineName }
-        });
-        await db.collection('medicineReminders').doc(reminderId).update({ refillNotified: true });
-        results.refillReminders++;
-      }
-
-      // Check current due status
-      const reminderTimes = data.reminderTimes || ['08:00 AM'];
-      for (const timeStr of reminderTimes) {
-        const groupKey = `${data.patientUid}_${timeStr}_${now.toISOString().split('T')[0]}`;
-        const doseKey = `dose-${reminderId}-${timeStr}-${now.toISOString().split('T')[0]}`;
-
-        // Atomic claim check
-        const doseDocRef = db.collection('medicineDoses').doc(doseKey);
-        const doseDoc = await doseDocRef.get();
-
-        if (!doseDoc.exists) {
-          // Create initial dose record
-          const scheduledDateObj = new Date(); // Today's date with timeStr
-          const [hStr, mStr] = timeStr.split(':');
-          let h = parseInt(hStr, 10) || 8;
-          if (timeStr.toLowerCase().includes('pm') && h < 12) h += 12;
-          if (timeStr.toLowerCase().includes('am') && h === 12) h = 0;
-          scheduledDateObj.setHours(h, parseInt(mStr, 10) || 0, 0, 0);
-
-          const newDoseData = {
-            id: doseKey,
-            reminderId,
-            patientUid: data.patientUid,
-            patientHealthId: data.patientHealthId || '',
-            prescriptionId: data.prescriptionId || '',
-            medicineName: data.medicineName,
-            dosage: data.dosage,
-            scheduledTime: scheduledDateObj.toISOString(),
-            status: 'scheduled',
-            claimedAt: now.toISOString(),
-            claimedByJob: jobId,
-            createdAt: now
-          };
-
-          await doseDocRef.set(newDoseData);
-
-          if (!patientDosesToGroup.has(data.patientUid)) {
-            patientDosesToGroup.set(data.patientUid, []);
-          }
-          patientDosesToGroup.get(data.patientUid).push(newDoseData);
-          results.processedCount++;
-        } else {
-          const doseData = doseDoc.data();
-          const scheduledMs = new Date(doseData.scheduledTime).getTime();
-          const elapsedMinutes = (nowMs - scheduledMs) / (60 * 1000);
-
-          // 2nd Reminder Nudge after 30 minutes if still scheduled
-          if (doseData.status === 'scheduled' && elapsedMinutes >= 30 && elapsedMinutes < 60 && !doseData.secondReminderSent) {
-            await notify({
-              uids: [doseData.patientUid],
-              title: '2nd Reminder: Take Medication',
-              body: `Reminder: Please take ${doseData.medicineName} (${doseData.dosage}).`,
-              privacyBody: 'Second medicine reminder nudge.',
-              type: 'medicine_reminder_nudge',
-              data: { reminderId, doseId: doseKey }
-            });
-
-            await doseDocRef.update({ secondReminderSent: true, updatedAt: now });
-            results.secondRemindersCount++;
-          }
-
-          // Mark MISSED after 60 minutes without response
-          if (doseData.status === 'scheduled' && elapsedMinutes >= 60) {
-            await doseDocRef.update({ status: 'missed', missedAt: now.toISOString(), updatedAt: now });
-            results.missedCount++;
-
-            // 3 Consecutive Misses Adherence Flag Check
-            const lastLogsSnap = await db
-              .collection('medicineDoses')
-              .where('patientUid', '==', doseData.patientUid)
-              .get();
-
-            const patientDoses = lastLogsSnap.docs.map((d) => d.data());
-            patientDoses.sort((a, b) => new Date(b.scheduledTime) - new Date(a.scheduledTime));
-            const recentMisses = patientDoses.slice(0, 3).filter((d) => d.status === 'missed');
-
-            if (recentMisses.length >= 3 && !doseData.adherenceFlagged) {
-              await db.collection('doctorAlerts').add({
-                id: `alert-${Date.now().toString(36)}`,
-                patientUid: doseData.patientUid,
-                patientHealthId: doseData.patientHealthId,
-                kind: 'FLAG_ADHERENCE_3_MISSED',
-                riskLevel: 'high',
-                title: '3 Consecutive Missed Doses Alert',
-                message: `Patient ${doseData.patientHealthId} has missed 3 consecutive prescribed medication doses.`,
-                status: 'open',
-                createdAt: now
-              });
-
-              await doseDocRef.update({ adherenceFlagged: true });
-              results.adherenceFlags++;
-            }
-          }
-
-          // Secondary Caregiver Notification 15m post-miss
-          if (doseData.status === 'missed' && elapsedMinutes >= 75 && !doseData.caregiverNotified) {
-            // Fetch caregiver grants
-            const grantSnap = await db
-              .collection('caregiverAccess')
-              .where('patientUid', '==', doseData.patientUid)
-              .where('status', '==', 'active')
-              .get();
-
-            const caregiverUids = grantSnap.docs.map((d) => d.data().caregiverUid).filter(Boolean);
-            if (caregiverUids.length > 0) {
-              await notify({
-                uids: caregiverUids,
-                title: 'Caregiver Alert: Missed Patient Medication',
-                body: `Patient ${doseData.patientHealthId} missed scheduled dose for ${doseData.medicineName}.`,
-                privacyBody: 'Patient missed medication dose.',
-                type: 'caregiver_missed_medication',
-                data: { patientHealthId: doseData.patientHealthId, doseId: doseKey }
-              });
-
-              await doseDocRef.update({ caregiverNotified: true });
-              results.caregiverEscalations++;
-            }
-          }
-        }
-      }
-    }
-
-    // Send Grouped Notifications (grouped by 60s window per patient)
-    for (const [pUid, dueList] of patientDosesToGroup.entries()) {
-      if (dueList.length === 0) continue;
-      const medNames = dueList.map((d) => `${d.medicineName} (${d.dosage})`).join(', ');
-
-      await notify({
-        uids: [pUid],
-        title: dueList.length === 1 ? 'Time for your Medication' : `Time for your ${dueList.length} Scheduled Medications`,
-        body: `Please take: ${medNames}.`,
-        privacyBody: 'Time to take your scheduled medications.',
-        type: 'medicine_reminder',
-        data: { groupCount: dueList.length, patientUid: pUid }
-      });
-
-      results.groupedCount++;
-    }
-    } // end if (remindersSnap has medicine reminders)
-
-    // ── Phase 2: General 'reminders' collection ──────────────────────
-    // The PRD canonical collection for all reminders (appointment, medicine,
-    // follow-up). Each reminder is claimed in a transaction (pending → sending)
-    // before the notification is sent, so two concurrent runs never double-send.
-    //
-    // TODO: consolidate medicineReminders (Phase 1 above) into the canonical
-    //       'reminders' collection. Phase 1 is a temporary legacy path kept
-    //       for backward compatibility with the F11 medicine-reminder seeding
-    //       scripts. Once migrated, remove Phase 1 entirely.
-    const pendingRemSnap = await db
+    // ── Phase 1: Canonical 'reminders' collection (PRD Section 4.2 / 5.6) ──────────
+    // Query pending reminders (limit 200)
+    const pendingSnap = await db
       .collection('reminders')
       .where('status', '==', 'pending')
-      .limit(100)
+      .limit(200)
       .get();
 
-    if (!pendingRemSnap.empty) {
-      let sentCount = 0;
-
-      for (const reminderDoc of pendingRemSnap.docs) {
-        const rem = reminderDoc.data();
+    if (!pendingSnap.empty) {
+      // Find reminders whose dueAt <= now
+      const dueDocs = [];
+      for (const doc of pendingSnap.docs) {
+        const rem = doc.data();
         const dueAt = rem.dueAt?.toDate?.() || new Date(rem.dueAt || 0);
-        if (dueAt > now) continue; // Not yet due
+        if (dueAt.getTime() <= nowMs) {
+          dueDocs.push(doc);
+        }
+      }
 
-        // ── Claim via conditional update + re-read ──
-        // 1. Attempt to stamp this reminder with our jobId.
-        //    If another job already changed status, the re-read will show it.
+      // Group claimed reminders by groupKey (or reminderId if no groupKey)
+      const claimedGroups = new Map(); // groupKey -> Array of { doc, data }
+
+      for (const doc of dueDocs) {
+        // Atomic claim in transaction: pending -> sending
+        let claimed = false;
         try {
-          await db.runTransaction(async (t) => {
-            const freshSnap = await t.get(reminderDoc.ref);
+          claimed = await db.runTransaction(async (t) => {
+            const freshSnap = await t.get(doc.ref);
             if (freshSnap.exists && freshSnap.data().status === 'pending') {
-              t.update(reminderDoc.ref, { status: 'sending', claimedBy: jobId, claimedAt: now });
-            } else {
-              throw new Error('Already claimed');
+              t.update(doc.ref, {
+                status: 'sending',
+                claimedBy: jobId,
+                claimedAt: now.toISOString(),
+                attempts: (freshSnap.data().attempts || 0) + 1,
+                updatedAt: now.toISOString()
+              });
+              return true;
             }
+            return false;
           });
-        } catch (e) {
-          // Transaction failed (e.g. contention or already claimed), consider it lost
-          continue;
+        } catch {
+          claimed = false;
         }
 
-        // ── Send notification ──
-        const receiverUids = rem.receiverUids || [];
+        if (!claimed) continue;
+
+        const rem = doc.data();
+        const groupKey = rem.groupKey || doc.id;
+        if (!claimedGroups.has(groupKey)) {
+          claimedGroups.set(groupKey, []);
+        }
+        claimedGroups.get(groupKey).push({ doc, data: rem });
+      }
+
+      // Send each group (medicines due at same minute for same patient arrive as ONE notification)
+      for (const [groupKey, items] of claimedGroups.entries()) {
+        const first = items[0].data;
+        const receiverUids = first.receiverUids || [first.patientUid].filter(Boolean);
+        const patientName = first.patientName || 'Patient';
+
+        let title = first.title || 'Reminder';
+        let body = first.body || 'Scheduled dose reminder';
+        let privacyBody = first.privacyBody || 'Medicine reminder';
+
+        if (items.length > 1) {
+          const medNames = items
+            .map((it) => `${it.data.medicineName || it.data.item?.name || 'Medicine'} ${it.data.dosage || ''}`.trim())
+            .join(', ');
+          title = `${patientName}: Time for your ${items.length} medicines`;
+          body = `${patientName}: Time for ${medNames}`;
+          privacyBody = `${patientName}: Medicine reminder`;
+        }
+
+        let sendSuccess = true;
         if (receiverUids.length > 0) {
           try {
             await notify({
               uids: receiverUids,
-              title: rem.title || 'Reminder',
-              body: rem.body || '',
-              privacyBody: rem.privacyBody || rem.body || 'Reminder',
-              type: rem.type || 'reminder',
-              data: { reminderId: reminderDoc.id }
+              title,
+              body,
+              privacyBody,
+              type: first.type || 'medicine_reminder',
+              data: {
+                groupKey,
+                reminderId: items[0].doc.id,
+                count: items.length
+              }
             });
-          } catch {
-            // Non-critical — notify failure doesn't block marking as sent
+          } catch (err) {
+            sendSuccess = false;
           }
         }
 
-        // ── Mark sent ──
-        await reminderDoc.ref.update({ status: 'sent', sentAt: now, updatedAt: now });
-        sentCount++;
-      }
+        // Finalize status for all reminders in this group
+        for (const item of items) {
+          if (sendSuccess) {
+            await item.doc.ref.update({
+              status: 'sent',
+              sentAt: now.toISOString(),
+              updatedAt: now.toISOString()
+            });
+            results.sent++;
+            results.processed++;
+          } else {
+            const currentAttempts = (item.data.attempts || 0) + 1;
+            if (currentAttempts >= 3) {
+              await item.doc.ref.update({
+                status: 'failed',
+                lastError: 'Delivery failed after 3 attempts',
+                updatedAt: now.toISOString()
+              });
+            } else {
+              await item.doc.ref.update({
+                status: 'pending',
+                updatedAt: now.toISOString()
+              });
+            }
+          }
+        }
 
-      results.sent += sentCount;
-      results.processed += sentCount;
+        results.groupedCount++;
+      }
     }
 
-    // Sync aliases for medicine-reminder counts too
-    results.processed += results.processedCount;
+    // ── Escalation & Missed Check on 'sent' medicine reminders ─────────
+    const sentMedicineSnap = await db
+      .collection('reminders')
+      .where('status', '==', 'sent')
+      .where('type', '==', 'medicine')
+      .limit(100)
+      .get();
+
+    for (const doc of sentMedicineSnap.docs) {
+      const rem = doc.data();
+      const dueAt = rem.dueAt?.toDate?.() || new Date(rem.dueAt || 0);
+      const elapsedMinutes = (nowMs - dueAt.getTime()) / (60 * 1000);
+
+      // 1. Secondary caregiver notified 15 minutes after primary if no answer
+      if (elapsedMinutes >= 15 && !rem.secondaryCaregiverNotified) {
+        if (Array.isArray(rem.receiverUids) && rem.receiverUids.length > 1) {
+          const secondaryUid = rem.receiverUids[1];
+          try {
+            await notify({
+              uids: [secondaryUid],
+              title: `Caregiver Alert: ${rem.patientName}'s Medicine`,
+              body: `${rem.patientName} has not taken ${rem.medicineName || 'prescribed medicine'} due at ${rem.dueAt?.slice(11, 16) || 'scheduled time'}.`,
+              privacyBody: `${rem.patientName}: Medicine reminder alert`,
+              type: 'caregiver_medicine_reminder',
+              data: { reminderId: doc.id, healthId: rem.healthId }
+            });
+          } catch {
+            // Ignore
+          }
+        }
+        await doc.ref.update({ secondaryCaregiverNotified: true, updatedAt: now.toISOString() });
+        results.caregiverEscalations++;
+      }
+
+      // 2. Gentle 2nd reminder nudge after 30 minutes
+      if (elapsedMinutes >= 30 && elapsedMinutes < 60 && !rem.secondReminderSent) {
+        const receiverUids = rem.receiverUids || [rem.patientUid].filter(Boolean);
+        if (receiverUids.length > 0) {
+          try {
+            await notify({
+              uids: receiverUids,
+              title: `${rem.patientName}: 2nd Reminder for ${rem.medicineName || 'Medication'}`,
+              body: `Gentle reminder: Please take your ${rem.medicineName || 'prescribed medicine'}.`,
+              privacyBody: `${rem.patientName}: Medicine reminder nudge`,
+              type: 'medicine_reminder_nudge',
+              data: { reminderId: doc.id }
+            });
+          } catch {
+            // Ignore
+          }
+        }
+        await doc.ref.update({
+          secondReminderSent: true,
+          secondReminderSentAt: now.toISOString(),
+          updatedAt: now.toISOString()
+        });
+        results.secondRemindersCount++;
+      }
+
+      // 3. Mark missed after 60 minutes
+      if (elapsedMinutes >= 60) {
+        await doc.ref.update({
+          status: 'missed',
+          missedAt: now.toISOString(),
+          updatedAt: now.toISOString()
+        });
+        results.missedCount++;
+
+        // Also check if this patient has 3 consecutive missed doses
+        if (rem.healthId) {
+          const patientDosesSnap = await db
+            .collection('reminders')
+            .where('healthId', '==', rem.healthId)
+            .where('type', '==', 'medicine')
+            .get();
+
+          const allDoses = patientDosesSnap.docs
+            .map((d) => d.data())
+            .filter((d) => ['taken', 'missed', 'skipped'].includes(d.status))
+            .sort((a, b) => new Date(b.dueAt || 0) - new Date(a.dueAt || 0));
+
+          const recentThree = allDoses.slice(0, 3);
+          if (recentThree.length === 3 && recentThree.every((d) => d.status === 'missed')) {
+            const alertId = `alert-adherence-${rem.healthId}`;
+            await db.collection('alerts').doc(alertId).set({
+              id: alertId,
+              doctorId: rem.doctorId || 'DOC-001',
+              healthId: rem.healthId,
+              patientHealthId: rem.healthId,
+              patientName: rem.patientName || 'Patient',
+              riskLevel: 'high',
+              kind: 'daily',
+              reasons: ['3 consecutive missed medication doses'],
+              status: 'open',
+              createdAt: now.toISOString(),
+              updatedAt: now.toISOString()
+            }, { merge: true });
+
+            results.adherenceFlags++;
+          }
+        }
+      }
+    }
+
+    // ── Phase 2: Refill reminders (2 days before last dose for chronic prescriptions) ─
+    const medRxSnap = await db
+      .collection('prescriptions')
+      .where('status', '==', 'active')
+      .limit(50)
+      .get();
+
+    for (const rxDoc of medRxSnap.docs) {
+      const rx = rxDoc.data();
+      const medicines = rx.medicines || rx.items || [];
+      const isRefill = rx.isRefill || medicines.some((m) => m.isRefill || m.durationDays >= 30);
+
+      if (isRefill && !rx.refillNotified && rx.startDate) {
+        const start = new Date(rx.startDate);
+        const maxDays = Math.max(...medicines.map((m) => Number(m.durationDays || m.days || 30)));
+        const daysElapsed = Math.floor((nowMs - start.getTime()) / (24 * 60 * 60 * 1000));
+        const daysRemaining = maxDays - daysElapsed;
+
+        if (daysRemaining <= 2 && daysRemaining >= 0) {
+          const patientUid = rx.patientUid || rx.ownerUid;
+          if (patientUid) {
+            await notify({
+              uids: [patientUid],
+              title: `${rx.patientName || 'Patient'}: Prescription Refill Reminder`,
+              body: `Only 2 days left of your chronic prescription. Please request a refill.`,
+              privacyBody: 'Prescription refill reminder',
+              type: 'refill_reminder',
+              data: { prescriptionId: rxDoc.id }
+            });
+          }
+          await rxDoc.ref.update({ refillNotified: true, updatedAt: now.toISOString() });
+          results.refillReminders++;
+        }
+      }
+    }
+
+    // ── Phase 3: Legacy 'medicineReminders' compatibility (for older test suites) ──
+    const legacySnap = await db
+      .collection('medicineReminders')
+      .where('active', '==', true)
+      .get();
+
+    if (!legacySnap.empty) {
+      for (const doc of legacySnap.docs) {
+        const data = doc.data();
+        const reminderId = doc.id;
+        const startDate = new Date(data.startDate || data.createdAt || now);
+        const daysElapsed = Math.floor((nowMs - startDate.getTime()) / (24 * 60 * 60 * 1000));
+        const durationDays = Number(data.durationDays) || 5;
+        const daysRemaining = durationDays - daysElapsed;
+
+        if (daysRemaining === 2 && !data.refillNotified) {
+          await notify({
+            uids: [data.patientUid],
+            title: 'Prescription Refill Reminder',
+            body: `You have 2 days remaining for ${data.medicineName}. Contact your doctor for a prescription renewal.`,
+            privacyBody: 'Prescription refill reminder.',
+            type: 'refill_reminder',
+            data: { prescriptionId: data.prescriptionId, medicineName: data.medicineName }
+          });
+          await doc.ref.update({ refillNotified: true });
+          results.refillReminders++;
+        }
+      }
+    }
 
     return results;
   } catch (error) {

@@ -5,6 +5,7 @@ import {
   createDigitalPrescription,
   updateDigitalPrescription,
   stopPrescriptionItem,
+  getPrescriptionById,
   getMyPrescriptions,
   getPrescriptionsByHealthId,
   getRepeatLastPrescription,
@@ -14,8 +15,10 @@ import {
   getDoctorTemplates,
   saveDoctorTemplate,
   getDoctorFavourites,
-  saveDoctorFavourites
+  saveDoctorFavourites,
+  getDoctorPrescriptionHelpers
 } from '../controllers/prescriptionController.js';
+import { aiDictate, aiExtractPaper } from '../controllers/aiController.js';
 import { requireAuth } from '../middleware/authMiddleware.js';
 import { requireRole } from '../middleware/roleMiddleware.js';
 
@@ -30,6 +33,10 @@ router.post('/templates', requireAuth, requireRole('doctor', 'admin'), saveDocto
 router.get('/favourites', requireAuth, requireRole('doctor', 'admin'), getDoctorFavourites);
 router.post('/favourites', requireAuth, requireRole('doctor', 'admin'), saveDoctorFavourites);
 
+router.get('/helpers', requireAuth, requireRole('doctor', 'admin'), getDoctorPrescriptionHelpers);
+router.post('/dictate', requireAuth, requireRole('doctor', 'admin'), aiDictate);
+router.post('/extract', requireAuth, requireRole('doctor', 'admin'), aiExtractPaper);
+
 router.post('/', requireAuth, requireRole('doctor', 'admin'), createDigitalPrescription);
 router.put('/:id', requireAuth, requireRole('doctor', 'admin'), updateDigitalPrescription);
 router.post('/:id/stop-item', requireAuth, requireRole('doctor', 'admin'), stopPrescriptionItem);
@@ -38,8 +45,10 @@ router.get('/my-prescriptions', requireAuth, getMyPrescriptions);
 router.get('/patient/:patientHealthId', requireAuth, getPrescriptionsByHealthId);
 router.get('/patient/:patientHealthId/last', requireAuth, getRepeatLastPrescription);
 router.get('/:id/pdf', requireAuth, exportPrescriptionPdf);
+router.get('/:id', requireAuth, getPrescriptionById);
 
-router.get('/verify/:code', requireAuth, verifyPrescription);
-router.post('/:id/dispense', requireAuth, requireRole('pharmacist', 'admin', 'doctor'), dispensePrescription);
+// Pharmacy Verification and Dispensing (Pharmacy role only)
+router.get('/verify/:code', requireAuth, requireRole('pharmacy', 'pharmacist', 'admin'), verifyPrescription);
+router.post('/:id/dispense', requireAuth, requireRole('pharmacy', 'pharmacist', 'admin'), dispensePrescription);
 
 export default router;

@@ -34,6 +34,8 @@ import {
   confirmPatientAllergy,
   confirmPatientCondition
 } from '../controllers/medicalController.js';
+import { getPrescriptionsByHealthId } from '../controllers/prescriptionController.js';
+import { getAdherenceMetrics } from '../controllers/reminderController.js';
 
 const router = express.Router();
 
@@ -43,6 +45,8 @@ router.get('/me', requireAuth, getMyPatientProfile);
 // Task B: Medical History & Longitudinal Records (PRD 4.2 / F9 / Section 8)
 router.get('/:healthId/history', requireAuth, getPatientHistory);
 router.get('/:healthId/history.pdf', requireAuth, exportMedicalHistoryPdf);
+router.get('/:healthId/prescriptions', requireAuth, getPrescriptionsByHealthId);
+router.get('/:healthId/adherence', requireAuth, getAdherenceMetrics);
 router.get('/:healthId/vitals', requireAuth, getPatientVitalsTrend);
 router.get('/:healthId/access-log', requireAuth, getPatientAccessLog);
 router.post('/:healthId/share', requireAuth, sharePatientHistory);

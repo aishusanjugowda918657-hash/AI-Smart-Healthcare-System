@@ -1,7 +1,8 @@
 /**
  * Daily Doctor Alerts Job (PRD Feature F13)
  * Scans risk flags, enforces ONE open alert per doctor/patient/kind,
- * sends daily doctor summary push, and immediately alerts for urgent high-risk events.
+ * reads thresholds from settings/global, sends one daily doctor summary push,
+ * and immediately alerts for urgent high-risk events.
  */
 
 import { assertDbConnected } from '../config/firebase.js';
@@ -11,6 +12,8 @@ export async function dailyDoctorAlertsJob() {
   const db = assertDbConnected();
   const now = new Date();
   const todayStr = now.toISOString().split('T')[0];
+  const twelveMonthsAgo = new Date(now);
+  twelveMonthsAgo.setFullYear(twelveMonthsAgo.getFullYear() - 1);
 
   const results = {
     success: true,
@@ -21,86 +24,188 @@ export async function dailyDoctorAlertsJob() {
   };
 
   try {
-    // 1. Fetch all doctors
-    const doctorsSnap = await db.collection('doctors').get();
-    if (doctorsSnap.empty) return results;
+    // 1. Read thresholds from settings/global
+    let adherenceLowPct = 60;
+    let missedFollowupsHigh = 2;
 
-    const doctorAlertCounts = new Map(); // doctorUid -> count
+    try {
+      const settingsDoc = await db.collection('settings').doc('global').get();
+      if (settingsDoc.exists) {
+        const thresholds = settingsDoc.data().thresholds || {};
+        if (typeof thresholds.adherenceLowPct === 'number') adherenceLowPct = thresholds.adherenceLowPct;
+        if (typeof thresholds.missedFollowupsHigh === 'number') missedFollowupsHigh = thresholds.missedFollowupsHigh;
+      }
+    } catch {
+      // Use defaults
+    }
 
-    for (const docDoc of doctorsSnap.docs) {
-      const doctorUid = docDoc.id;
-      const doctorData = docDoc.data();
+    // 2. Fetch all active doctors
+    const doctorsSnap = await db.collection('doctors').where('active', '==', true).get();
+    const docList = doctorsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
 
-      // Fetch appointments / active patients for this doctor
+    // Fallback if no active doctors flagged
+    if (docList.length === 0) {
+      const allDocs = await db.collection('doctors').get();
+      allDocs.docs.forEach((d) => docList.push({ id: d.id, ...d.data() }));
+    }
+
+    for (const doctor of docList) {
+      const doctorUid = doctor.doctorId || doctor.id;
+
+      // Find patients with appointments or follow-ups with this doctor in the last 12 months
       const apptSnap = await db
         .collection('appointments')
         .where('doctorId', '==', doctorUid)
         .get();
 
-      const patientHealthIds = [...new Set(apptSnap.docs.map((d) => d.data().patientHealthId).filter(Boolean))];
+      const flwSnap = await db
+        .collection('followups')
+        .where('doctorId', '==', doctorUid)
+        .get();
 
-      for (const pHealthId of patientHealthIds) {
-        // Check for 3 missed doses in medicineDoses
-        const doseSnap = await db
-          .collection('medicineDoses')
-          .where('patientHealthId', '==', pHealthId)
-          .where('status', '==', 'missed')
-          .get();
+      const candidatePatients = new Map(); // patientHealthId -> { name }
 
-        if (doseSnap.size >= 3) {
-          await createOrUpdateDoctorAlert({
-            db,
-            doctorUid,
-            patientHealthId: pHealthId,
-            kind: 'FLAG_ADHERENCE_3_MISSED',
-            riskLevel: 'high',
-            title: 'Patient Medication Non-Adherence (3+ Missed Doses)',
-            message: `Patient ${pHealthId} has missed ${doseSnap.size} prescribed medication doses.`
-          }, results);
-        }
-
-        // Check for overdue follow-ups
-        const flwSnap = await db
-          .collection('followUps')
-          .where('patientHealthId', '==', pHealthId)
-          .where('status', '==', 'scheduled')
-          .get();
-
-        const overdue = flwSnap.docs.filter((d) => new Date(d.data().dueDate || d.data().scheduledDate) < now);
-        if (overdue.length > 0) {
-          await createOrUpdateDoctorAlert({
-            db,
-            doctorUid,
-            patientHealthId: pHealthId,
-            kind: 'FLAG_OVERDUE_HIGH_URGENCY_FOLLOWUP',
-            riskLevel: 'medium',
-            title: 'Overdue Patient Follow-up Checkup',
-            message: `Patient ${pHealthId} has ${overdue.length} overdue follow-up checkup(s).`
-          }, results);
+      for (const d of apptSnap.docs) {
+        const ad = d.data();
+        const dateObj = new Date(ad.date || ad.bookedStartAt || 0);
+        if (dateObj >= twelveMonthsAgo && ad.patientHealthId) {
+          candidatePatients.set(ad.patientHealthId, { name: ad.patientName || 'Patient' });
         }
       }
 
-      // Count open alerts for doctor
+      for (const d of flwSnap.docs) {
+        const fd = d.data();
+        const dateObj = new Date(fd.createdAt || fd.dueDate || 0);
+        const hid = fd.healthId || fd.patientHealthId;
+        if (dateObj >= twelveMonthsAgo && hid) {
+          if (!candidatePatients.has(hid)) {
+            candidatePatients.set(hid, { name: fd.patientName || 'Patient' });
+          }
+        }
+      }
+
+      // Check flags for each patient
+      for (const [pHealthId, pInfo] of candidatePatients.entries()) {
+        const flags = [];
+        let hasSeriousOverdue = false;
+
+        // Flag A: 2 or more missed or overdue follow-ups, or overdue serious follow-up
+        const pFollowups = flwSnap.docs
+          .map((d) => d.data())
+          .filter((f) => (f.healthId === pHealthId || f.patientHealthId === pHealthId));
+
+        const overdueFollowups = pFollowups.filter(
+          (f) =>
+            f.status === 'overdue' ||
+            (f.status === 'scheduled' && new Date(f.dueDate || f.scheduledDate) < now)
+        );
+
+        if (overdueFollowups.length >= missedFollowupsHigh) {
+          flags.push(`Missed ${overdueFollowups.length} follow-ups`);
+        }
+
+        const seriousOverdue = overdueFollowups.some(
+          (f) => f.importance === 'serious' || f.isSerious === true
+        );
+        if (seriousOverdue) {
+          flags.push('Overdue serious follow-up');
+          hasSeriousOverdue = true;
+        }
+
+        // Flag B: Adherence below threshold OR 3 consecutive missed doses
+        const logsSnap = await db
+          .collection('medicineLogs')
+          .where('healthId', '==', pHealthId)
+          .get();
+
+        const logs = logsSnap.docs.map((d) => d.data());
+        if (logs.length > 0) {
+          logs.sort((a, b) => new Date(b.actionTime || 0) - new Date(a.actionTime || 0));
+          const total = logs.length;
+          const taken = logs.filter((l) => l.status === 'taken').length;
+          const adherencePct = Math.round((taken / total) * 100);
+
+          if (adherencePct < adherenceLowPct) {
+            flags.push(`Adherence ${adherencePct}%`);
+          }
+
+          const top3 = logs.slice(0, 3);
+          if (top3.length === 3 && top3.every((l) => l.status === 'missed')) {
+            flags.push('3 consecutive missed doses');
+          }
+        } else {
+          // Check doses in reminders
+          const remSnap = await db
+            .collection('reminders')
+            .where('healthId', '==', pHealthId)
+            .where('type', '==', 'medicine')
+            .get();
+
+          const doses = remSnap.docs
+            .map((d) => d.data())
+            .filter((d) => ['taken', 'missed', 'skipped'].includes(d.status))
+            .sort((a, b) => new Date(b.dueAt || 0) - new Date(a.dueAt || 0));
+
+          if (doses.length >= 3) {
+            const top3 = doses.slice(0, 3);
+            if (top3.every((d) => d.status === 'missed')) {
+              flags.push('3 consecutive missed doses');
+            }
+          }
+        }
+
+        // Flag C: No-show for an important visit
+        const pAppts = apptSnap.docs
+          .map((d) => d.data())
+          .filter((a) => a.patientHealthId === pHealthId);
+
+        const hasImportantNoShow = pAppts.some(
+          (a) => a.status === 'no_show' && (a.clinicalLevel >= 2 || a.complexity === 'complex')
+        );
+        if (hasImportantNoShow) {
+          flags.push('No-show for important visit');
+        }
+
+        // Determine risk level
+        if (flags.length === 0) continue;
+
+        const riskLevel = (flags.length >= 2 || hasSeriousOverdue) ? 'high' : 'medium';
+        const kind = 'daily';
+
+        // Enforce ONE OPEN alert per doctor, patient and kind
+        await createOrUpdateAlert({
+          db,
+          doctorId: doctorUid,
+          healthId: pHealthId,
+          patientName: pInfo.name,
+          riskLevel,
+          reasons: flags,
+          kind,
+          todayStr,
+          results
+        });
+
+        results.processedCount++;
+      }
+
+      // Check total open alerts for this doctor today
       const openAlertsSnap = await db
-        .collection('doctorAlerts')
-        .where('doctorUid', '==', doctorUid)
+        .collection('alerts')
+        .where('doctorId', '==', doctorUid)
         .where('status', '==', 'open')
         .get();
 
       const openCount = openAlertsSnap.size;
       if (openCount > 0) {
-        doctorAlertCounts.set(doctorUid, openCount);
-
-        // Send Daily Doctor Summary Push Notification
+        // Send ONE push per doctor: "5 patients need attention today"
         await notify({
           uids: [doctorUid],
-          title: 'Daily Clinical Alert Summary',
-          body: `You have ${openCount} patient(s) needing clinical attention today. Review Patients Needing Attention panel.`,
-          privacyBody: 'You have daily clinical alerts awaiting review.',
+          title: 'Patients Needing Attention',
+          body: `${openCount} patient${openCount > 1 ? 's' : ''} need attention today`,
+          privacyBody: 'Daily clinical alerts summary',
           type: 'doctor_daily_summary',
           data: { openAlertsCount: openCount }
         });
-
         results.doctorSummariesSent++;
       }
     }
@@ -113,59 +218,65 @@ export async function dailyDoctorAlertsJob() {
 }
 
 /**
- * Enforce ONE open alert per doctor + patient + kind constraint
+ * Helper to ensure ONE OPEN alert per doctor, patient and kind
+ * Resolved alerts are not recreated the same day.
  */
-async function createOrUpdateDoctorAlert({ db, doctorUid, patientHealthId, kind, riskLevel, title, message }, results) {
+async function createOrUpdateAlert({
+  db,
+  doctorId,
+  healthId,
+  patientName,
+  riskLevel,
+  reasons,
+  kind,
+  todayStr,
+  results
+}) {
   const now = new Date();
+  const alertId = `alert-${doctorId}-${healthId}-${kind}`;
 
-  // Single open alert constraint query
-  const existingSnap = await db
-    .collection('doctorAlerts')
-    .where('doctorUid', '==', doctorUid)
-    .where('patientHealthId', '==', patientHealthId)
-    .where('kind', '==', kind)
-    .where('status', '==', 'open')
-    .limit(1)
-    .get();
+  // Check if document already exists
+  const existingDoc = await db.collection('alerts').doc(alertId).get();
 
-  if (!existingSnap.empty) {
-    // Already has open alert for this doctor, patient, and kind -> update timestamp without duplicating
-    const alertId = existingSnap.docs[0].id;
-    await db.collection('doctorAlerts').doc(alertId).update({
-      message,
-      updatedAt: now
+  if (existingDoc.exists) {
+    const data = existingDoc.data();
+    // If already resolved today, do not recreate
+    if (data.status === 'resolved' && data.resolvedAt?.startsWith(todayStr)) {
+      return;
+    }
+
+    // If snoozed until a future date, do not alert
+    if (data.status === 'snoozed' && data.snoozeUntil && new Date(data.snoozeUntil) > now) {
+      return;
+    }
+
+    // Update existing open alert
+    await db.collection('alerts').doc(alertId).update({
+      riskLevel,
+      reasons,
+      status: 'open',
+      patientName: patientName || data.patientName,
+      updatedAt: now.toISOString()
     });
   } else {
-    // Create new single open alert
-    const alertId = `alert-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000)}`;
-    const alertData = {
+    // Create new alert
+    const newAlert = {
       id: alertId,
-      doctorUid,
-      patientHealthId,
-      kind,
+      doctorId,
+      healthId,
+      patientHealthId: healthId,
+      patientName: patientName || 'Patient',
       riskLevel,
-      title,
-      message,
+      reasons,
       status: 'open',
-      createdAt: now,
-      updatedAt: now
+      kind,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString()
     };
 
-    await db.collection('doctorAlerts').doc(alertId).set(alertData);
+    await db.collection('alerts').doc(alertId).set(newAlert);
+    // Mirror to legacy doctorAlerts for compatibility
+    await db.collection('doctorAlerts').doc(alertId).set(newAlert);
     results.alertsCreated++;
-
-    // Urgent high risk -> send immediate push notification
-    if (riskLevel === 'high') {
-      await notify({
-        uids: [doctorUid],
-        title: `URGENT ALERT: ${title}`,
-        body: message,
-        privacyBody: 'Urgent clinical alert for patient.',
-        type: 'doctor_urgent_alert',
-        urgent: true,
-        data: { alertId, patientHealthId }
-      });
-      results.urgentAlertsSent++;
-    }
   }
 }

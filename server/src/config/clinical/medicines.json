@@ -1,5 +1,5 @@
 {
-  "_notice": "Clinical Medicine Master Dataset & Formulations (PRD F9)",
+  "_notice": "Small sample reference data: a doctor or pharmacist must review before real use. Do not claim they are complete.",
   "medicines": [
     {
       "id": "med-paracetamol",
