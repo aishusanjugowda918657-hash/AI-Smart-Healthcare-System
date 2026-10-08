@@ -38,3 +38,7 @@ yarn-error.log*
 Thumbs.db
 .vscode/
 .idea/
+
+# Test State
+.realtest-state.json
+

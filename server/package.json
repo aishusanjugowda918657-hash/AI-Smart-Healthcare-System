@@ -21,7 +21,8 @@
     "reset:patient": "node scripts/resetPatientData.js",
     "test": "vitest run",
     "test:emu": "firebase emulators:exec --only firestore,auth \"vitest run\" --project demo-project",
-    "smoke:test": "vitest run tests/smoke.test.js"
+    "smoke:test": "vitest run tests/smoke.test.js",
+    "realtest": "node scripts/realTest/index.js"
   },
   "dependencies": {
     "@google/genai": "^2.23.0",
