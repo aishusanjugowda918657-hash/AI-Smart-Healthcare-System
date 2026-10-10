@@ -247,6 +247,39 @@ export const saveDoctorSchedule = async (req, res, next) => {
       }
     }
 
+    // Authorization: Admin can modify any doctor's schedule; Doctor can only modify their own schedule
+    if (req.user?.role !== 'admin') {
+      const callerUid = req.user?.uid;
+      const callerDoctorUid = req.user?.doctorUid;
+      const callerDoctorId = req.user?.doctorId;
+
+      let isOwner = false;
+      if (docSnap && docSnap.exists) {
+        const data = docSnap.data() || {};
+        isOwner = Boolean(
+          docSnap.id === callerUid ||
+          data.uid === callerUid ||
+          data.doctorUid === callerUid ||
+          data.userId === callerUid ||
+          (callerDoctorUid && (docSnap.id === callerDoctorUid || data.doctorUid === callerDoctorUid || data.doctorId === callerDoctorUid)) ||
+          (callerDoctorId && (data.doctorId === callerDoctorId || docSnap.id === callerDoctorId)) ||
+          doctorId === callerUid ||
+          (callerDoctorUid && doctorId === callerDoctorUid) ||
+          (callerDoctorId && doctorId === callerDoctorId)
+        );
+      } else {
+        isOwner = Boolean(
+          doctorId === callerUid ||
+          (callerDoctorUid && doctorId === callerDoctorUid) ||
+          (callerDoctorId && doctorId === callerDoctorId)
+        );
+      }
+
+      if (!isOwner) {
+        throw new AppError('FORBIDDEN', 'Access denied: You can only modify your own schedule.', 403);
+      }
+    }
+
     if (!docSnap.exists) {
       const userSnap = await db.collection('users').doc(doctorId).get();
       const docName = userSnap.exists ? (userSnap.data().displayName || userSnap.data().fullName || 'Dr. Medical Staff') : 'Dr. Medical Staff';
@@ -882,6 +915,17 @@ export const doctorCheckPatientAccess = async (req, res, next) => {
       .get();
 
     if (!apptUidSnap.empty) {
+      return res.status(200).json(formatSuccessResponse({ hasAccess: true, reason: 'treating_doctor_90days' }));
+    }
+
+    const apptByDoctorUidSnap = await db.collection('appointments')
+      .where('doctorUid', '==', doctorUid)
+      .where('patientHealthId', '==', healthId)
+      .where('date', '>=', ninetyDaysAgoStr)
+      .limit(1)
+      .get();
+
+    if (!apptByDoctorUidSnap.empty) {
       return res.status(200).json(formatSuccessResponse({ hasAccess: true, reason: 'treating_doctor_90days' }));
     }
 

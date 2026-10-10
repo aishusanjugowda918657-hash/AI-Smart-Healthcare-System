@@ -81,6 +81,33 @@ export const getReportUploadUrl = async (req, res, next) => {
       });
     }
 
+    if (!targetHealthId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation Error: Patient Health ID is required.'
+      });
+    }
+
+    const { uid, role } = req.user;
+    const db = assertDbConnected();
+
+    // Verify authenticated user's access to target patient
+    const access = await verifyRecordAccess({
+      db,
+      uid,
+      role,
+      patientHealthId: targetHealthId,
+      reqQuery: req.query,
+      reqBody: req.body
+    });
+
+    if (!access.authorized) {
+      return res.status(403).json({
+        success: false,
+        message: access.message || access.reason || 'Forbidden: You are not authorized to upload reports for this patient.'
+      });
+    }
+
     // Check whether Firebase Storage is available on the project
     const storageReady = await checkStorageAvailable();
     if (!storageReady) {
@@ -93,7 +120,7 @@ export const getReportUploadUrl = async (req, res, next) => {
 
     const reportId = `rep-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
     const sanitizedFileName = String(fileName).replace(/[^a-zA-Z0-9._-]/g, '_');
-    const storagePath = `reports/${targetHealthId || 'general'}/${reportId}_${sanitizedFileName}`;
+    const storagePath = `reports/${targetHealthId}/${reportId}_${sanitizedFileName}`;
 
     let uploadUrl;
     if (isEmulator || process.env.NODE_ENV === 'test') {
@@ -166,6 +193,24 @@ export const saveReportMetadata = async (req, res, next) => {
     }
 
     const db = assertDbConnected();
+
+    // Verify authenticated user's access to target patient
+    const access = await verifyRecordAccess({
+      db,
+      uid,
+      role,
+      patientHealthId: targetHealthId,
+      reqQuery: req.query,
+      reqBody: req.body
+    });
+
+    if (!access.authorized) {
+      return res.status(403).json({
+        success: false,
+        message: access.message || access.reason || 'Forbidden: You are not authorized to save reports for this patient.'
+      });
+    }
+
     const id = customId || `rep-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
     const now = new Date();
 

@@ -6,6 +6,7 @@ import { createDoseReminders, createFollowUpReminders } from '../domain/reminder
 import { notify } from '../services/notify.js';
 import PDFDocument from 'pdfkit';
 import QRCode from 'qrcode';
+import { verifyRecordAccess } from './medicalController.js';
 
 /**
  * Generate PDF buffer helper using pdfkit
@@ -882,28 +883,12 @@ export const getPrescriptionsByHealthId = async (req, res, next) => {
     const { uid, role } = req.user;
     const db = assertDbConnected();
 
-    if (role === 'patient') {
-      let isAuthorized = false;
-      const patientDoc = await db.collection('patients').doc(uid).get();
-
-      if (patientDoc.exists && patientDoc.data().patientHealthId === patientHealthId) {
-        isAuthorized = true;
-      } else {
-        const famSnap = await db
-          .collection('patients')
-          .where('primaryAccountUid', '==', uid)
-          .where('patientHealthId', '==', patientHealthId)
-          .limit(1)
-          .get();
-        if (!famSnap.empty) {
-          isAuthorized = true;
-        }
-      }
-
-      if (!isAuthorized) {
+    if (role !== 'admin') {
+      const access = await verifyRecordAccess({ db, uid, role, patientHealthId });
+      if (!access.authorized) {
         return res.status(403).json({
           success: false,
-          message: "Forbidden Access: Patients are only authorized to access their own or their dependents' prescriptions."
+          message: access.reason || "Forbidden Access: You are not authorized to access these prescriptions."
         });
       }
     }
@@ -932,7 +917,18 @@ export const getPrescriptionsByHealthId = async (req, res, next) => {
 export const getRepeatLastPrescription = async (req, res, next) => {
   try {
     const patientHealthId = req.params.patientHealthId || req.params.healthId;
+    const { uid, role } = req.user;
     const db = assertDbConnected();
+
+    if (role !== 'admin') {
+      const access = await verifyRecordAccess({ db, uid, role, patientHealthId });
+      if (!access.authorized) {
+        return res.status(403).json({
+          success: false,
+          message: access.reason || 'Forbidden: Access unauthorized.'
+        });
+      }
+    }
 
     const snapshot = await db
       .collection('prescriptions')
@@ -983,6 +979,17 @@ export const exportPrescriptionPdf = async (req, res, next) => {
 
     if (!rxData) {
       return res.status(404).json({ success: false, message: 'Prescription not found' });
+    }
+
+    const { uid, role } = req.user;
+    if (role !== 'admin') {
+      const access = await verifyRecordAccess({ db, uid, role, patientHealthId: rxData.patientHealthId });
+      if (!access.authorized) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden: You are not authorized to download this prescription.'
+        });
+      }
     }
 
     // Fetch doctor profile for official registration number

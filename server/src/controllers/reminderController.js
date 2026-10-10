@@ -1,6 +1,7 @@
 import { assertDbConnected } from '../config/firebase.js';
 import { calculateAdherenceRate } from '../services/reminderService.js';
 import { generateDoseSchedule, verifyActionToken } from '../domain/reminders.js';
+import { verifyRecordAccess } from './medicalController.js';
 
 /**
  * Sync doctor-confirmed prescription reminder times to patient schedule
@@ -83,9 +84,21 @@ export const syncPrescriptionReminders = async (req, res, next) => {
 export const getTodayReminders = async (req, res, next) => {
   try {
     const userUid = req.user?.uid;
-    const healthId = req.query.healthId || req.user?.patientHealthId;
+    const role = req.user?.role;
+    const requestedHealthId = req.query.healthId;
+    const healthId = requestedHealthId || req.user?.patientHealthId;
     const dateFilter = req.query.date || new Date().toISOString().split('T')[0];
     const db = assertDbConnected();
+
+    if (role !== 'admin' && requestedHealthId) {
+      const access = await verifyRecordAccess({ db, uid: userUid, role, patientHealthId: requestedHealthId });
+      if (!access.authorized) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden: Access to requested patient reminders is unauthorized.'
+        });
+      }
+    }
 
     let reminders = [];
 
@@ -418,9 +431,21 @@ export const respondToReminder = async (req, res, next) => {
  */
 export const getAdherenceMetrics = async (req, res, next) => {
   try {
-    const healthId = req.params.healthId || req.query.healthId || req.user?.patientHealthId;
+    const requestedHealthId = req.params.healthId || req.query.healthId;
+    const healthId = requestedHealthId || req.user?.patientHealthId;
     const patientUid = req.user?.uid;
+    const role = req.user?.role;
     const db = assertDbConnected();
+
+    if (role !== 'admin' && requestedHealthId) {
+      const access = await verifyRecordAccess({ db, uid: patientUid, role, patientHealthId: requestedHealthId });
+      if (!access.authorized) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden: Access to requested patient adherence metrics is unauthorized.'
+        });
+      }
+    }
 
     let logs = [];
     if (healthId) {

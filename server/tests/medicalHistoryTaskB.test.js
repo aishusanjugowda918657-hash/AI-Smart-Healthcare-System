@@ -19,6 +19,12 @@ describe('Task B: Medical History, Visits, Reports, Security & Access Control Su
   beforeAll(async () => {
     const db = assertDbConnected();
 
+    // Clean up any lingering test visits and accessGrants from prior runs
+    const prevVisits = await db.collection('visits').where('appointmentId', '==', 'appt-taskb-treating').get();
+    for (const d of prevVisits.docs) await d.ref.delete();
+    const prevGrants = await db.collection('accessGrants').where('patientHealthId', '==', patientAHealthId).get();
+    for (const d of prevGrants.docs) await d.ref.delete();
+
     // 1. Seed Patient A
     await db.collection('patients').doc(patientAHealthId).set({
       healthId: patientAHealthId,

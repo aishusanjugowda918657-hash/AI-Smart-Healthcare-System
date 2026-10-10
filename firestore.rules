@@ -7,8 +7,12 @@ service cloud.firestore {
 
     match /appointments/{id} {
       allow read: if signedIn() && (
-        request.auth.uid in resource.data.viewerUids ||
-        resource.data.doctorId == request.auth.uid ||
+        (('viewerUids' in resource.data) && (request.auth.uid in resource.data.viewerUids)) ||
+        (('ownerUid' in resource.data) && resource.data.ownerUid == request.auth.uid) ||
+        (('patientUid' in resource.data) && resource.data.patientUid == request.auth.uid) ||
+        (('patientId' in resource.data) && resource.data.patientId == request.auth.uid) ||
+        (('doctorId' in resource.data) && resource.data.doctorId == request.auth.uid) ||
+        (('doctorUid' in resource.data) && resource.data.doctorUid == request.auth.uid) ||
         isStaff());
       allow write: if false;
     }

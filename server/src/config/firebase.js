@@ -9,13 +9,33 @@ let auth = null;
 let firebaseInitialized = false;
 const isEmulator = !!process.env.FIRESTORE_EMULATOR_HOST;
 
+export const getActiveProjectId = () => {
+  if (admin.apps.length > 0 && admin.app().options?.projectId) {
+    return admin.app().options.projectId;
+  }
+  if (isEmulator) {
+    return (
+      process.env.GCLOUD_PROJECT ||
+      (process.env.VITE_FIREBASE_PROJECT_ID && process.env.VITE_FIREBASE_PROJECT_ID !== 'ai-basedsmarthealthcaresystem'
+        ? process.env.VITE_FIREBASE_PROJECT_ID
+        : 'demo-project')
+    );
+  }
+  return process.env.VITE_FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT || 'ai-basedsmarthealthcaresystem';
+};
+
 try {
   if (admin.apps.length === 0) {
     if (isEmulator) {
       // When running against the local emulator, use a plain project-ID init.
       // firebase-admin automatically detects FIRESTORE_EMULATOR_HOST at this point.
+      const emulatorProjectId =
+        process.env.GCLOUD_PROJECT ||
+        (process.env.VITE_FIREBASE_PROJECT_ID && process.env.VITE_FIREBASE_PROJECT_ID !== 'ai-basedsmarthealthcaresystem'
+          ? process.env.VITE_FIREBASE_PROJECT_ID
+          : 'demo-project');
       admin.initializeApp({
-        projectId: process.env.GCLOUD_PROJECT || process.env.VITE_FIREBASE_PROJECT_ID || 'demo-project',
+        projectId: emulatorProjectId,
       });
       firebaseInitialized = true;
     } else if (process.env.FIREBASE_SERVICE_ACCOUNT_PATH && fs.existsSync(process.env.FIREBASE_SERVICE_ACCOUNT_PATH)) {
@@ -49,7 +69,7 @@ try {
     db = admin.firestore();
     auth = admin.auth();
     // Task 4: print one line so developers immediately know which backend they hit.
-    const projectId = admin.app().options?.projectId || process.env.VITE_FIREBASE_PROJECT_ID || 'unknown';
+    const projectId = admin.app().options?.projectId || getActiveProjectId();
     if (isEmulator) {
       console.log('[Firestore] EMULATOR (project=' + projectId + ') -- no quota, safe for local dev');
     } else {

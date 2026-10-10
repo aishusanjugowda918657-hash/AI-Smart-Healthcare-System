@@ -1,4 +1,4 @@
-import { assertDbConnected } from '../config/firebase.js';
+import { assertDbConnected, isEmulator, getActiveProjectId } from '../config/firebase.js';
 import { generateText } from './geminiService.js';
 import { recalculateQueue } from './queueService.js';
 import { writeAuditLog } from '../utils/audit.js';
@@ -152,8 +152,12 @@ export async function preparePatientSummary({ appointmentId, doctorUid, doctorRo
 
   // 2. Doctor Access Control
   if (doctorRole !== 'admin') {
-    const isAssigned = appt.doctorId === doctorUid;
-    const isDemoDoctor = doctorUid && doctorUid.startsWith('demo-doctor');
+    const isAssigned = appt.doctorId === doctorUid || appt.doctorUid === doctorUid;
+    const isIsolatedTestEnv = isEmulator &&
+      process.env.NODE_ENV !== 'production' &&
+      process.env.NODE_ENV !== 'staging' &&
+      getActiveProjectId() !== 'ai-basedsmarthealthcaresystem';
+    const isDemoDoctor = isIsolatedTestEnv && doctorUid && doctorUid.startsWith('demo-doctor');
 
     if (!isAssigned && !isDemoDoctor) {
       // Check if treating doctor in 90 days

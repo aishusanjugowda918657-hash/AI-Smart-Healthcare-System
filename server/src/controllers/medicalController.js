@@ -1,4 +1,4 @@
-import { assertDbConnected } from '../config/firebase.js';
+import { assertDbConnected, isEmulator, getActiveProjectId } from '../config/firebase.js';
 import PDFDocument from 'pdfkit';
 
 /**
@@ -201,6 +201,7 @@ export async function verifyRecordAccess({ db, uid, role, patientHealthId, reqQu
       return data.granteeUid === uid || data.doctorId === uid;
     });
 
+    let hasExpiredGrant = false;
     if (activeDoctorGrants.length > 0) {
       const hasValidGrant = activeDoctorGrants.some((d) => {
         const data = d.data();
@@ -210,24 +211,21 @@ export async function verifyRecordAccess({ db, uid, role, patientHealthId, reqQu
 
       if (hasValidGrant) {
         return { authorized: true, reason: 'doctor_share_grant' };
-      } else {
-        return {
-          authorized: false,
-          reason: 'Forbidden: Medical record share has expired'
-        };
       }
+      hasExpiredGrant = true;
     }
 
     // Check treating doctor status: appointment or visit within 90 days
     const ninetyDaysAgo = new Date();
     ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
 
+    let hasRecentAppt = false;
     const apptSnap = await db
       .collection('appointments')
       .where('doctorId', '==', uid)
       .get();
 
-    const hasRecentAppt = apptSnap.docs.some((d) => {
+    hasRecentAppt = apptSnap.docs.some((d) => {
       const data = d.data();
       const pId = data.patientHealthId || data.healthId;
       if (pId !== patientHealthId) return false;
@@ -235,18 +233,39 @@ export async function verifyRecordAccess({ db, uid, role, patientHealthId, reqQu
       return apptDate >= ninetyDaysAgo || ['booked', 'confirmed', 'checked_in', 'called', 'in_consultation'].includes(data.status);
     });
 
+    if (!hasRecentAppt) {
+      const uidApptSnap = await db
+        .collection('appointments')
+        .where('doctorUid', '==', uid)
+        .get();
+      hasRecentAppt = uidApptSnap.docs.some((d) => {
+        const data = d.data();
+        const pId = data.patientHealthId || data.healthId;
+        if (pId !== patientHealthId) return false;
+        const apptDate = new Date(data.date || data.createdAt || Date.now());
+        return apptDate >= ninetyDaysAgo || ['booked', 'confirmed', 'checked_in', 'called', 'in_consultation'].includes(data.status);
+      });
+    }
+
     if (hasRecentAppt) {
       return { authorized: true, reason: 'treating_doctor_90days' };
     }
 
-    // Allow demo doctors in test environments
-    if (uid.startsWith('demo-doctor')) {
+    // Allow demo doctors ONLY in isolated test/emulator environments (never in production or against live database)
+    const isIsolatedTestEnv = isEmulator &&
+      process.env.NODE_ENV !== 'production' &&
+      process.env.NODE_ENV !== 'staging' &&
+      getActiveProjectId() !== 'ai-basedsmarthealthcaresystem';
+
+    if (isIsolatedTestEnv && uid.startsWith('demo-doctor')) {
       return { authorized: true, reason: 'demo_treating_doctor' };
     }
 
     return {
       authorized: false,
-      reason: 'Forbidden: Doctor does not have an active treatment relationship within 90 days. Use break-glass for emergencies.'
+      reason: hasExpiredGrant
+        ? 'Forbidden: Medical record share has expired and doctor does not have an active treatment relationship within 90 days. Use break-glass for emergencies.'
+        : 'Forbidden: Doctor does not have an active treatment relationship within 90 days. Use break-glass for emergencies.'
     };
   }
 
