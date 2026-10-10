@@ -10,11 +10,58 @@ describe('Appointment Persistence & Cancellation Regression', () => {
 
   beforeEach(async () => {
     db = assertDbConnected();
+    const today = new Date().toISOString().split('T')[0];
     slotId = `test_slot_${Date.now()}`;
+
+    // Seed doctor record with identity mapping
+    await db.collection('doctors').doc('dr-test-001').set({
+      id: 'dr-test-001',
+      doctorId: 'dr-test-001',
+      uid: 'dr-test-001-uid',
+      name: 'Dr. Test Persist',
+      departmentId: 'dept-gen',
+      active: true
+    }, { merge: true });
+
+    // Seed primary patient profile
+    await db.collection('patients').doc(testPatientUid).set({
+      uid: testPatientUid,
+      patientHealthId: 'HID-001',
+      name: 'Test Patient',
+      email: 'patient-persist@test.com'
+    }, { merge: true });
+
+    // Seed dependent patient profile
+    await db.collection('patients').doc('patient-dep-002').set({
+      uid: 'patient-dep-002',
+      primaryAccountUid: testPatientUid,
+      patientHealthId: 'HID-002',
+      name: 'Family Member Name'
+    }, { merge: true });
+    await db.collection('patients').doc(testPatientUid).collection('family').doc('dep-002').set({
+      id: 'dep-002',
+      name: 'Family Member Name',
+      patientHealthId: 'HID-002',
+      relationship: 'Child'
+    }, { merge: true });
+
+    // Clean up existing appointments and duplicate locks for this test patient
+    const apptsSnap = await db.collection('appointments').where('patientUid', '==', testPatientUid).get();
+    for (const doc of apptsSnap.docs) {
+      await doc.ref.delete();
+    }
+    const locksSnap = await db.collection('appointment_locks').where('patientUid', '==', testPatientUid).get();
+    for (const doc of locksSnap.docs) {
+      await doc.ref.delete();
+    }
+    await db.collection('appointment_locks').doc(`dup_HID-001_dr-test-001_${today}`).delete().catch(() => {});
+    await db.collection('appointment_locks').doc(`dup_HID-002_dr-test-001_${today}`).delete().catch(() => {});
+    await db.collection('appointment_locks').doc(`dup_${testPatientUid}_dr-test-001-uid_${today}`).delete().catch(() => {});
+
     await db.collection('slots').doc(slotId).set({
       id: slotId,
       doctorId: 'dr-test-001',
-      date: new Date().toISOString().split('T')[0],
+      date: today,
       startAt: '09:00',
       endAt: '09:30',
       status: 'FREE'

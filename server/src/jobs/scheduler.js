@@ -744,13 +744,14 @@ export async function escalateTriageAlertsJob({ nowOverride } = {}) {
       // Notify emergency doctor role (in-app — we don't know the specific UID here
       // so we write a broadcast alert in the alerts collection)
       const escalationAlertId = `esc_${doc.id}`;
+      const patientHealthId = alert.patientHealthId || alert.healthId || null;
       batch.set(
         db.collection('alerts').doc(escalationAlertId),
         {
           kind: 'triage_escalation',
           originalAlertId: doc.id,
           patientName: alert.patientName || 'Unknown',
-          patientHealthId: alert.healthId || alert.patientHealthId,
+          patientHealthId,
           riskLevel: 'high',
           reasons: [`Triage alert unacknowledged for >2 minutes`],
           status: 'open',

@@ -1,4 +1,5 @@
 import { assertDbConnected, isEmulator, getActiveProjectId } from '../config/firebase.js';
+import { flags } from '../config/flags.js';
 import { generateText } from './geminiService.js';
 import { recalculateQueue } from './queueService.js';
 import { writeAuditLog } from '../utils/audit.js';
@@ -95,9 +96,10 @@ export function buildDeterministicSummary({ patient, appointment, medicalRecords
   }
 
   // 7. Caregiver note
-  if (caregiverInfo && caregiverInfo.note) {
+  if (caregiverInfo && (caregiverInfo.note || caregiverInfo.name)) {
     const cgName = caregiverInfo.name ? ` (${caregiverInfo.name})` : '';
-    parts.push(`Caregiver note${cgName}: ${caregiverInfo.note}.`);
+    const cgNote = caregiverInfo.note ? `: ${caregiverInfo.note}` : '';
+    parts.push(`Caregiver note${cgName}${cgNote}.`);
   }
 
   return parts.join(' ');
@@ -439,8 +441,13 @@ export async function preparePatientSummary({ appointmentId, doctorUid, doctorRo
   let summaryText = deterministicText;
   let summaryMode = 'rule-based';
 
-  try {
-    const aiPrompt = `You are generating a factual pre-consultation summary for a doctor.
+  if (flags.ai && process.env.FLAG_AI !== 'false') {
+    try {
+      const caregiverDisplay = caregiverInfo.name
+        ? `${caregiverInfo.name}${caregiverInfo.note ? `: ${caregiverInfo.note}` : ''}`
+        : (caregiverInfo.note || 'None');
+
+      const aiPrompt = `You are generating a factual pre-consultation summary for a doctor.
 
 Use ONLY the supplied patient data.
 
@@ -464,20 +471,21 @@ SUPPLIED PATIENT DATA:
 - Allergies: ${hasKnownAllergies ? patient.allergies.join(', ') : 'No known allergy recorded'}
 - Current medicines: ${prescriptions.length > 0 ? prescriptions.map(p => (p.medicines || []).map(m => m.name).join(', ')).filter(Boolean).join(', ') || 'No active medicines' : 'No active medicines'}
 - Adherence: ${adherencePct !== null ? `${Math.round(adherencePct)}%` : 'No adherence data'}
-- Caregiver info: ${caregiverInfo.note ? caregiverInfo.note : 'None'}
+- Caregiver info: ${caregiverDisplay}
 
 SUMMARY:`;
 
-    const rawAiText = await generateText(aiPrompt);
-    const cleanedAiText = rawAiText.replace(/^["']|["']$/g, '').trim();
+      const rawAiText = await generateText(aiPrompt);
+      const cleanedAiText = rawAiText.replace(/^["']|["']$/g, '').trim();
 
-    if (cleanedAiText && validateSummaryResponse(cleanedAiText) && cleanedAiText.length >= 10) {
-      summaryText = cleanedAiText;
-      summaryMode = 'ai';
+      if (cleanedAiText && validateSummaryResponse(cleanedAiText) && cleanedAiText.length >= 10) {
+        summaryText = cleanedAiText;
+        summaryMode = 'ai';
+      }
+    } catch (err) {
+      console.warn('Gemini pre-consultation summary error, using deterministic fallback:', err.message);
+      summaryMode = 'rule-based';
     }
-  } catch (err) {
-    console.warn('Gemini pre-consultation summary error, using deterministic fallback:', err.message);
-    summaryMode = 'rule-based';
   }
 
   // 13. Save Cached Summary onto Appointment
@@ -487,7 +495,7 @@ SUMMARY:`;
     flags,
     sources: Array.from(new Set(sources)),
     generatedAt: new Date().toISOString(),
-    patientHealthId: healthId
+    patientHealthId: healthId || null
   };
 
   await apptRef.set({
@@ -502,7 +510,7 @@ SUMMARY:`;
     action: summaryMode === 'ai' ? 'PRE_CONSULTATION_SUMMARY_AI' : 'PRE_CONSULTATION_SUMMARY_FALLBACK',
     targetType: 'appointment',
     targetId: appointmentId,
-    healthId
+    healthId: healthId || null
   });
 
   return {

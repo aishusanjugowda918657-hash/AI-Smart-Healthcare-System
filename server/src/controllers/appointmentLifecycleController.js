@@ -407,7 +407,7 @@ export const getRecentlyCancelled = async (req, res, next) => {
 
 /**
  * POST /api/appointments/:id/reschedule
- * Atomically releases old slot and reserves new slot
+ * Atomically releases old slot and reserves new slot with duplicate prevention & lock migration
  */
 export const rescheduleAppointment = async (req, res, next) => {
   try {
@@ -426,7 +426,12 @@ export const rescheduleAppointment = async (req, res, next) => {
     const aptRef = db.collection('appointments').doc(id);
     const now = clock.now();
 
+    const ACTIVE_APPT_STATUSES = ['booked', 'confirmed', 'checked_in', 'in_consultation', 'on_the_way', 'nearby', 'waiting', 'called', 'in_room'];
+    const RESCHEDULABLE_STATUSES = ['booked', 'confirmed', 'on_the_way', 'nearby'];
+
     await db.runTransaction(async (transaction) => {
+      // 1. ALL TRANSACTION READS FIRST
+      // 1a. Fetch appointment
       const aptSnap = await transaction.get(aptRef);
       if (!aptSnap.exists) {
         throw new AppError('NOT_FOUND', 'Appointment not found.', 404);
@@ -436,20 +441,87 @@ export const rescheduleAppointment = async (req, res, next) => {
       // Authorization check
       verifyAppointmentAccess(apt, req.user);
 
+      // Status check: only active pre-consultation appointments can be rescheduled
+      const currentStatus = (apt.status || '').toLowerCase();
+      if (!RESCHEDULABLE_STATUSES.includes(currentStatus)) {
+        throw new AppError('INVALID_STATUS', `Cannot reschedule appointment with status '${apt.status}'. Only active pre-consultation appointments may be rescheduled.`, 400);
+      }
+
+      const patientHealthId = apt.patientHealthId;
+      const targetPatientUid = apt.patientUid || apt.patientId || apt.ownerUid || apt.bookedByUid;
+      const resolvedDoctorId = apt.doctorId;
+      const resolvedDoctorUid = apt.doctorUid;
+      const oldDate = apt.date;
+
+      // Duplicate lock references for destination date
+      const safeNewLockId = `dup_${String(patientHealthId).replace(/[\/\s]/g, '_')}_${String(resolvedDoctorId).replace(/[\/\s]/g, '_')}_${String(newDate).replace(/[\/\s]/g, '_')}`;
+      const safeNewUidLockId = `dup_${String(targetPatientUid).replace(/[\/\s]/g, '_')}_${String(resolvedDoctorUid || resolvedDoctorId).replace(/[\/\s]/g, '_')}_${String(newDate).replace(/[\/\s]/g, '_')}`;
+
+      const newDupLockRef = db.collection('appointment_locks').doc(safeNewLockId);
+      const newDupUidLockRef = db.collection('appointment_locks').doc(safeNewUidLockId);
+
+      // Old duplicate lock references
+      const safeOldLockId = `dup_${String(patientHealthId).replace(/[\/\s]/g, '_')}_${String(resolvedDoctorId).replace(/[\/\s]/g, '_')}_${String(oldDate).replace(/[\/\s]/g, '_')}`;
+      const safeOldUidLockId = `dup_${String(targetPatientUid).replace(/[\/\s]/g, '_')}_${String(resolvedDoctorUid || resolvedDoctorId).replace(/[\/\s]/g, '_')}_${String(oldDate).replace(/[\/\s]/g, '_')}`;
+
+      const oldDupLockRef = db.collection('appointment_locks').doc(safeOldLockId);
+      const oldDupUidLockRef = db.collection('appointment_locks').doc(safeOldUidLockId);
+
+      // Read destination locks if moving to a different date
+      let newLockSnap = null;
+      let newUidLockSnap = null;
+
+      if (newDate !== oldDate) {
+        [newLockSnap, newUidLockSnap] = await Promise.all([
+          transaction.get(newDupLockRef),
+          transaction.get(newDupUidLockRef)
+        ]);
+
+        const activeLockSnap = (newLockSnap && newLockSnap.exists)
+          ? newLockSnap
+          : ((newUidLockSnap && newUidLockSnap.exists) ? newUidLockSnap : null);
+
+        if (activeLockSnap) {
+          const lockData = activeLockSnap.data();
+          if (lockData.appointmentId && lockData.appointmentId !== id) {
+            const lockedApptRef = db.collection('appointments').doc(lockData.appointmentId);
+            const lockedApptSnap = await transaction.get(lockedApptRef);
+            if (lockedApptSnap.exists) {
+              const lockedStatus = (lockedApptSnap.data().status || '').toLowerCase();
+              if (ACTIVE_APPT_STATUSES.includes(lockedStatus)) {
+                throw new AppError('DUPLICATE_BOOKING', 'You already have an active appointment with this doctor on the selected date.', 409);
+              }
+            }
+          }
+        }
+      }
+
+      // Read new slots
       const newSlotRefs = targetNewSlotIds.map((sId) => db.collection('slots').doc(sId));
       const newSlotSnaps = await Promise.all(newSlotRefs.map((r) => transaction.get(r)));
 
+      // Read associated token if exists
+      const tokenId = `tok-${id}`;
+      const tokenRef = db.collection('tokens').doc(tokenId);
+      const tokenSnap = await transaction.get(tokenRef);
+
+      // 1b. Validate new slots
       for (const newSlotSnap of newSlotSnaps) {
         if (!newSlotSnap.exists) {
           throw new AppError('NOT_FOUND', `Target slot '${newSlotSnap.id}' not found.`, 404);
         }
         const newSlot = newSlotSnap.data();
-        if (newSlot.status !== SlotStatus.FREE && newSlot.status !== SlotStatus.HELD) {
-          throw new AppError('SLOT_UNAVAILABLE', `Selected slot '${newSlotSnap.id}' is no longer available.`, 409);
+        if (newSlot.status !== SlotStatus.FREE && newSlot.status !== SlotStatus.HELD && String(newSlot.status).toLowerCase() !== 'free') {
+          // Allow if slot is already booked by this appointment
+          const isOwnSlot = (apt.slotIds && apt.slotIds.includes(newSlotSnap.id)) || apt.slotId === newSlotSnap.id;
+          if (!isOwnSlot) {
+            throw new AppError('SLOT_UNAVAILABLE', `Selected slot '${newSlotSnap.id}' is no longer available.`, 409);
+          }
         }
       }
 
-      // Release old slot(s)
+      // 2. ALL TRANSACTION WRITES AFTER READS
+      // 2a. Release old slot(s)
       const oldSlotIds = Array.isArray(apt.slotIds) && apt.slotIds.length > 0
         ? apt.slotIds
         : (apt.slotId ? [apt.slotId] : []);
@@ -465,7 +537,7 @@ export const rescheduleAppointment = async (req, res, next) => {
         }
       }
 
-      // Reserve new slot(s)
+      // 2b. Reserve new slot(s)
       for (const newSlotRef of newSlotRefs) {
         transaction.update(newSlotRef, {
           status: SlotStatus.BOOKED,
@@ -474,20 +546,70 @@ export const rescheduleAppointment = async (req, res, next) => {
         });
       }
 
+      // 2c. Update appointment
       const firstNewSlot = newSlotSnaps[0].data();
+      const firstNewSlotTime = firstNewSlot ? (firstNewSlot.startAt || firstNewSlot.timeSlot) : null;
       transaction.update(aptRef, {
         slotId: targetNewSlotIds[0],
         slotIds: targetNewSlotIds,
         date: newDate,
-        timeSlot: newTime || firstNewSlot.startAt || apt.timeSlot,
+        timeSlot: newTime || firstNewSlotTime || apt.timeSlot || apt.bookedStartAt || '09:00',
         status: 'booked',
         rescheduledFrom: {
-          slotId: apt.slotId || (apt.slotIds ? apt.slotIds[0] : null),
-          date: apt.date,
-          timeSlot: apt.timeSlot
+          slotId: apt.slotId || (apt.slotIds ? apt.slotIds[0] : null) || null,
+          date: apt.date || null,
+          timeSlot: apt.timeSlot || apt.bookedStartAt || null
         },
         rescheduledAt: now,
         updatedAt: now
+      });
+
+      // 2d. Update lock ownership
+      const lockPayload = {
+        appointmentId: id,
+        patientHealthId: patientHealthId || null,
+        patientUid: targetPatientUid || null,
+        doctorId: resolvedDoctorId || null,
+        doctorUid: resolvedDoctorUid || null,
+        date: newDate,
+        updatedAt: now
+      };
+
+      if (newDate !== oldDate) {
+        // Acquire new destination locks
+        transaction.set(newDupLockRef, { ...lockPayload, createdAt: now });
+        transaction.set(newDupUidLockRef, { ...lockPayload, createdAt: now });
+
+        // Release old source locks
+        transaction.delete(oldDupLockRef);
+        transaction.delete(oldDupUidLockRef);
+      } else {
+        // Same-date reschedule: refresh lock
+        transaction.set(newDupLockRef, lockPayload, { merge: true });
+        transaction.set(newDupUidLockRef, lockPayload, { merge: true });
+      }
+
+      // 2e. Update token date if exists
+      if (tokenSnap.exists) {
+        transaction.update(tokenRef, {
+          date: newDate,
+          updatedAt: now
+        });
+      }
+
+      // 2f. Write audit log inside transaction
+      const auditRef = db.collection('auditLogs').doc();
+      transaction.set(auditRef, {
+        id: auditRef.id,
+        userId: req.user?.uid || targetPatientUid || 'unknown',
+        targetPatientUid,
+        userRole: req.user?.role || 'patient',
+        action: 'RESCHEDULE_APPOINTMENT',
+        resourceType: 'appointment',
+        resourceId: id,
+        oldDate,
+        newDate,
+        timestamp: now
       });
     });
 

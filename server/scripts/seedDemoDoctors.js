@@ -90,7 +90,7 @@ const DEPARTMENTS = [
   { id: 'dept-ortho', name: 'Orthopedics', code: 'ORTHO', description: 'Bone, joint, and musculoskeletal care.' }
 ];
 
-export const seedDemoDoctors = async () => {
+export const seedDemoDoctors = async ({ skipSlots = false, days = 14 } = {}) => {
   console.log('🩺 Starting Demo Doctors Setup Script...\n');
 
   const db = assertDbConnected();
@@ -222,12 +222,14 @@ export const seedDemoDoctors = async () => {
   }
 
   // Step E: Trigger automatic slot generation for all doctors
-  console.log('\n📅 Step 3: Generating Bookable Slots for Next 14 Days...');
-  try {
-    const slotGenResult = await generateSlotsJob(14);
-    console.log(`   + Slot generation complete: ${slotGenResult.totalSlots || 0} slots created/verified.`);
-  } catch (slotErr) {
-    console.warn('   ⚠️ Slot generation warning:', slotErr.message);
+  if (!skipSlots) {
+    console.log(`\n📅 Step 3: Generating Bookable Slots for Next ${days} Days...`);
+    try {
+      const slotGenResult = await generateSlotsJob(days);
+      console.log(`   + Slot generation complete: ${slotGenResult.totalSlots || 0} slots created/verified.`);
+    } catch (slotErr) {
+      console.warn('   ⚠️ Slot generation warning:', slotErr.message);
+    }
   }
 
   console.log('\n' + '='.repeat(60));

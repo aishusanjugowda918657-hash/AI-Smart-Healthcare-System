@@ -118,6 +118,9 @@ describe('Phase 12 Hardening - Job Idempotency Verification', () => {
     const remId = `rem_concurrency_${Date.now()}`;
     const pastDue = new Date(Date.now() - 60_000); // 1 min ago
 
+    // Flush any leftover overdue reminders from earlier tests
+    await processRemindersJob();
+
     await db.collection('reminders').doc(remId).set({
       id: remId,
       status: 'pending',

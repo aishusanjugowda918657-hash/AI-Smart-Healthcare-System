@@ -161,12 +161,14 @@ describe('Phase 4 - Feature F3 & F4 Booking, Triage & Check-in QR Verification',
   // enforces the emergency level on the backend, regardless of client payload.
   // -------------------------------------------------------------
   it('Server STRICTLY ENFORCES emergency clinicalLevel when booking with red flag symptoms (Regression Test)', async () => {
-    const targetSlotId = `${doctorId}_${date}_1130`;
+    const emergencyDate = '2026-10-28';
+    const emergencyHealthId = `HID-EMG-${Date.now()}`;
+    const targetSlotId = `${doctorId}_${emergencyDate}_1130_${Date.now()}`;
     const db = assertDbConnected();
     await db.collection('slots').doc(targetSlotId).set({
       id: targetSlotId,
       doctorId,
-      date,
+      date: emergencyDate,
       startAt: '11:30',
       status: 'free',
       departmentId: 'dept-gen'
@@ -178,10 +180,10 @@ describe('Phase 4 - Feature F3 & F4 Booking, Triage & Check-in QR Verification',
       .set('x-demo-role', 'patient')
       .send({
         slotIds: [targetSlotId],
-        patientHealthId,
+        patientHealthId: emergencyHealthId,
         patientName: 'Emergency Patient',
         doctorId,
-        date,
+        date: emergencyDate,
         visitType: 'new',
         reasonText: 'Severe chest pain right now', // Red flag
         clinicalLevel: 1, // Malicious or buggy client tries to send routine

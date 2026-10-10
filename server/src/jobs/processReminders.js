@@ -7,7 +7,7 @@
 import { assertDbConnected } from '../config/firebase.js';
 import { notify } from '../services/notify.js';
 
-export async function processRemindersJob({ nowOverride } = {}) {
+export async function processRemindersJob({ nowOverride, batchSize = 100, maxBatches = 1 } = {}) {
   const db = assertDbConnected();
   const now = nowOverride ? new Date(nowOverride) : new Date();
   const nowMs = now.getTime();
@@ -29,22 +29,60 @@ export async function processRemindersJob({ nowOverride } = {}) {
 
   try {
     // ── Phase 1: Canonical 'reminders' collection (PRD Section 4.2 / 5.6) ──────────
-    // Query pending reminders (limit 200)
-    const pendingSnap = await db
-      .collection('reminders')
-      .where('status', '==', 'pending')
-      .limit(200)
-      .get();
+    const boundedBatchSize = Math.min(Math.max(Number(batchSize) || 100, 1), 200);
+    const boundedMaxBatches = Math.min(Math.max(Number(maxBatches) || 1, 1), 5);
+    const nowIso = now.toISOString();
 
-    if (!pendingSnap.empty) {
-      // Find reminders whose dueAt <= now
-      const dueDocs = [];
-      for (const doc of pendingSnap.docs) {
-        const rem = doc.data();
-        const dueAt = rem.dueAt?.toDate?.() || new Date(rem.dueAt || 0);
-        if (dueAt.getTime() <= nowMs) {
-          dueDocs.push(doc);
-        }
+    const parseDueAtMs = (docData) => {
+      const d = docData?.dueAt;
+      if (!d) return 0;
+      if (typeof d.toDate === 'function') return d.toDate().getTime();
+      const ms = new Date(d).getTime();
+      return isNaN(ms) ? 0 : ms;
+    };
+
+    for (let batchIdx = 0; batchIdx < boundedMaxBatches; batchIdx++) {
+      // Query pending reminders due <= now (ordered by dueAt ascending)
+      // Query both ISO string representations and Firestore Timestamps to ensure complete coverage
+      const [stringSnap, timestampSnap] = await Promise.all([
+        db.collection('reminders')
+          .where('status', '==', 'pending')
+          .where('dueAt', '<=', nowIso)
+          .orderBy('dueAt', 'asc')
+          .limit(boundedBatchSize)
+          .get()
+          .catch((err) => {
+            console.warn('pending reminders dueAt string query:', err.message);
+            return { docs: [] };
+          }),
+        db.collection('reminders')
+          .where('status', '==', 'pending')
+          .where('dueAt', '<=', now)
+          .orderBy('dueAt', 'asc')
+          .limit(boundedBatchSize)
+          .get()
+          .catch((err) => {
+            console.warn('pending reminders dueAt timestamp query:', err.message);
+            return { docs: [] };
+          })
+      ]);
+
+      const docMap = new Map();
+      for (const doc of (stringSnap?.docs || [])) docMap.set(doc.id, doc);
+      for (const doc of (timestampSnap?.docs || [])) docMap.set(doc.id, doc);
+
+      if (docMap.size === 0) {
+        break;
+      }
+
+      // Sort combined batch strictly by dueAt ascending (earliest due first)
+      const dueDocs = Array.from(docMap.values())
+        .filter((d) => parseDueAtMs(d.data()) <= nowMs)
+        .sort((a, b) => parseDueAtMs(a.data()) - parseDueAtMs(b.data()))
+        .slice(0, boundedBatchSize);
+
+      if (dueDocs.length === 0) {
+        break;
       }
 
       // Group claimed reminders by groupKey (or reminderId if no groupKey)
@@ -84,73 +122,88 @@ export async function processRemindersJob({ nowOverride } = {}) {
 
       // Send each group (medicines due at same minute for same patient arrive as ONE notification)
       for (const [groupKey, items] of claimedGroups.entries()) {
-        const first = items[0].data;
-        const receiverUids = first.receiverUids || [first.patientUid].filter(Boolean);
-        const patientName = first.patientName || 'Patient';
+        try {
+          const first = items[0].data;
+          const receiverUids = first.receiverUids || [first.patientUid].filter(Boolean);
+          const patientName = first.patientName || 'Patient';
 
-        let title = first.title || 'Reminder';
-        let body = first.body || 'Scheduled dose reminder';
-        let privacyBody = first.privacyBody || 'Medicine reminder';
+          let title = first.title || 'Reminder';
+          let body = first.body || 'Scheduled dose reminder';
+          let privacyBody = first.privacyBody || 'Medicine reminder';
 
-        if (items.length > 1) {
-          const medNames = items
-            .map((it) => `${it.data.medicineName || it.data.item?.name || 'Medicine'} ${it.data.dosage || ''}`.trim())
-            .join(', ');
-          title = `${patientName}: Time for your ${items.length} medicines`;
-          body = `${patientName}: Time for ${medNames}`;
-          privacyBody = `${patientName}: Medicine reminder`;
-        }
-
-        let sendSuccess = true;
-        if (receiverUids.length > 0) {
-          try {
-            await notify({
-              uids: receiverUids,
-              title,
-              body,
-              privacyBody,
-              type: first.type || 'medicine_reminder',
-              data: {
-                groupKey,
-                reminderId: items[0].doc.id,
-                count: items.length
-              }
-            });
-          } catch (err) {
-            sendSuccess = false;
+          if (items.length > 1) {
+            const medNames = items
+              .map((it) => `${it.data.medicineName || it.data.item?.name || 'Medicine'} ${it.data.dosage || ''}`.trim())
+              .join(', ');
+            title = `${patientName}: Time for your ${items.length} medicines`;
+            body = `${patientName}: Time for ${medNames}`;
+            privacyBody = `${patientName}: Medicine reminder`;
           }
-        }
 
-        // Finalize status for all reminders in this group
-        for (const item of items) {
-          if (sendSuccess) {
-            await item.doc.ref.update({
-              status: 'sent',
-              sentAt: now.toISOString(),
-              updatedAt: now.toISOString()
-            });
-            results.sent++;
-            results.processed++;
-          } else {
-            const currentAttempts = (item.data.attempts || 0) + 1;
-            if (currentAttempts >= 3) {
-              await item.doc.ref.update({
-                status: 'failed',
-                lastError: 'Delivery failed after 3 attempts',
-                updatedAt: now.toISOString()
+          let sendSuccess = true;
+          if (receiverUids.length > 0) {
+            try {
+              await notify({
+                uids: receiverUids,
+                title,
+                body,
+                privacyBody,
+                type: first.type || 'medicine_reminder',
+                data: {
+                  groupKey,
+                  reminderId: items[0].doc.id,
+                  count: items.length
+                }
               });
-            } else {
-              await item.doc.ref.update({
-                status: 'pending',
-                updatedAt: now.toISOString()
-              });
+            } catch (err) {
+              sendSuccess = false;
             }
           }
-        }
 
-        results.groupedCount++;
+          // Finalize status for all reminders in this group
+          for (const item of items) {
+            try {
+              if (sendSuccess) {
+                await item.doc.ref.update({
+                  status: 'sent',
+                  sentAt: now.toISOString(),
+                  updatedAt: now.toISOString()
+                });
+                results.sent++;
+                results.processed++;
+              } else {
+                const currentAttempts = (item.data.attempts || 0) + 1;
+                if (currentAttempts >= 3) {
+                  await item.doc.ref.update({
+                    status: 'failed',
+                    lastError: 'Delivery failed after 3 attempts',
+                    updatedAt: now.toISOString()
+                  });
+                } else {
+                  await item.doc.ref.update({
+                    status: 'pending',
+                    updatedAt: now.toISOString()
+                  });
+                }
+              }
+            } catch (itemErr) {
+              console.warn(`Failed to finalize reminder ${item.doc.id}:`, itemErr.message);
+            }
+          }
+
+          results.groupedCount++;
+        } catch (groupErr) {
+          console.warn(`Error processing reminder group ${groupKey}:`, groupErr.message);
+        }
+      }
+
+      // Break early if the returned batch was smaller than the limit
+      if (dueDocs.length < boundedBatchSize) {
+        break;
       }
     }
+
+    results.processedCount = results.processed;
 
     // ── Escalation & Missed Check on 'sent' medicine reminders ─────────
     const sentMedicineSnap = await db

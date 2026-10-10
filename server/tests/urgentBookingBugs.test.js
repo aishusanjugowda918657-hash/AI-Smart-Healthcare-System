@@ -7,7 +7,7 @@ import { seedDemoDoctors } from '../scripts/seedDemoDoctors.js';
 describe('Urgent Booking Bugs Verification Suite', () => {
   beforeAll(async () => {
     process.env.FLAG_AI = 'false';
-    await seedDemoDoctors();
+    await seedDemoDoctors({ skipSlots: true });
   }, 30000);
 
   afterEach(() => {
