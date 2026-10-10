@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import request from 'supertest';
 import app from '../src/app.js';
+import { db } from '../src/config/firebase.js';
 
 describe('Phase 6 & 7 - Full E2E Patient Live Queue Workflow Verification', () => {
   it('Executes complete booking -> queue status -> doctor call -> completion sequence', async () => {
@@ -110,6 +111,13 @@ describe('Phase 6 & 7 - Full E2E Patient Live Queue Workflow Verification', () =
     const slot1 = `09:${randMin1} AM`;
     const slot2 = `10:${randMin2} AM`;
 
+    await db.collection('doctors').doc(doctorUid).set({
+      doctorId: doctorUid,
+      doctorUid,
+      name: 'Dr. Rebook',
+      departmentId: 'dept-card'
+    });
+
     // ── Step 1: Book first appointment ────────────────────────────────────────
     const book1Res = await request(app)
       .post('/api/appointments/book')
@@ -216,6 +224,13 @@ describe('Phase 6 & 7 - Full E2E Patient Live Queue Workflow Verification', () =
     const doctorUid = `doc-sec-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
     const testDate = `2035-02-${Math.floor(10 + Math.random() * 15)}`;
     const slotB = '10:30';
+
+    await db.collection('doctors').doc(doctorUid).set({
+      doctorId: doctorUid,
+      doctorUid,
+      name: 'Dr. Security',
+      departmentId: 'dept-card'
+    });
 
     // Patient B books
     const bookB = await request(app)

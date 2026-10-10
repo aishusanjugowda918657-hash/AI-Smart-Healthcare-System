@@ -1,5 +1,8 @@
 import { assertDbConnected } from '../config/firebase.js';
 import { generateAtomicPatientHealthId, isValidHealthIdFormat } from '../services/healthIdGenerator.js';
+import { evaluateTriageRules } from '../domain/triage.js';
+import { calculatePriorityScore } from '../services/tokenPriorityEngine.js';
+import { AppError } from '../utils/errors.js';
 
 /**
  * Atomically book an appointment with Firestore Transactional Double-Booking Lock
@@ -25,20 +28,21 @@ export const bookAppointment = async (req, res, next) => {
     }
 
     const db = assertDbConnected();
+    const isStaff = ['doctor', 'admin', 'reception', 'nurse'].includes(role);
     let targetPatientUid = accountUid;
     let patientHealthId;
 
-    // 1. Fetch target patient profile (self vs family member)
+    // 1. Fetch target patient profile (self vs family member vs staff booking)
     if (patientId && patientId !== accountUid) {
       const depDoc = await db.collection('patients').doc(patientId).get();
-      if (!depDoc.exists || depDoc.data().primaryAccountUid !== accountUid) {
+      if (!isStaff && (!depDoc.exists || depDoc.data().primaryAccountUid !== accountUid)) {
         return res.status(403).json({
           success: false,
           message: 'Security Error: You are not authorized to book appointments for this patient.'
         });
       }
       targetPatientUid = patientId;
-      patientHealthId = depDoc.data().patientHealthId;
+      patientHealthId = depDoc.exists ? depDoc.data().patientHealthId : null;
       if (!patientHealthId || !isValidHealthIdFormat(patientHealthId)) {
         patientHealthId = await generateAtomicPatientHealthId();
         await db.collection('patients').doc(patientId).set({
@@ -73,22 +77,145 @@ export const bookAppointment = async (req, res, next) => {
       }
     }
 
-    // 2. Fetch doctor info
-    const doctorDoc = await db.collection('doctors').doc(doctorUid).get();
-    const doctorId = doctorDoc.exists ? doctorDoc.data().doctorId : 'DOC-001';
+    // 2. Fetch and validate doctor info (Fix CODE-Q1)
+    let doctorDoc = null;
+    let resolvedDoctorId = null;
+    let resolvedDoctorUid = null;
+
+    const directDocSnap = await db.collection('doctors').doc(doctorUid).get();
+    if (directDocSnap.exists) {
+      doctorDoc = directDocSnap.data();
+      resolvedDoctorId = doctorDoc.doctorId || directDocSnap.id;
+      resolvedDoctorUid = doctorDoc.doctorUid || doctorDoc.uid || directDocSnap.id;
+    } else {
+      const candidates = [
+        doctorUid,
+        doctorUid.startsWith('doc-uid-') ? doctorUid.replace(/^doc-uid-(doc-)?/i, 'DOC-') : null
+      ].filter(Boolean);
+
+      for (const cand of candidates) {
+        const qSnap = await db.collection('doctors')
+          .where('doctorId', '==', cand)
+          .limit(1)
+          .get();
+        if (!qSnap.empty) {
+          doctorDoc = qSnap.docs[0].data();
+          resolvedDoctorId = doctorDoc.doctorId || qSnap.docs[0].id;
+          resolvedDoctorUid = doctorDoc.doctorUid || doctorDoc.uid || qSnap.docs[0].id;
+          break;
+        }
+
+        const qSnapUid = await db.collection('doctors')
+          .where('doctorUid', '==', cand)
+          .limit(1)
+          .get();
+        if (!qSnapUid.empty) {
+          doctorDoc = qSnapUid.docs[0].data();
+          resolvedDoctorId = doctorDoc.doctorId || qSnapUid.docs[0].id;
+          resolvedDoctorUid = doctorDoc.doctorUid || doctorDoc.uid || qSnapUid.docs[0].id;
+          break;
+        }
+      }
+    }
+
+    if (!resolvedDoctorUid) {
+      const userDirectSnap = await db.collection('users').doc(doctorUid).get();
+      if (userDirectSnap.exists && userDirectSnap.data()?.role === 'doctor') {
+        resolvedDoctorUid = userDirectSnap.id;
+        resolvedDoctorId = userDirectSnap.data().doctorId || userDirectSnap.id;
+      } else {
+        const userQuerySnap = await db.collection('users')
+          .where('doctorId', '==', doctorUid)
+          .where('role', '==', 'doctor')
+          .limit(1)
+          .get();
+        if (!userQuerySnap.empty) {
+          resolvedDoctorUid = userQuerySnap.docs[0].id;
+          resolvedDoctorId = userQuerySnap.docs[0].data().doctorId || userQuerySnap.docs[0].id;
+        }
+      }
+    }
+
+    if (!resolvedDoctorUid || !resolvedDoctorId) {
+      throw new AppError('INVALID_DOCTOR', 'Doctor record does not have a valid associated identity mapping.', 400);
+    }
+
+    // 3. Derive priority safely (Fix SEC-Q1 & SEC-Q2)
+    const ruleResult = evaluateTriageRules(reason);
+
+    let effectivePriorityCategory = 'STANDARD';
+    if (isStaff && priorityCategory) {
+      effectivePriorityCategory = priorityCategory.toUpperCase();
+    } else if (priorityCategory === 'SENIOR' || String(priorityCategory).toUpperCase() === 'SENIOR') {
+      effectivePriorityCategory = 'SENIOR';
+    } else if (ruleResult.clinicalLevel === 3) {
+      effectivePriorityCategory = 'EMERGENCY';
+    }
+
+    const isEmergencyVerified = isStaff && effectivePriorityCategory === 'EMERGENCY';
+    const priorityScore = calculatePriorityScore(effectivePriorityCategory, isEmergencyVerified);
+
+    // 4. Same-day duplicate policy check (Fix BIZ-Q1)
+    const ACTIVE_APPT_STATUSES = ['booked', 'confirmed', 'checked_in', 'in_consultation'];
+    const safeLockId = `dup_${String(patientHealthId).replace(/[\/\s]/g, '_')}_${String(resolvedDoctorId).replace(/[\/\s]/g, '_')}_${String(date).replace(/[\/\s]/g, '_')}`;
+    const safeUidLockId = `dup_uid_${String(targetPatientUid).replace(/[\/\s]/g, '_')}_${String(resolvedDoctorId).replace(/[\/\s]/g, '_')}_${String(date).replace(/[\/\s]/g, '_')}`;
+
+    // Fast-path pre-check on existing appointments
+    const existingActiveApptsQuery = await db.collection('appointments')
+      .where('date', '==', date)
+      .get();
+
+    for (const doc of existingActiveApptsQuery.docs) {
+      const data = doc.data();
+      const statusLower = (data.status || '').toLowerCase();
+      const matchesPatient = data.patientHealthId === patientHealthId ||
+        data.patientUid === targetPatientUid ||
+        data.ownerUid === targetPatientUid;
+      const matchesDoc = data.doctorId === resolvedDoctorId ||
+        data.doctorId === doctorUid ||
+        (data.doctorUid && data.doctorUid === resolvedDoctorUid);
+
+      if (matchesPatient && matchesDoc && ACTIVE_APPT_STATUSES.includes(statusLower)) {
+        throw new AppError('DUPLICATE_BOOKING', 'You already have an active appointment with this doctor on the selected date.', 409);
+      }
+    }
 
     let appointmentData;
     let appointmentId;
 
-    // 3. Execute atomic transaction to prevent double booking
+    // 5. Execute atomic transaction to prevent double booking & duplicate active appointments
     await db.runTransaction(async (transaction) => {
+      // 0. Concurrency-safe duplicate reservation lock checks (Fix BIZ-Q1)
+      const dupLockRef = db.collection('appointment_locks').doc(safeLockId);
+      const dupUidLockRef = db.collection('appointment_locks').doc(safeUidLockId);
+
+      const [dupLockSnap, dupUidLockSnap] = await Promise.all([
+        transaction.get(dupLockRef),
+        transaction.get(dupUidLockRef)
+      ]);
+
+      const activeLockSnap = dupLockSnap.exists ? dupLockSnap : (dupUidLockSnap.exists ? dupUidLockSnap : null);
+      if (activeLockSnap) {
+        const lockData = activeLockSnap.data();
+        if (lockData.appointmentId) {
+          const lockedApptRef = db.collection('appointments').doc(lockData.appointmentId);
+          const lockedApptSnap = await transaction.get(lockedApptRef);
+          if (lockedApptSnap.exists) {
+            const lockedStatus = (lockedApptSnap.data().status || '').toLowerCase();
+            if (ACTIVE_APPT_STATUSES.includes(lockedStatus)) {
+              throw new AppError('DUPLICATE_BOOKING', 'You already have an active appointment with this doctor on the selected date.', 409);
+            }
+          }
+        }
+      }
+
       // Query for conflicting active appointment on same doctor, date, and slot
       const conflictQuery = db
         .collection('appointments')
-        .where('doctorUid', '==', doctorUid)
+        .where('doctorUid', '==', resolvedDoctorUid)
         .where('date', '==', date)
         .where('timeSlot', '==', timeSlot)
-        .where('status', 'in', ['BOOKED', 'CHECKED_IN', 'IN_CONSULTATION', 'COMPLETED']);
+        .where('status', 'in', ['BOOKED', 'booked', 'CHECKED_IN', 'checked_in', 'IN_CONSULTATION', 'in_consultation', 'COMPLETED', 'completed']);
 
       const conflictSnapshot = await transaction.get(conflictQuery);
 
@@ -131,13 +258,14 @@ export const bookAppointment = async (req, res, next) => {
         bookedByUid: accountUid,
         patientUid: targetPatientUid,
         patientHealthId,          // Verified — matches target patient's patientHealthId
+        viewerUids: Array.from(new Set([targetPatientUid, accountUid, resolvedDoctorUid].filter(Boolean))),
         bookedBy: accountUid,
-        doctorUid,
-        doctorId,
+        doctorUid: resolvedDoctorUid,
+        doctorId: resolvedDoctorId,
         departmentId: departmentId || 'dept-gen',
         date,
         timeSlot,
-        priorityCategory,
+        priorityCategory: effectivePriorityCategory,
         reason,
         status: 'BOOKED',
         tokenNumber,
@@ -147,10 +275,22 @@ export const bookAppointment = async (req, res, next) => {
 
       transaction.set(newApptRef, appointmentData);
 
+      // Record duplicate reservation locks (Fix BIZ-Q1)
+      const lockPayload = {
+        appointmentId,
+        patientHealthId,
+        patientUid: targetPatientUid,
+        doctorId: resolvedDoctorId,
+        doctorUid: resolvedDoctorUid,
+        date,
+        createdAt: new Date()
+      };
+      transaction.set(dupLockRef, lockPayload);
+      transaction.set(dupUidLockRef, lockPayload);
+
       // Create matching token in tokens collection inside transaction
       const tokenId = `tok-${appointmentId}`;
       const tokenRef = db.collection('tokens').doc(tokenId);
-      const priorityScore = priorityCategory === 'EMERGENCY' ? 300 : priorityCategory === 'SENIOR' ? 200 : 100;
 
       transaction.set(tokenRef, {
         id: tokenId,
@@ -158,13 +298,13 @@ export const bookAppointment = async (req, res, next) => {
         appointmentId,
         patientUid: targetPatientUid,
         patientHealthId,
-        doctorUid,
-        doctorId,
+        doctorUid: resolvedDoctorUid,
+        doctorId: resolvedDoctorId,
         departmentId: departmentId || 'dept-gen',
         date,
-        priorityCategory,
+        priorityCategory: effectivePriorityCategory,
         priorityScore,
-        staffVerified: false,
+        staffVerified: isEmergencyVerified,
         sequenceNumber: seq,
         status: 'waiting',
         generatedAt: new Date(),
@@ -371,6 +511,24 @@ export const updateAppointmentStatus = async (req, res, next) => {
         success: false,
         message: 'Appointment record not found.'
       });
+    }
+
+    const isStaff = ['doctor', 'admin', 'nurse', 'reception'].includes(role);
+    if (!isStaff) {
+      if (status === 'CANCELLED') {
+        const apptData = apptDoc.data();
+        if (apptData.patientUid && apptData.patientUid !== uid) {
+          return res.status(403).json({
+            success: false,
+            message: 'Forbidden: You can only cancel your own appointments.'
+          });
+        }
+      } else {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden: Only healthcare staff can update appointment status.'
+        });
+      }
     }
 
     await apptRef.update({

@@ -225,6 +225,48 @@ export const getDoctorOptions = async (req, res, next) => {
           }
         });
 
+        // Fallback for any doctor with no slots today or tomorrow: look ahead up to maxDateStr (14 days)
+        const missingDoctors = doctors.filter(d => !nextSlotByDoctor[d.doctorId] && !nextSlotByDoctor[d.id] && !nextSlotByDoctor[d.uid]);
+        if (missingDoctors.length > 0) {
+          const missingIds = [];
+          missingDoctors.forEach(d => {
+            if (d.doctorId) missingIds.push(d.doctorId);
+            if (d.id) missingIds.push(d.id);
+            if (d.uid) missingIds.push(d.uid);
+          });
+          const uniqueMissingIds = Array.from(new Set(missingIds)).slice(0, 10);
+
+          for (let i = 2; i <= 14; i++) {
+            const checkDateStr = today.add(i, 'day').format('YYYY-MM-DD');
+            const checkSnap = await db.collection('slots')
+              .where('doctorId', 'in', uniqueMissingIds)
+              .where('date', '==', checkDateStr)
+              .get();
+
+            checkSnap.docs.forEach(s => {
+              const d = s.data();
+              if (d.status !== SlotStatus.FREE && String(d.status).toLowerCase() !== 'free') return;
+              const did = d.doctorId;
+              if (!nextSlotByDoctor[did] || (d.date < nextSlotByDoctor[did].date || (d.date === nextSlotByDoctor[did].date && d.startAt < nextSlotByDoctor[did].startAt))) {
+                nextSlotByDoctor[did] = d;
+              }
+            });
+
+            doctors.forEach(d => {
+              const slot = nextSlotByDoctor[d.doctorId] || nextSlotByDoctor[d.uid] || nextSlotByDoctor[d.id];
+              if (slot) {
+                if (d.doctorId) nextSlotByDoctor[d.doctorId] = slot;
+                if (d.uid) nextSlotByDoctor[d.uid] = slot;
+                if (d.id) nextSlotByDoctor[d.id] = slot;
+              }
+            });
+
+            if (doctors.every(d => nextSlotByDoctor[d.doctorId] || nextSlotByDoctor[d.id] || nextSlotByDoctor[d.uid])) {
+              break;
+            }
+          }
+        }
+
         // Basic queue fetch
         for (const did of docIds) {
           queueLengthByDoctor[did] = 0;
@@ -453,6 +495,28 @@ export const createAppointment = async (req, res, next) => {
       }
     }
 
+    // Resolve associated doctor account UID using trusted stored identifiers (Fix CODE-Q1)
+    let resolvedDoctorUid = doctorDoc?.doctorUid || doctorDoc?.uid || null;
+    if (!resolvedDoctorUid) {
+      const directUserSnap = await db.collection('users').doc(doctorId).get();
+      if (directUserSnap.exists && directUserSnap.data()?.role === 'doctor') {
+        resolvedDoctorUid = directUserSnap.id;
+      } else {
+        const userQuerySnap = await db.collection('users')
+          .where('doctorId', '==', doctorId)
+          .where('role', '==', 'doctor')
+          .limit(1)
+          .get();
+        if (!userQuerySnap.empty) {
+          resolvedDoctorUid = userQuerySnap.docs[0].id;
+        }
+      }
+    }
+
+    if (!resolvedDoctorUid) {
+      throw new AppError('INVALID_DOCTOR', 'Doctor record does not have a valid associated identity mapping.', 400);
+    }
+
     // Fetch department letter for token prefix
     let deptLetter = 'G';
     if (departmentId) {
@@ -462,16 +526,66 @@ export const createAppointment = async (req, res, next) => {
       }
     }
 
-    // SERVER-SIDE TRIAGE ENFORCEMENT
+    // SERVER-SIDE TRIAGE ENFORCEMENT (Fix SEC-Q2)
+    // Never trust patient-supplied clinicalLevel or urgencySuggested.
+    // Derive clinical level and urgency strictly from trusted server-side triage evaluation.
+    // Only permit staff-assigned clinical levels through an authorized healthcare staff role.
+    const isStaff = ['doctor', 'admin', 'reception', 'nurse'].includes(req.user?.role);
     const ruleResult = evaluateTriageRules(reasonText);
-    let finalClinicalLevel = Number(clinicalLevel) || 1;
-    let finalUrgencySuggested = urgencySuggested || 'routine';
-    if (ruleResult.clinicalLevel > finalClinicalLevel) {
-      finalClinicalLevel = ruleResult.clinicalLevel;
-      finalUrgencySuggested = ruleResult.urgencySuggested;
+
+    let finalClinicalLevel = ruleResult.clinicalLevel || 1;
+    let finalUrgencySuggested = ruleResult.urgencySuggested || 'routine';
+
+    if (isStaff && clinicalLevel !== undefined && clinicalLevel !== null) {
+      const parsedLevel = Number(clinicalLevel);
+      if ([1, 2, 3].includes(parsedLevel)) {
+        finalClinicalLevel = parsedLevel;
+        finalUrgencySuggested = urgencySuggested || (parsedLevel === 3 ? 'emergency' : parsedLevel === 2 ? 'urgent' : 'routine');
+      }
+    }
+
+    // SAME-DAY DUPLICATE POLICY CHECK (Fix BIZ-Q1)
+    // Policy: Same patient, doctor, date, and active appointment statuses.
+    // Active statuses: booked, confirmed, checked_in, in_consultation
+    const ACTIVE_APPT_STATUSES = ['booked', 'confirmed', 'checked_in', 'in_consultation'];
+    const safeLockId = `dup_${String(patientHealthId).replace(/[\/\s]/g, '_')}_${String(resolvedDoctorId).replace(/[\/\s]/g, '_')}_${String(date).replace(/[\/\s]/g, '_')}`;
+
+    // Fast-path check on existing appointments
+    const existingActiveApptsQuery = await db.collection('appointments')
+      .where('patientHealthId', '==', patientHealthId)
+      .where('date', '==', date)
+      .get();
+
+    for (const doc of existingActiveApptsQuery.docs) {
+      const data = doc.data();
+      const statusLower = (data.status || '').toLowerCase();
+      const matchesDoc = data.doctorId === doctorId ||
+        data.doctorId === resolvedDoctorId ||
+        (data.doctorUid && data.doctorUid === resolvedDoctorUid);
+
+      if (matchesDoc && ACTIVE_APPT_STATUSES.includes(statusLower)) {
+        throw new AppError('DUPLICATE_BOOKING', 'You already have an active appointment with this doctor on the selected date.', 409);
+      }
     }
 
     const apptResult = await db.runTransaction(async (tx) => {
+      // 0. Concurrency-safe duplicate reservation lock check (Fix BIZ-Q1)
+      const dupLockRef = db.collection('appointment_locks').doc(safeLockId);
+      const dupLockSnap = await tx.get(dupLockRef);
+      if (dupLockSnap.exists) {
+        const lockData = dupLockSnap.data();
+        if (lockData.appointmentId) {
+          const lockedApptRef = db.collection('appointments').doc(lockData.appointmentId);
+          const lockedApptSnap = await tx.get(lockedApptRef);
+          if (lockedApptSnap.exists) {
+            const lockedStatus = (lockedApptSnap.data().status || '').toLowerCase();
+            if (ACTIVE_APPT_STATUSES.includes(lockedStatus)) {
+              throw new AppError('DUPLICATE_BOOKING', 'You already have an active appointment with this doctor on the selected date.', 409);
+            }
+          }
+        }
+      }
+
       // 1. Fetch all requested slot documents
       const slotRefs = targetSlotIds.map((id) => db.collection('slots').doc(id));
       const slotSnaps = await Promise.all(slotRefs.map((r) => tx.get(r)));
@@ -505,19 +619,19 @@ export const createAppointment = async (req, res, next) => {
           throw new AppError('SLOT_DATE_MISMATCH', `Slot '${s.id}' belongs to date '${data.date}', not selected date '${date}'.`, 409);
         }
 
+        // 6. Verification: Slot is not in a doctor break or reserved window
+        const statusLower = String(data.status).toLowerCase();
+        if (statusLower === 'blocked' || statusLower === 'reserved' || statusLower === 'break') {
+          throw new AppError('SLOT_IN_BREAK', `Slot '${s.id}' is in a doctor break or reserved window.`, 409);
+        }
+
         // 4 & 5. Verification: Slot is currently free / not held by another patient
-        const isFree = data.status === SlotStatus.FREE || String(data.status).toLowerCase() === 'free';
+        const isFree = data.status === SlotStatus.FREE || statusLower === 'free';
         const isHeldByMe = data.status === SlotStatus.HELD && data.heldBy === userId && new Date(data.heldUntil).getTime() > nowMs;
         const isExpiredHold = data.status === SlotStatus.HELD && new Date(data.heldUntil).getTime() <= nowMs;
 
         if (!isFree && !isHeldByMe && !isExpiredHold) {
           throw new AppError('SLOT_TAKEN', `Slot '${s.id}' is already booked or taken.`, 409);
-        }
-
-        // 6. Verification: Slot is not in a doctor break
-        const statusLower = String(data.status).toLowerCase();
-        if (statusLower === 'blocked' || statusLower === 'reserved' || statusLower === 'break') {
-          throw new AppError('SLOT_IN_BREAK', `Slot '${s.id}' is in a doctor break or reserved window.`, 409);
         }
 
         // 7. Verification: Slot is not expired
@@ -552,11 +666,17 @@ export const createAppointment = async (req, res, next) => {
 
       const apptDoc = {
         id: appointmentId,
+        appointmentId,
         patientHealthId,
         patientName,
+        patientUid: userId,
+        patientId: userId,
+        bookedBy: userId,
         ownerUid: userId,
         bookedByUid: userId,
+        viewerUids: Array.from(new Set([userId, resolvedDoctorUid].filter(Boolean))),
         doctorId,
+        doctorUid: resolvedDoctorUid,
         doctorName,
         departmentId,
         departmentLetter: deptLetter,
@@ -570,6 +690,7 @@ export const createAppointment = async (req, res, next) => {
         complexity,
         clinicalLevel: finalClinicalLevel,
         urgencySuggested: finalUrgencySuggested,
+        priorityCategory: finalClinicalLevel === 3 ? 'EMERGENCY' : finalClinicalLevel === 2 ? 'HIGH' : 'STANDARD',
         status: 'booked',
         statusHistory: [{ status: 'booked', at: new Date().toISOString(), by: userId }],
         tokenNumber,
@@ -599,6 +720,35 @@ export const createAppointment = async (req, res, next) => {
       }
 
       tx.set(apptRef, apptDoc);
+
+      // Record duplicate reservation lock (Fix BIZ-Q1)
+      tx.set(dupLockRef, {
+        appointmentId,
+        patientHealthId,
+        doctorId: resolvedDoctorId,
+        doctorUid: resolvedDoctorUid,
+        date,
+        createdAt: new Date()
+      });
+
+      // Create matching token doc in tokens collection
+      const tokenId = `tok-${appointmentId}`;
+      const tokenRef = db.collection('tokens').doc(tokenId);
+      tx.set(tokenRef, {
+        id: tokenId,
+        tokenNumber: tokenLabel || String(tokenNumber),
+        appointmentId,
+        patientUid: userId,
+        patientHealthId,
+        doctorUid: resolvedDoctorUid,
+        doctorId,
+        departmentId,
+        date,
+        priorityCategory: finalClinicalLevel === 3 ? 'EMERGENCY' : finalClinicalLevel === 2 ? 'HIGH' : 'STANDARD',
+        status: 'waiting',
+        generatedAt: new Date(),
+        updatedAt: new Date()
+      }, { merge: true });
 
       // Update slot docs to status: booked
       slotRefs.forEach((r) => {

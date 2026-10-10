@@ -32,10 +32,20 @@ export const checkinAndGenerateToken = async (req, res, next) => {
     const date = apptData.date;
     const doctorUid = apptData.doctorUid;
 
-    const isStaff = ['doctor', 'admin'].includes(role);
-    const verified = staffVerified || isStaff;
+    const isStaff = ['doctor', 'admin', 'reception', 'nurse'].includes(role);
+    if (!isStaff && apptData.patientUid && apptData.patientUid !== patientUid) {
+      return res.status(403).json({
+        success: false,
+        message: 'Forbidden: You can only check in for your own appointment.'
+      });
+    }
+    // Fix SEC-Q1: Only authorized healthcare staff can assert staffVerified or override priorityCategory
+    const verified = isStaff ? Boolean(staffVerified ?? true) : false;
+    const effectivePriorityCategory = isStaff
+      ? (priorityCategory || apptData.priorityCategory || 'STANDARD')
+      : (apptData.priorityCategory || 'STANDARD');
 
-    const priorityScore = calculatePriorityScore(priorityCategory, verified);
+    const priorityScore = calculatePriorityScore(effectivePriorityCategory, verified);
 
     const todayTokens = await db
       .collection('tokens')
@@ -57,7 +67,7 @@ export const checkinAndGenerateToken = async (req, res, next) => {
       doctorId: apptData.doctorId,
       departmentId: apptData.departmentId,
       date,
-      priorityCategory,
+      priorityCategory: effectivePriorityCategory,
       priorityScore,
       staffVerified: verified,
       sequenceNumber,
@@ -414,6 +424,22 @@ export const getMyQueueStatus = async (req, res, next) => {
         .where('bookedBy', '==', patientUid)
         .get();
       allAppts = bookedSnap.docs.map((d) => ({ id: d.id, appointmentId: d.data().appointmentId || d.id, ...d.data() }));
+    }
+
+    if (allAppts.length === 0) {
+      const ownerSnap = await db
+        .collection('appointments')
+        .where('ownerUid', '==', patientUid)
+        .get();
+      allAppts = ownerSnap.docs.map((d) => ({ id: d.id, appointmentId: d.data().appointmentId || d.id, ...d.data() }));
+    }
+
+    if (allAppts.length === 0) {
+      const pIdSnap = await db
+        .collection('appointments')
+        .where('patientId', '==', patientUid)
+        .get();
+      allAppts = pIdSnap.docs.map((d) => ({ id: d.id, appointmentId: d.data().appointmentId || d.id, ...d.data() }));
     }
 
     if (allAppts.length === 0 && patientHealthId) {
