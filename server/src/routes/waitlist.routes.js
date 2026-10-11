@@ -40,7 +40,14 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
   try {
     const { id } = req.params;
     const userId = req.user?.uid || req.user?.id;
-    const result = await leaveWaitlist(id, userId);
+    const role = req.user?.role;
+    const result = await leaveWaitlist(id, userId, role);
+    if (!result.success && result.message?.includes('Forbidden')) {
+      return res.status(403).json(result);
+    }
+    if (!result.success && result.message?.includes('not found')) {
+      return res.status(404).json(result);
+    }
     res.status(200).json(result);
   } catch (error) {
     next(error);

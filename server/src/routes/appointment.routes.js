@@ -48,6 +48,6 @@ router.post('/:id/no-show-reason', requireAuth, recordNoShowReason);
 
 router.patch('/:id/status', requireAuth, updateAppointmentStatus);
 router.patch('/:id/cancel', requireAuth, cancelAppointment);
-router.post('/run-no-show-check', triggerNoShowScheduler);
+router.post('/run-no-show-check', requireAuth, requireRole('admin'), triggerNoShowScheduler);
 
 export default router;

@@ -4,6 +4,7 @@ import { AppError, formatSuccessResponse } from '../utils/errors.js';
 import { recalculateQueue } from '../services/queueService.js';
 import { getReadyCandidates } from '../domain/priority.js';
 import { writeAuditLog } from '../utils/audit.js';
+import { verifyRecordAccess } from './medicalController.js';
 
 /**
  * Verifies if the authenticated doctor owns the target queue/doctor.
@@ -93,9 +94,9 @@ export const getDoctorQueueToday = async (req, res, next) => {
     const currentConsultation = allAppts.find((a) => a.id === queueData.currentAppointmentId) || null;
     const readyCandidates = getReadyCandidates(allAppts, clock.now());
 
-    const notCheckedIn = allAppts.filter(
-      (a) => ['booked', 'confirmed', 'on_the_way', 'nearby', 'not_arrived', 'late'].includes(a.status)
-    );
+    const notCheckedIn = allAppts
+      .filter((a) => ['booked', 'confirmed', 'on_the_way', 'nearby', 'not_arrived', 'late'].includes(a.status))
+      .sort((a, b) => (a.timeSlot || a.bookedStartAt || '').localeCompare(b.timeSlot || b.bookedStartAt || ''));
 
     res.status(200).json(formatSuccessResponse({
       queue: queueData,
@@ -672,6 +673,23 @@ export const setLeaveHomeParams = async (req, res, next) => {
     }
 
     const apt = snap.data();
+    const uid = req.user?.uid;
+    let isOwner =
+      (apt.patientUid && apt.patientUid === uid) ||
+      (apt.ownerUid && apt.ownerUid === uid) ||
+      (apt.bookedByUid && apt.bookedByUid === uid) ||
+      (apt.bookedBy && apt.bookedBy === uid) ||
+      (apt.patientId && apt.patientId === uid);
+
+    if (req.user?.role === 'patient' && !isOwner && (apt.patientHealthId || apt.healthId)) {
+      const targetHealthId = apt.patientHealthId || apt.healthId;
+      const access = await verifyRecordAccess({ db, uid, role: 'patient', patientHealthId: targetHealthId }).catch(() => ({ authorized: false }));
+      if (access?.authorized) isOwner = true;
+    }
+
+    if (req.user?.role === 'patient' && !isOwner) {
+      throw new AppError('FORBIDDEN', 'Access forbidden: You can only modify your own appointment.', 403);
+    }
     const travelMin = parseInt(travelMinutes, 10);
 
     await apptRef.update({
@@ -700,6 +718,25 @@ export const toggleEarlyOptIn = async (req, res, next) => {
 
     if (!snap.exists) {
       throw new AppError('NOT_FOUND', 'Appointment not found.', 404);
+    }
+
+    const apt = snap.data();
+    const uid = req.user?.uid;
+    let isOwner =
+      (apt.patientUid && apt.patientUid === uid) ||
+      (apt.ownerUid && apt.ownerUid === uid) ||
+      (apt.bookedByUid && apt.bookedByUid === uid) ||
+      (apt.bookedBy && apt.bookedBy === uid) ||
+      (apt.patientId && apt.patientId === uid);
+
+    if (req.user?.role === 'patient' && !isOwner && (apt.patientHealthId || apt.healthId)) {
+      const targetHealthId = apt.patientHealthId || apt.healthId;
+      const access = await verifyRecordAccess({ db, uid, role: 'patient', patientHealthId: targetHealthId }).catch(() => ({ authorized: false }));
+      if (access?.authorized) isOwner = true;
+    }
+
+    if (req.user?.role === 'patient' && !isOwner) {
+      throw new AppError('FORBIDDEN', 'Access forbidden: You can only modify your own appointment.', 403);
     }
 
     await apptRef.update({

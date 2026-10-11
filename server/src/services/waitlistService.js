@@ -6,6 +6,7 @@
 import { assertDbConnected } from '../config/firebase.js';
 import { clock } from '../utils/clock.js';
 import { notify } from '../services/notify.js';
+import { verifyRecordAccess } from '../controllers/medicalController.js';
 
 /**
  * Register interest on waiting list
@@ -34,15 +35,25 @@ export async function joinWaitlist({ healthId, patientName, userId, doctorId, de
   return entry;
 }
 
-/**
- * Leave waiting list
- */
-export async function leaveWaitlist(waitlistId, userId) {
+export async function leaveWaitlist(waitlistId, userId, role) {
   const db = assertDbConnected();
   const docRef = db.collection('waitlist').doc(waitlistId);
   const doc = await docRef.get();
 
   if (!doc.exists) return { success: false, message: 'Waitlist entry not found.' };
+
+  const data = doc.data();
+  const isStaff = ['doctor', 'admin', 'reception', 'nurse'].includes(role);
+  if (!isStaff) {
+    let isOwner = (data.userId && data.userId === userId) || (data.healthId && data.healthId === userId);
+    if (!isOwner && data.healthId) {
+      const access = await verifyRecordAccess({ db, uid: userId, role: 'patient', patientHealthId: data.healthId }).catch(() => ({ authorized: false }));
+      if (access?.authorized) isOwner = true;
+    }
+    if (!isOwner) {
+      return { success: false, message: 'Forbidden: You can only remove your own waitlist entry.' };
+    }
+  }
 
   await docRef.set({ status: 'cancelled', cancelledAt: clock.now().toISOString() }, { merge: true });
   return { success: true, message: 'Removed from waitlist.' };

@@ -5,6 +5,7 @@
  */
 import { assertDbConnected } from '../config/firebase.js';
 import { clock } from '../utils/clock.js';
+import { verifyRecordAccess } from './medicalController.js';
 
 /**
  * POST /api/offers/:id/accept { optionIndex }
@@ -28,6 +29,17 @@ export const acceptOffer = async (req, res, next) => {
       }
 
       const offer = offerDoc.data();
+
+      if (req.user?.role === 'patient') {
+        let isOwner = offer.userId === userId || (req.user?.patientHealthId && offer.patientHealthId === req.user?.patientHealthId);
+        if (!isOwner && offer.patientHealthId) {
+          const access = await verifyRecordAccess({ db, uid: userId, role: 'patient', patientHealthId: offer.patientHealthId });
+          if (access.authorized) isOwner = true;
+        }
+        if (!isOwner) {
+          throw { statusCode: 403, message: 'Forbidden: You cannot accept another patient\'s offer.' };
+        }
+      }
 
       if (offer.status !== 'open') {
         throw { statusCode: 409, message: `Offer is no longer open (current status: ${offer.status}).` };
@@ -228,6 +240,20 @@ export const declineOffer = async (req, res, next) => {
     }
 
     const offer = offerDoc.data();
+    const userId = req.user?.uid || req.user?.id;
+    const role = req.user?.role;
+    const isStaff = ['doctor', 'admin', 'reception', 'nurse'].includes(role);
+    if (!isStaff && role === 'patient') {
+      let isOwner = offer.userId === userId || (req.user?.patientHealthId && offer.patientHealthId === req.user?.patientHealthId);
+      if (!isOwner && offer.patientHealthId) {
+        const access = await verifyRecordAccess({ db, uid: userId, role: 'patient', patientHealthId: offer.patientHealthId });
+        if (access.authorized) isOwner = true;
+      }
+      if (!isOwner) {
+        return res.status(403).json({ success: false, message: 'Forbidden: You cannot decline another patient\'s offer.' });
+      }
+    }
+
     await offerRef.set({
       status: 'declined',
       declinedAt: clock.now().toISOString()
@@ -288,9 +314,24 @@ export const getOfferById = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Offer not found.' });
     }
 
+    const offerData = doc.data();
+    const userId = req.user?.uid || req.user?.id;
+    const role = req.user?.role;
+    const isStaff = ['doctor', 'admin', 'reception', 'nurse'].includes(role);
+    if (!isStaff && role === 'patient') {
+      let isOwner = offerData.userId === userId || (req.user?.patientHealthId && offerData.patientHealthId === req.user?.patientHealthId);
+      if (!isOwner && offerData.patientHealthId) {
+        const access = await verifyRecordAccess({ db, uid: userId, role: 'patient', patientHealthId: offerData.patientHealthId });
+        if (access.authorized) isOwner = true;
+      }
+      if (!isOwner) {
+        return res.status(403).json({ success: false, message: 'Forbidden: You cannot access another patient\'s offer.' });
+      }
+    }
+
     res.status(200).json({
       success: true,
-      offer: { id: doc.id, ...doc.data() }
+      offer: { id: doc.id, ...offerData }
     });
   } catch (error) {
     next(error);

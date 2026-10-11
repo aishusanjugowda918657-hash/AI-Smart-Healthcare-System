@@ -1,4 +1,5 @@
 import { assertDbConnected } from '../config/firebase.js';
+import { verifyRecordAccess } from './medicalController.js';
 
 /**
  * Schedule a Patient Follow-up Checkup (Doctor/Admin only)
@@ -132,6 +133,35 @@ export const handleFollowUpAction = async (req, res, next) => {
 
     const flwData = flwDoc.data();
     const now = new Date();
+
+    if (role === 'patient') {
+      const targetHealthId = flwData.healthId || flwData.patientHealthId;
+      const hasOtherOwner = flwData.patientUid && flwData.patientUid !== uid;
+      if (hasOtherOwner) {
+        const access = await verifyRecordAccess({ db, uid, role, patientHealthId: targetHealthId });
+        if (!access.authorized) {
+          return res.status(403).json({
+            success: false,
+            message: "Forbidden: You can only perform actions on your own or your dependents' follow-ups."
+          });
+        }
+      } else if (!flwData.patientUid && targetHealthId) {
+        const patientDoc = await db.collection('patients').doc(targetHealthId).get();
+        if (patientDoc.exists) {
+          const pData = patientDoc.data();
+          const isOwner = pData.ownerUid === uid || pData.uid === uid || pData.primaryAccountUid === uid;
+          if (!isOwner) {
+            const access = await verifyRecordAccess({ db, uid, role, patientHealthId: targetHealthId });
+            if (!access.authorized) {
+              return res.status(403).json({
+                success: false,
+                message: "Forbidden: You can only perform actions on your own or your dependents' follow-ups."
+              });
+            }
+          }
+        }
+      }
+    }
 
     // 1. Action: Book Now -> Generate Deep Link & mark booked if appointmentId given
     if (action === 'book_now' || action === 'book') {
@@ -280,6 +310,26 @@ export const getFollowUpsList = async (req, res, next) => {
 
     if (role === 'doctor') {
       query = query.where('doctorId', '==', doctorUid || uid);
+    } else if (role === 'patient') {
+      if (healthId) {
+        const patientDoc = await db.collection('patients').doc(healthId).get();
+        if (patientDoc.exists) {
+          const pData = patientDoc.data();
+          const isOwner = pData.ownerUid === uid || pData.uid === uid || pData.primaryAccountUid === uid;
+          if (!isOwner) {
+            const access = await verifyRecordAccess({ db, uid, role, patientHealthId: healthId });
+            if (!access.authorized) {
+              return res.status(403).json({
+                success: false,
+                message: 'Forbidden: Access to requested patient follow-ups is unauthorized.'
+              });
+            }
+          }
+        }
+        query = query.where('healthId', '==', healthId);
+      } else {
+        query = query.where('patientUid', '==', uid);
+      }
     } else if (healthId) {
       query = query.where('healthId', '==', healthId);
     } else {

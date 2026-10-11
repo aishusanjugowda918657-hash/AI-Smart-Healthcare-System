@@ -113,6 +113,16 @@ describe('Task D: Medicine Reminders, Follow-ups, and Doctor Alerts', () => {
       const now = new Date();
       const pastDue = new Date(now.getTime() - 60_000);
 
+      // Ensure no leftover due reminders in emulator interfere with this concurrency test
+      const pendingSnap = await db.collection('reminders').where('status', '==', 'pending').get();
+      const cleanupBatch = db.batch();
+      pendingSnap.docs.forEach((d) => {
+        if (new Date(d.data().dueAt) <= now) {
+          cleanupBatch.delete(d.ref);
+        }
+      });
+      await cleanupBatch.commit().catch(() => {});
+
       await db.collection('reminders').doc(remId).set({
         id: remId,
         reminderId: remId,
@@ -383,6 +393,10 @@ describe('Task D: Medicine Reminders, Follow-ups, and Doctor Alerts', () => {
       expect(sweep2.overdueReminders).toBe(0);
       const updated2 = await db.collection('followups').doc(flwId).get();
       expect(updated2.data().reminderCount).toBe(3);
+
+      // Clean up generated reminder fixture
+      await db.collection('reminders').doc(`rem-flw-${flwId}-overdue`).delete().catch(() => {});
+      await db.collection('followups').doc(flwId).delete().catch(() => {});
     });
 
     it('Not Needed on serious follow-up creates a doctor alert', async () => {
