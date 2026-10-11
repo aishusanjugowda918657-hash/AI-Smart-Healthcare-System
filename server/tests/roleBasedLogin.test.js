@@ -78,7 +78,7 @@ describe('Role-Based Login Redirection API Verification', () => {
   it('Public registration always creates role "patient", ignoring requested role', async () => {
     const res = await request(app)
       .post('/api/auth/register')
-      .send({ email: 'hacker@example.com', password: 'password123', role: 'admin' });
+      .send({ email: `hacker_${Date.now()}@example.com`, password: 'password123', role: 'admin' });
     
     // Auth tests typically expect 201 or similar, but the user requested testing it gets 'patient'
     // Let's assume it succeeds or we check what the response says, or if we need to see what it rejects.

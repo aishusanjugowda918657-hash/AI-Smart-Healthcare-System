@@ -184,6 +184,7 @@ export function generateSlotsForDoctorDate({
         doctorId,
         date,
         startAt: timeHHmm,
+        endAt: existing?.endAt || minutesToHHmm(currentMin + slotMinutes),
         status: defaultStatus,
         heldUntil: null,
         heldBy: null,

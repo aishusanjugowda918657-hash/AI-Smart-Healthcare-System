@@ -104,6 +104,7 @@ export const fallbackParseQuestion = (question) => {
   
   // Strip question words/phrases to isolate name candidate
   const stripped = lower
+    .replace(/['’]s\b/g, '')
     .replace(/\b(what|how|when|who|where|does|is|has|show|me|the|a|an|times|disease|suffering|from|visited|taking|medicines|medications|next|follow-up|followup|previous|diagnosis|medical|history|blood|group|type|allergies|allergy|latest|vitals|treated|last|time|appointments|had|prescriptions|taking|regularly|have|any|he|she|his|her|patient|doctor|id)\b/g, ' ')
     .replace(/['’\?\!]/g, '')
     .replace(/\s+/g, ' ')
@@ -129,11 +130,27 @@ export const lookupPatientByName = async (db, name) => {
   if (snapshot.empty) {
     // Try substring/contains match if exact match on nameLower is empty
     const allPatients = await db.collection('patients').get();
+    const escapeRegExp = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const matchingDocs = allPatients.docs.filter(d => {
       const data = d.data();
-      const n = (data.fullName || data.name || '').toLowerCase();
-      const nl = (data.nameLower || '').toLowerCase();
-      return n === nameLower || nl === nameLower || n.includes(nameLower) || nameLower.includes(n);
+      const n = (data.fullName || data.name || '').toLowerCase().trim();
+      const nl = (data.nameLower || '').toLowerCase().trim();
+      if (!n && !nl) return false;
+      if (n === nameLower || nl === nameLower) return true;
+      if (nameLower.length >= 3 && (n.startsWith(nameLower) || nl.startsWith(nameLower))) return true;
+      if (n && n.length >= 3) {
+        try {
+          if (new RegExp(`\\b${escapeRegExp(n)}\\b`, 'i').test(nameLower)) return true;
+          if (new RegExp(`\\b${escapeRegExp(nameLower)}\\b`, 'i').test(n)) return true;
+        } catch (_) {}
+      }
+      if (nl && nl.length >= 3) {
+        try {
+          if (new RegExp(`\\b${escapeRegExp(nl)}\\b`, 'i').test(nameLower)) return true;
+          if (new RegExp(`\\b${escapeRegExp(nameLower)}\\b`, 'i').test(nl)) return true;
+        } catch (_) {}
+      }
+      return false;
     });
 
     if (matchingDocs.length === 0) {

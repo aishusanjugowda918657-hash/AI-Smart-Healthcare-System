@@ -41,7 +41,10 @@ export async function followupSweepJob() {
     for (const doc of docs) {
       const data = doc.data();
       const followUpId = doc.id;
-      const scheduledDate = new Date(data.dueDate || data.scheduledDate);
+      const rawDate = data.dueDate || data.scheduledDate;
+      if (!rawDate) continue;
+      const scheduledDate = new Date(rawDate);
+      if (isNaN(scheduledDate.getTime())) continue;
       const scheduledStr = scheduledDate.toISOString().split('T')[0];
       const patientHealthId = data.healthId || data.patientHealthId;
       const patientName = data.patientName || 'Patient';

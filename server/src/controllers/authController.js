@@ -108,6 +108,7 @@ export const registerUser = async (req, res, next) => {
         healthId,
         patientHealthId: healthId,
         ownerUid: uid,
+        email,
         relation: 'self',
         isTemporary: false,
         name: nameToUse,
@@ -376,7 +377,17 @@ export const loginSync = async (req, res, next) => {
         .get();
 
       if (patientSnap.empty) {
-        const healthId = await generateAtomicPatientHealthId();
+        const directDoc = await db.collection('patients').doc(uid).get();
+        if (directDoc.exists) {
+          const directData = directDoc.data();
+          await directDoc.ref.set({
+            ownerUid: uid,
+            relation: 'self',
+            name: directData.name || directData.fullName || userData.displayName || 'Patient',
+            healthId: directData.healthId || directData.patientHealthId
+          }, { merge: true });
+        } else {
+          const healthId = await generateAtomicPatientHealthId();
         const nameToUse = userData.displayName || 'Patient';
         const patientDoc = {
           healthId,
@@ -399,6 +410,7 @@ export const loginSync = async (req, res, next) => {
           updatedAt: new Date()
         };
         await db.collection('patients').doc(healthId).set(patientDoc);
+        }
       }
     }
 

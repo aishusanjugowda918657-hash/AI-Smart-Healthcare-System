@@ -144,9 +144,10 @@ describe('Safe Registration & Login Error Fix Unit Tests', () => {
 
   describe('authController logic verification', () => {
     it('forces role "patient" even if "admin" is requested in body', async () => {
+      const emailUnique = `testhack_${Date.now()}@example.com`;
       const req = {
         body: {
-          email: '  TESTHACK@EXAMPLE.COM  ',
+          email: `  ${emailUnique.toUpperCase()}  `,
           password: 'Password123!',
           fullName: 'Hacker',
           role: 'admin' // privilege escalation attempt
@@ -173,7 +174,7 @@ describe('Safe Registration & Login Error Fix Unit Tests', () => {
       expect(statusCode).toBe(201);
       expect(responseData.success).toBe(true);
       expect(responseData.data.role).toBe('patient');
-      expect(responseData.data.email).toBe('testhack@example.com');
+      expect(responseData.data.email).toBe(emailUnique.toLowerCase());
     });
 
     it('rolls back newly created Auth user if Firestore setup fails', async () => {
@@ -183,7 +184,7 @@ describe('Safe Registration & Login Error Fix Unit Tests', () => {
 
       const req = {
         body: {
-          email: 'rollback@example.com',
+          email: `rollback_${Date.now()}@example.com`,
           password: 'Password123!',
           fullName: 'Rollback User'
         }

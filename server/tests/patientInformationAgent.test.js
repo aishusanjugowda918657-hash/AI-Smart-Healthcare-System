@@ -14,11 +14,11 @@ describe('Phase 17 - Natural-Language Patient Information Agent API', () => {
     const db = assertDbConnected();
     const batch = db.batch();
 
-    // Single patient: John Doe
+    // Single patient: Jonathan Doe
     batch.set(db.collection('patients').doc('test-john-doe-001'), {
       id: 'test-john-doe-001',
-      fullName: 'John Doe',
-      nameLower: 'john doe',
+      fullName: 'Jonathan Doe',
+      nameLower: 'jonathan doe',
       age: 35,
       conditions: ['Hypertension', 'Type 2 Diabetes'],
       createdAt: new Date()
@@ -42,11 +42,11 @@ describe('Phase 17 - Natural-Language Patient Information Agent API', () => {
       createdAt: new Date()
     });
 
-    // Patient with no prescriptions/followups: Kavita Patel
+    // Patient with no prescriptions/followups: Kavita Unique Patel
     batch.set(db.collection('patients').doc('test-kavita-patel-001'), {
       id: 'test-kavita-patel-001',
-      fullName: 'Kavita Patel',
-      nameLower: 'kavita patel',
+      fullName: 'Kavita Unique Patel',
+      nameLower: 'kavita unique patel',
       age: 45,
       conditions: [],
       createdAt: new Date()
@@ -96,17 +96,17 @@ describe('Phase 17 - Natural-Language Patient Information Agent API', () => {
     expect(res.status).toBe(403);
   });
 
-  it('POST /api/patient-agent/query answers medical conditions for single matching patient (John Doe)', async () => {
+  it('POST /api/patient-agent/query answers medical conditions for single matching patient (Jonathan Doe)', async () => {
     const res = await request(app)
       .post('/api/patient-agent/query')
       .set('x-demo-uid', 'doc-uid-001')
       .set('x-demo-role', 'doctor')
-      .send({ question: 'John Doe what disease is he suffering from?' });
+      .send({ question: 'Jonathan Doe what disease is he suffering from?' });
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.status).toBe('answered');
-    expect(res.body.patient.fullName || res.body.patient.name).toBe('John Doe');
+    expect(res.body.patient.fullName || res.body.patient.name).toBe('Jonathan Doe');
     expect(res.body.intent).toBe('MEDICAL_CONDITIONS');
     expect(res.body.answer).toBeDefined();
     expect(res.body.sources).toContain('patients');
@@ -178,12 +178,12 @@ describe('Phase 17 - Natural-Language Patient Information Agent API', () => {
   });
 
   it('POST /api/patient-agent/query explicitly states when data does not exist in records', async () => {
-    // Kavita Patel has no recorded prescriptions or followups
+    // Kavita Unique Patel has no recorded prescriptions or followups
     const res = await request(app)
       .post('/api/patient-agent/query')
       .set('x-demo-uid', 'doc-uid-001')
       .set('x-demo-role', 'doctor')
-      .send({ question: 'When is Kavita Patel\'s next follow-up?' });
+      .send({ question: 'When is Kavita Unique Patel\'s next follow-up?' });
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
