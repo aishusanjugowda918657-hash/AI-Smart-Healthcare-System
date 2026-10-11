@@ -8,7 +8,9 @@
   ],
   "scripts": {
     "client:dev": "npm run dev --prefix client",
+    "client:emulator": "npm run dev:emulator --prefix client",
     "server:dev": "npm run dev --prefix server",
+    "server:emulator": "npm run dev:emulator:server --prefix server",
     "bootstrap": "npm run bootstrap --prefix server",
     "reset:everything": "npm run reset:everything --prefix server",
     "seed": "npm run seed --prefix server",

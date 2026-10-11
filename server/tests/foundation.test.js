@@ -18,6 +18,16 @@ describe('Phase 1 - Foundation & Core Architecture Integration Tests', () => {
     expect(typeof res.body.data.flags.scheduler).toBe('boolean');
   });
 
+  it('GET /api/health/env returns active projectId and emulator configuration', async () => {
+    const res = await request(app).get('/api/health/env');
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toBeDefined();
+    expect(res.body.data.projectId).toBeDefined();
+    expect(typeof res.body.data.isEmulator).toBe('boolean');
+  });
+
   it('Request without auth token returns 401 standard error envelope', async () => {
     const res = await request(app).get('/api/patients/me');
     

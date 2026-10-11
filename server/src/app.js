@@ -12,6 +12,7 @@ import { requireRole } from './middleware/roleMiddleware.js';
 import { staffPatientLookup, acceptCaregiverInvite } from './controllers/patientController.js';
 import { registerDeviceToken, removeDeviceToken } from './controllers/notificationController.js';
 import { runSchedulerJobs } from './jobs/scheduler.js';
+import { isEmulator, getActiveProjectId } from './config/firebase.js';
 
 import authRoutes from './routes/auth.routes.js';
 import patientRoutes from './routes/patient.routes.js';
@@ -79,9 +80,12 @@ app.get('/api/health', (req, res) => {
 
 // Environment Guard Endpoint (REQ 5)
 app.get('/api/health/env', (req, res) => {
-  const projectId = process.env.VITE_FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT || 'demo-project';
+  const projectId = getActiveProjectId();
   res.status(200).json(formatSuccessResponse({
-    projectId
+    projectId,
+    isEmulator: !!isEmulator,
+    firestoreHost: process.env.FIRESTORE_EMULATOR_HOST || null,
+    authHost: process.env.FIREBASE_AUTH_EMULATOR_HOST || null
   }));
 });
 

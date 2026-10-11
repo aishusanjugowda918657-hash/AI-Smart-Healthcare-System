@@ -3,6 +3,17 @@ import env from './src/config/env.js';
 import flags from './src/config/flags.js';
 import { startScheduler } from './src/jobs/scheduler.js';
 import { isEmulator } from './src/config/firebase.js';
+import { validateStagingPreflight } from './src/config/stagingPreflight.js';
+
+// Preflight check for staging environment mode
+const isStagingMode =
+  process.env.APP_MODE === 'staging' ||
+  process.env.NODE_ENV === 'staging' ||
+  process.argv.includes('--staging');
+
+if (isStagingMode) {
+  validateStagingPreflight({ exitOnError: true });
+}
 
 const PORT = env.PORT || 5000;
 
