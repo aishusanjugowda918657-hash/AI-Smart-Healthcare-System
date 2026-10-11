@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import { getAuth, GoogleAuthProvider, connectAuthEmulator } from 'firebase/auth';
+import { getFirestore, connectFirestoreEmulator } from 'firebase/firestore';
 
 // ── Required environment variable guard ───────────────────────────
 // Show a visible error on screen instead of a blank page when
@@ -48,6 +48,43 @@ try {
   db = getFirestore(app);
   googleProvider = new GoogleAuthProvider();
   console.log("✅ Client Firebase SDK initialized successfully.");
+
+  // Conditional Emulator Connection
+  const isEmulatorMode =
+    import.meta.env.VITE_USE_FIREBASE_EMULATOR === 'true' ||
+    import.meta.env.VITE_USE_FIREBASE_EMULATOR === true;
+
+  if (isEmulatorMode) {
+    const globalKey = '__FIREBASE_EMULATORS_CONNECTED__';
+    const isConnected = typeof window !== 'undefined' && window[globalKey];
+
+    if (!isConnected) {
+      const authUrl = import.meta.env.VITE_FIREBASE_AUTH_EMULATOR_URL || 'http://localhost:9099';
+      const firestoreHost = import.meta.env.VITE_FIRESTORE_EMULATOR_HOST || 'localhost';
+      const firestorePort = Number(import.meta.env.VITE_FIRESTORE_EMULATOR_PORT) || 8080;
+
+      // 1. Connect Auth Emulator
+      try {
+        if (!auth.emulatorConfig) {
+          connectAuthEmulator(auth, authUrl, { disableWarnings: true });
+        }
+      } catch (authErr) {
+        console.warn('⚠️ Auth emulator connection warning:', authErr.message);
+      }
+
+      // 2. Connect Firestore Emulator
+      try {
+        connectFirestoreEmulator(db, firestoreHost, firestorePort);
+      } catch (dbErr) {
+        console.warn('⚠️ Firestore emulator connection warning:', dbErr.message);
+      }
+
+      if (typeof window !== 'undefined') {
+        window[globalKey] = true;
+      }
+      console.log(`[Firebase Client] Connected to local Emulators: Auth at ${authUrl}, Firestore at ${firestoreHost}:${firestorePort}`);
+    }
+  }
 } catch (error) {
   console.warn("⚠️ Client Firebase initialization error (running in demo mode):", error.message);
 }

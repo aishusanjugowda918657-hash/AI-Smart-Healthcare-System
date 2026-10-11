@@ -104,7 +104,7 @@ export const App = () => {
                   <Route path="/nurse-dashboard" element={<NurseDashboard />} />
                 </Route>
 
-                <Route element={<ProtectedRoute allowedRoles={['reception']} />}>
+                <Route element={<ProtectedRoute allowedRoles={['reception', 'nurse', 'admin']} />}>
                   <Route path="/reception-dashboard" element={<ReceptionDashboard />} />
                 </Route>
 

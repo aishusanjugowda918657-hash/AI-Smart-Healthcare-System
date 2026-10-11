@@ -29,10 +29,20 @@ export const AuthProvider = ({ children }) => {
     const checkEnvironment = async () => {
       try {
         const res = await API.get('/health/env');
-        const serverProjectId = res.data?.data?.projectId;
-        const clientProjectId = import.meta.env.VITE_FIREBASE_PROJECT_ID || 'demo-project';
+        const serverEnv = res.data?.data;
+        const serverProjectId = serverEnv?.projectId;
+        const serverIsEmulator = !!serverEnv?.isEmulator;
 
-        if (serverProjectId && clientProjectId && serverProjectId !== clientProjectId) {
+        const clientIsEmulator =
+          import.meta.env.VITE_USE_FIREBASE_EMULATOR === 'true' ||
+          import.meta.env.VITE_USE_FIREBASE_EMULATOR === true;
+        const clientProjectId = import.meta.env.VITE_FIREBASE_PROJECT_ID || (clientIsEmulator ? 'demo-project' : 'ai-basedsmarthealthcaresystem');
+
+        if (clientIsEmulator !== serverIsEmulator) {
+          setEnvWarning(
+            `⚠️ Environment Mode Mismatch: Client is running in ${clientIsEmulator ? 'Emulator' : 'Real Firebase'} mode, but Server is running in ${serverIsEmulator ? 'Emulator' : 'Real Firebase'} mode.`
+          );
+        } else if (serverProjectId && clientProjectId && serverProjectId !== clientProjectId) {
           setEnvWarning(
             `⚠️ Environment Mismatch Warning: Client Firebase Project (${clientProjectId}) does not match Server Firebase Project (${serverProjectId}).`
           );

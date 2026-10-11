@@ -13,6 +13,8 @@ describe('PRD F5: Feature Acceptance Criteria - Appointment Lifecycle, QR Check-
   let rawCode;
   let codeHash;
   const todayStr = new Date().toISOString().split('T')[0];
+  const trackedTestAppts = new Set();
+  const trackedTestSlots = new Set();
 
   beforeEach(async () => {
     clock.reset();
@@ -20,6 +22,8 @@ describe('PRD F5: Feature Acceptance Criteria - Appointment Lifecycle, QR Check-
     const rand = Math.floor(Math.random() * 10000000);
     testApptId = `appt_f5_${rand}`;
     testSlotId = `slot_f5_${rand}`;
+    trackedTestAppts.add(testApptId);
+    trackedTestSlots.add(testSlotId);
 
     rawCode = 'A1B2C3D4E5F67890';
     codeHash = crypto.createHash('sha256').update(rawCode).digest('hex');
@@ -53,8 +57,18 @@ describe('PRD F5: Feature Acceptance Criteria - Appointment Lifecycle, QR Check-
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     clock.reset();
+    if (db) {
+      for (const aId of trackedTestAppts) {
+        try { await db.collection('appointments').doc(aId).delete(); } catch (_) {}
+      }
+      for (const sId of trackedTestSlots) {
+        try { await db.collection('slots').doc(sId).delete(); } catch (_) {}
+      }
+    }
+    trackedTestAppts.clear();
+    trackedTestSlots.clear();
   });
 
   // 1. Confirm Appointment
@@ -188,6 +202,7 @@ describe('PRD F5: Feature Acceptance Criteria - Appointment Lifecycle, QR Check-
   // 5. Reschedule Appointment
   it('POST /api/appointments/:id/reschedule releases old slot and books new slot atomically', async () => {
     const newSlotId = `slot_new_${Date.now()}`;
+    trackedTestSlots.add(newSlotId);
     await db.collection('slots').doc(newSlotId).set({
       id: newSlotId,
       doctorId: 'DOC-001',
@@ -216,6 +231,8 @@ describe('PRD F5: Feature Acceptance Criteria - Appointment Lifecycle, QR Check-
 
   // 6. QR Check-In Scanner (POST /api/checkin/scan)
   it('POST /api/checkin/scan handles APPT payload, hash match, date check, single use', async () => {
+    // Mock current time to 09:30 AM (within 2h window of 10:00 AM slot)
+    clock.setMockTime(new Date(`${todayStr}T09:30:00.000Z`));
     // Valid check-in
     const res = await request(app)
       .post('/api/checkin/scan')
@@ -317,6 +334,7 @@ describe('PRD F5: Feature Acceptance Criteria - Appointment Lifecycle, QR Check-
   // 8. Background Jobs: noShowSweepJob, releaseCancelledSlotsJob, appointmentRemindersJob
   it('noShowSweepJob marks unhandled past appointments as no_show', async () => {
     const pastApptId = `appt_past_${Date.now()}`;
+    trackedTestAppts.add(pastApptId);
     await db.collection('appointments').doc(pastApptId).set({
       id: pastApptId,
       date: todayStr,
@@ -326,8 +344,7 @@ describe('PRD F5: Feature Acceptance Criteria - Appointment Lifecycle, QR Check-
       patientHealthId: 'PHI-2026-000001-A'
     });
 
-    const nowTime = new Date();
-    nowTime.setHours(11, 0, 0, 0);
+    const nowTime = new Date(`${todayStr}T11:00:00.000Z`);
 
     const result = await noShowSweepJob({ nowOverride: nowTime, gracePeriodMinutes: 5 });
     expect(result.success).toBe(true);
@@ -339,6 +356,8 @@ describe('PRD F5: Feature Acceptance Criteria - Appointment Lifecycle, QR Check-
   it('releaseCancelledSlotsJob frees slots for cancelled appointments', async () => {
     const cancSlotId = `slot_canc_${Date.now()}`;
     const cancApptId = `appt_canc_${Date.now()}`;
+    trackedTestSlots.add(cancSlotId);
+    trackedTestAppts.add(cancApptId);
 
     await db.collection('slots').doc(cancSlotId).set({
       id: cancSlotId,

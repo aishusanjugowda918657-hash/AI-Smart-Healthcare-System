@@ -833,28 +833,69 @@ export const AppointmentBookingForm = () => {
             </div>
           )}
 
-          <div className="space-y-2">
-            <label className="block text-xs font-bold text-slate-300">All Bookable Slots</label>
+          <div className="space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <label className="block text-xs font-bold text-slate-300">All Bookable Slots</label>
+              {/* Slot Status Legend */}
+              <div className="flex items-center gap-3 text-[11px] text-slate-400">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"></span> Available
+                </span>
+                <span className="flex items-center gap-1.5" title="Intentional hospital buffer for clinical pace control & emergencies">
+                  <span className="w-2.5 h-2.5 rounded-full bg-indigo-500 inline-block"></span> Buffer (Emergency/Pace)
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-slate-600 inline-block"></span> Booked
+                </span>
+              </div>
+            </div>
+
             {slotsData.fullList && slotsData.fullList.length > 0 ? (
               <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
                 {slotsData.fullList.map((slot) => {
                   const isSelected = selectedSlotId === slot.id;
-                  const isAvailable = slot.status === 'free';
+                  const isFree = slot.status === 'free';
+                  const isBuffer = slot.status === 'reserved';
+                  const isBooked = slot.status === 'booked';
+                  const isBlocked = slot.status === 'blocked';
+
+                  let chipStyle = '';
+                  let statusTitle = 'Available slot';
+                  let subLabel = '';
+
+                  if (isFree) {
+                    chipStyle = isSelected
+                      ? 'bg-teal-500 text-slate-950 shadow-md shadow-teal-500/20 font-bold border-teal-400 ring-2 ring-teal-400/50'
+                      : 'bg-slate-800 text-slate-200 border border-slate-700 hover:border-teal-400 hover:bg-slate-700 cursor-pointer';
+                  } else if (isBuffer) {
+                    chipStyle = 'bg-indigo-950/40 text-indigo-300/80 border border-indigo-800/40 cursor-not-allowed opacity-80';
+                    statusTitle = 'Hospital Buffer / Emergency Reserve Slot (Intentional Clinical Pace Control)';
+                    subLabel = 'Buffer';
+                  } else if (isBooked) {
+                    chipStyle = 'bg-slate-900 text-slate-500 border border-slate-800/80 cursor-not-allowed line-through opacity-50';
+                    statusTitle = 'Slot already booked by another patient';
+                    subLabel = 'Booked';
+                  } else if (isBlocked) {
+                    chipStyle = 'bg-rose-950/20 text-rose-400/60 border border-rose-900/30 cursor-not-allowed line-through opacity-50';
+                    statusTitle = 'Doctor unavailable / on leave';
+                    subLabel = 'Leave';
+                  } else {
+                    chipStyle = 'bg-slate-900 text-slate-600 border border-slate-800 cursor-not-allowed opacity-50';
+                  }
+
                   return (
                     <button
                       key={slot.id}
                       type="button"
-                      disabled={!isAvailable}
-                      onClick={() => setSelectedSlotId(slot.id)}
-                      className={`p-2 rounded-xl text-xs font-mono font-bold transition-all ${
-                        isSelected
-                          ? 'bg-teal-500 text-slate-950 shadow-md shadow-teal-500/20'
-                          : isAvailable
-                          ? 'bg-slate-800 text-slate-200 border border-slate-700 hover:border-slate-500'
-                          : 'bg-slate-900 text-slate-600 border border-slate-800 cursor-not-allowed line-through'
-                      }`}
+                      disabled={!isFree}
+                      title={statusTitle}
+                      onClick={() => isFree && setSelectedSlotId(slot.id)}
+                      className={`p-2 rounded-xl text-xs font-mono font-bold transition-all flex flex-col items-center justify-center ${chipStyle}`}
                     >
-                      {slot.startAt}
+                      <span>{slot.startAt}</span>
+                      {subLabel && (
+                        <span className="text-[9px] font-sans font-medium tracking-tight uppercase opacity-90 -mt-0.5">{subLabel}</span>
+                      )}
                     </button>
                   );
                 })}

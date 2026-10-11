@@ -119,6 +119,8 @@ export const seedDemoPatients = async () => {
       email: p.email,
       role: 'patient',
       fullName: p.fullName,
+      displayName: p.fullName,
+      patientHealthId: p.healthId,
       status: 'ACTIVE',
       createdAt: userSnap.exists ? (userSnap.data().createdAt || new Date()) : new Date(),
       updatedAt: new Date()
@@ -130,9 +132,14 @@ export const seedDemoPatients = async () => {
 
     const patientRecord = {
       patientUid: uid,
+      ownerUid: uid,
+      relation: 'self',
       patientHealthId: p.healthId,
+      healthId: p.healthId,
       fullName: p.fullName,
+      name: p.fullName,
       nameLower: p.fullName.toLowerCase(),
+      searchName: p.fullName.toLowerCase(),
       email: p.email,
       phone: p.phone,
       dob: p.dob,

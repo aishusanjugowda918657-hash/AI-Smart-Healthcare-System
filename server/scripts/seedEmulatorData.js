@@ -81,55 +81,122 @@ async function seed() {
   console.log(`[seed] Seeded ${DEPARTMENTS.length} departments`);
 
   // 2. Doctors (Auth user + Firestore doc, using Auth UID as document ID)
+  const DEMO_SCHEDULE = {
+    slotMinutes: 15,
+    bufferEverySlots: 6,
+    weekly: [
+      { dayOfWeek: 1, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] },
+      { dayOfWeek: 2, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] },
+      { dayOfWeek: 3, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] },
+      { dayOfWeek: 4, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] },
+      { dayOfWeek: 5, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] },
+      { dayOfWeek: 6, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] }
+    ],
+    lunch: { start: '13:00', end: '14:00' }
+  };
+
   const uidMap = {};
   for (const doctor of DEMO_DOCTORS) {
     const uid = await getOrCreateAuthUser(doctor);
     uidMap[doctor.doctorId] = uid;
 
-    await db.collection('doctors').doc(uid).set({
+    const doctorProfile = {
       uid,
+      doctorUid: uid,
       doctorId: doctor.doctorId,   // stable alias used by older queries
       name: doctor.name,
+      fullName: doctor.name,
       email: doctor.email,
       phone: doctor.phone,
       departmentId: doctor.departmentId,
       qualification: doctor.qualification,
       experience: doctor.experience,
+      experienceYears: parseInt(doctor.experience, 10) || 5,
       role: 'doctor',
+      status: 'ACTIVE',
       isActive: true,
+      active: true,
+      schedule: DEMO_SCHEDULE,
       createdAt: new Date(),
-    }, { merge: true });
+      updatedAt: new Date(),
+    };
 
-    console.log(`[seed] Doctor ${doctor.name} -> uid=${uid}`);
+    await db.collection('doctors').doc(uid).set(doctorProfile, { merge: true });
+
+    // Ensure user doc exists in users collection for authentication & session sync
+    const userDocData = {
+      uid,
+      email: doctor.email,
+      displayName: doctor.name,
+      role: 'doctor',
+      doctorId: doctor.doctorId,
+      phone: doctor.phone,
+      status: 'ACTIVE',
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    await db.collection('users').doc(uid).set(userDocData, { merge: true });
+
+    // Ensure schedule exists in doctorSchedules collection
+    const schedData = {
+      id: `sched-${uid}`,
+      doctorUid: uid,
+      doctorId: doctor.doctorId,
+      workingDays: [1, 2, 3, 4, 5, 6],
+      workingHours: { start: '09:00', end: '17:00' },
+      slotDurationMinutes: 15,
+      breakTimes: [{ start: '13:00', end: '14:00' }],
+      schedule: DEMO_SCHEDULE,
+      leaves: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    await db.collection('doctorSchedules').doc(`sched-${uid}`).set(schedData, { merge: true });
+    await db.collection('doctorSchedules').doc(`sched-${doctor.doctorId}`).set(schedData, { merge: true });
+
+    console.log(`[seed] Doctor ${doctor.name} -> uid=${uid} (doctorId=${doctor.doctorId})`);
   }
 
-  // 3. Slots — generate 14 days of bookable slots for each doctor
+  // 3. Slots — generate 14 days of bookable slots for each doctor using existing domain logic
   const today = new Date();
   let totalSlots = 0;
   for (const [doctorId, uid] of Object.entries(uidMap)) {
+    const doctorData = DEMO_DOCTORS.find((doc) => doc.doctorId === doctorId);
+
+    // Fetch existing slots to avoid duplicates and preserve any already-booked slots
+    const existingSnap = await db.collection('slots').where('doctorId', '==', doctorId).get();
+    const existingSlots = existingSnap.docs.map((s) => ({ id: s.id, ...s.data() }));
+
     for (let d = 0; d < 14; d++) {
       const date = new Date(today);
       date.setDate(today.getDate() + d);
       const dateStr = date.toISOString().split('T')[0];
 
-      const doctorData = DEMO_DOCTORS.find((doc) => doc.doctorId === doctorId);
-      const slots = generateSlotsForDoctorDate(
-        { id: uid, doctorId, name: doctorData.name, ...doctorData },
-        dateStr
-      );
+      const slots = generateSlotsForDoctorDate({
+        doctorId,
+        date: dateStr,
+        schedule: DEMO_SCHEDULE,
+        leaves: [],
+        existingSlots: existingSlots.filter((s) => s.date === dateStr)
+      });
 
-      const batch = db.batch();
-      for (const slot of slots) {
-        const slotId = `${uid}_${dateStr}_${slot.startAt}`.replace(/:/g, '');
-        batch.set(db.collection('slots').doc(slotId), {
-          ...slot,
-          doctorId: uid,      // use Auth UID as doctorId in slots collection
-          doctorDocId: doctorId,
-          createdAt: new Date(),
-        }, { merge: true });
-        totalSlots++;
+      if (slots.length > 0) {
+        const batch = db.batch();
+        for (const slot of slots) {
+          batch.set(db.collection('slots').doc(slot.id), {
+            ...slot,
+            doctorId,
+            doctorUid: uid,
+            doctorDocId: doctorId,
+            doctorName: doctorData.name,
+            departmentId: doctorData.departmentId,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }, { merge: true });
+          totalSlots++;
+        }
+        await batch.commit();
       }
-      await batch.commit();
     }
   }
   console.log(`[seed] Seeded ${totalSlots} slots across ${Object.keys(uidMap).length} doctors x 14 days`);

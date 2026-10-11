@@ -189,6 +189,19 @@ export default function DoctorQueueScreen({ doctorId = 'DOC-001', doctorName = '
     return <span className="px-2.5 py-1 text-xs font-bold rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">ROUTINE (Lv 1)</span>;
   };
 
+  const formatTimeStr = (val) => {
+    if (!val) return '--:--';
+    if (typeof val === 'string') return val.length >= 16 ? val.substring(11, 16) : val;
+    if (val._seconds) return new Date(val._seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    if (val instanceof Date) return val.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    try {
+      const d = new Date(val);
+      return isNaN(d.getTime()) ? String(val) : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    } catch {
+      return String(val);
+    }
+  };
+
   return (
     <div className="max-w-6xl mx-auto p-4 md:p-6 bg-slate-50 min-h-screen">
       {/* Header */}
@@ -422,7 +435,7 @@ export default function DoctorQueueScreen({ doctorId = 'DOC-001', doctorName = '
                           <h4 className="font-bold text-slate-900">{pt.patientName}</h4>
                           {getLevelBadge(pt.clinicalLevel)}
                         </div>
-                        <p className="text-xs text-slate-500 mt-0.5">Booked: {pt.timeSlot || pt.bookedStartAt?.substring(11, 16)} | Check-in: {pt.checkedInAt?.substring(11, 16)}</p>
+                        <p className="text-xs text-slate-500 mt-0.5">Booked: {pt.timeSlot || formatTimeStr(pt.bookedStartAt)} | Check-in: {formatTimeStr(pt.checkedInAt)}</p>
 
                         {/* Vulnerability Tags */}
                         {pt.tags && pt.tags.length > 0 && (
@@ -495,20 +508,43 @@ export default function DoctorQueueScreen({ doctorId = 'DOC-001', doctorName = '
 
           {/* Not Checked In List */}
           <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
-            <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">
-              UPCOMING BOOKED (NOT YET CHECKED IN) ({notCheckedIn.length})
-            </h2>
-            <div className="divide-y divide-slate-100">
-              {notCheckedIn.map((pt) => (
-                <div key={pt.id} className="py-2.5 flex items-center justify-between text-sm">
-                  <div>
-                    <span className="font-semibold text-slate-800">{pt.tokenLabel || pt.tokenNumber}</span>
-                    <span className="text-slate-500 ml-3">{pt.patientName}</span>
-                  </div>
-                  <span className="text-xs text-slate-400">{pt.timeSlot || pt.bookedStartAt?.substring(11, 16)}</span>
-                </div>
-              ))}
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                UPCOMING BOOKED (NOT YET CHECKED IN) ({notCheckedIn.length})
+              </h2>
+              <span className="text-[10px] text-slate-400 font-mono">Chronological</span>
             </div>
+            {notCheckedIn.length === 0 ? (
+              <p className="text-xs text-slate-400 italic py-3 text-center">No upcoming booked patients awaiting check-in.</p>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {Array.from(new Map(notCheckedIn.map(item => [item.id, item])).values()).map((pt) => {
+                  const tokenText = pt.tokenLabel || (pt.tokenNumber ? `Token #${pt.tokenNumber}` : pt.appointmentId || pt.id);
+                  const patientDisplayName = pt.patientName || pt.patientHealthId || 'Patient';
+                  const scheduledTime = pt.timeSlot || pt.bookedStartAt || 'Scheduled';
+                  const isConfirmed = pt.status === 'confirmed';
+                  return (
+                    <div key={pt.id} className="py-2.5 flex items-center justify-between text-sm hover:bg-slate-50/50 px-2 rounded-lg transition-colors">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-slate-800 font-mono">{tokenText}</span>
+                        <span className="text-slate-600 font-medium ml-1">{patientDisplayName}</span>
+                        {pt.patientHealthId && pt.patientName && (
+                          <span className="text-[10px] text-slate-400 font-mono">({pt.patientHealthId})</span>
+                        )}
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold uppercase tracking-wider ${
+                          isConfirmed ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-600'
+                        }`}>
+                          {isConfirmed ? 'Confirmed' : 'Booked'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-slate-500 font-mono">
+                        <span>🕒 {scheduledTime}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       </div>

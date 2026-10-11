@@ -129,7 +129,9 @@ let inMemDb;
 
 vi.mock('../src/config/firebase.js', () => ({
   assertDbConnected: () => inMemDb.db,
-  getDb: () => inMemDb.db
+  getDb: () => inMemDb.db,
+  isEmulator: true,
+  getActiveProjectId: () => 'demo-project'
 }));
 
 vi.mock('../src/middleware/authMiddleware.js', () => ({
