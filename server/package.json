@@ -23,7 +23,9 @@
     "test:emu": "firebase emulators:exec --only firestore,auth \"vitest run\" --project demo-project",
     "smoke:test": "vitest run tests/smoke.test.js",
     "realtest": "node scripts/realTest/index.js",
-    "preflight:staging": "node scripts/stagingPreflight.js"
+    "preflight:staging": "node scripts/stagingPreflight.js",
+    "demo:prep": "node scripts/demoPrep.js",
+    "quota:check": "node scripts/quotaCheck.js"
   },
   "dependencies": {
     "@google/genai": "^2.23.0",

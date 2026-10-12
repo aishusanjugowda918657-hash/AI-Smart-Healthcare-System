@@ -16,6 +16,9 @@
     "seed": "npm run seed --prefix server",
     "test": "npm run test --prefix server",
     "test:emu": "npm run test:emu --prefix server",
-    "realtest": "npm run realtest --prefix server --"
+    "realtest": "npm run realtest --prefix server --",
+    "doctor": "npm run doctor --prefix server",
+    "demo:prep": "npm run demo:prep --prefix server",
+    "quota:check": "npm run quota:check --prefix server"
   }
 }
