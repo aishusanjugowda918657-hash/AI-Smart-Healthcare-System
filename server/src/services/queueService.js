@@ -15,11 +15,12 @@ import {
  * Loads active appointments, computes calling order and waits,
  * writes `live` payload ONLY when changed (batched), and updates queue document.
  */
-export async function recalculateQueue(doctorId, date) {
-  if (!doctorId || !date) return { updatedCount: 0, pushes: [] };
-
-  const db = assertDbConnected();
-  const now = clock.now();
+/**
+ * Shared in-memory queue state and wait-time computation engine.
+ * Reads appointments and queue metadata to compute order and waiting-time estimates.
+ * Pure read-only computation: NEVER performs database writes or triggers background tasks.
+ */
+async function computeQueueSnapshot(doctorId, date, { db, now }) {
   const nowIso = now.toISOString();
 
   // 1. Fetch Queue document
@@ -58,7 +59,6 @@ export async function recalculateQueue(doctorId, date) {
   const timeFactor = calculateTimeFactor(completedAppts);
 
   // 3b. Load per-visitType consultationStats cache (avgMin + stdMin for CoV-based range width)
-  //     Keyed as doctorId_deptId_visitType_complexity in consultationStats collection
   const visitTypes = [...new Set(allAppts.map(a => a.visitType || 'new'))];
   const departmentIds = [...new Set(allAppts.map(a => a.departmentId).filter(Boolean))];
   const statsCache = {};
@@ -96,7 +96,7 @@ export async function recalculateQueue(doctorId, date) {
 
   // 4. Identify current active consultation (in_consultation or called)
   const currentConsultation = allAppts.find((a) => a.status === 'in_consultation') ||
-    allAppts.find((a) => a.status === 'called');
+    allAppts.find((a) => a.status === 'called') || null;
 
   const currentAppointmentId = currentConsultation ? currentConsultation.id : null;
 
@@ -112,10 +112,6 @@ export async function recalculateQueue(doctorId, date) {
     .map(c => ({ ...c, expectedDurationMin: getExpectedForAppt(c) }));
 
   // 6. Compute wait and live payload for each active appointment
-  const writesBatch = db.batch();
-  let updatedCount = 0;
-  const pushes = [];
-
   const reasonText = selectReasonText({
     hasEmergencyAdded: readyCandidates.some((c) => c.clinicalLevel === 3),
     hasDoctorBreak: breakRemainingMin > 0,
@@ -124,8 +120,10 @@ export async function recalculateQueue(doctorId, date) {
     consultationsRunningShort: timeFactor < 0.85
   });
 
+  const readyCandidateUpdates = [];
+
   // Calculate position & wait for each ready candidate
-  readyCandidates.forEach((candidate, idx) => {
+  const enrichedReadyCandidates = readyCandidates.map((candidate, idx) => {
     const position = idx + 1;
     const aheadCount = idx;
     const aheadList = readyCandidates.slice(0, idx);
@@ -189,16 +187,14 @@ export async function recalculateQueue(doctorId, date) {
       if (leaveAt) {
         updateObj['leaveHome.leaveAt'] = leaveAt;
       }
-      writesBatch.update(apptRef, updateObj);
-      updatedCount++;
 
-      // Check push triggers
+      let pushItem = null;
       if (
         Math.abs((oldLive.waitMinLow || 0) - newLive.waitMinLow) >= 5 ||
         (position <= 3 && (oldLive.position || 99) > 3) ||
         position === 1
       ) {
-        pushes.push({
+        pushItem = {
           patientHealthId: candidate.patientHealthId,
           ownerUid: candidate.ownerUid,
           appointmentId: candidate.id,
@@ -207,26 +203,36 @@ export async function recalculateQueue(doctorId, date) {
           waitMinLow: newLive.waitMinLow,
           waitMinHigh: newLive.waitMinHigh,
           reasonText
-        });
+        };
       }
 
-      // Record first-prediction accuracy snapshot (non-blocking; resolved later when patient is called)
+      let predDoc = null;
       if (!candidate.live?.predictedCallAt && waitResult.predictedCallAt) {
         const predDocId = `pred_${candidate.id}_${Date.now()}`;
-        writesBatch.set(db.collection('waitPredictions').doc(predDocId), {
-          appointmentId: candidate.id,
-          doctorId,
-          date,
-          visitType: candidate.visitType || 'new',
-          predictionTime: nowIso,
-          predictedWaitMinLow: waitResult.waitMinLow,
-          predictedWaitMinHigh: waitResult.waitMinHigh,
-          predictedCallAt: waitResult.predictedCallAt,
-          position,
-          timeFactor
-        });
+        predDoc = {
+          id: predDocId,
+          data: {
+            appointmentId: candidate.id,
+            doctorId,
+            date,
+            visitType: candidate.visitType || 'new',
+            predictionTime: nowIso,
+            predictedWaitMinLow: waitResult.waitMinLow,
+            predictedWaitMinHigh: waitResult.waitMinHigh,
+            predictedCallAt: waitResult.predictedCallAt,
+            position,
+            timeFactor
+          }
+        };
       }
+
+      readyCandidateUpdates.push({ apptRef, updateObj, pushItem, predDoc });
     }
+
+    return {
+      ...candidate,
+      live: newLive
+    };
   });
 
   // Calculate live payload for un-checked-in active appointments
@@ -234,7 +240,9 @@ export async function recalculateQueue(doctorId, date) {
     (a) => ['booked', 'confirmed', 'on_the_way', 'nearby', 'not_arrived', 'late'].includes(a.status)
   );
 
-  notCheckedIn.forEach((apt) => {
+  const notCheckedInUpdates = [];
+
+  const enrichedNotCheckedIn = notCheckedIn.map((apt) => {
     const notCheckedInAhead = allAppts
       .filter((a) =>
         ['checked_in', 'rejoined'].includes(a.status) ||
@@ -255,7 +263,7 @@ export async function recalculateQueue(doctorId, date) {
     });
 
     const newLive = {
-      position: readyCandidates.length + 1,
+      position: enrichedReadyCandidates.length + 1,
       aheadCount: notCheckedInAhead.length,
       waitMinLow: waitResult.waitMinLow,
       waitMinHigh: waitResult.waitMinHigh,
@@ -272,10 +280,113 @@ export async function recalculateQueue(doctorId, date) {
 
     if (hasChanged) {
       const apptRef = db.collection('appointments').doc(apt.id);
-      writesBatch.update(apptRef, { live: newLive, updatedAt: now });
-      updatedCount++;
+      notCheckedInUpdates.push({ apptRef, updateObj: { live: newLive, updatedAt: now } });
     }
+
+    return {
+      ...apt,
+      live: newLive
+    };
   });
+
+  const runningLateMsg = delayMin > 0
+    ? `Running late by ${delayMin} minutes`
+    : (timeFactor > 1.15
+      ? `Consultations running ~${Math.round((timeFactor - 1) * 100)}% slower today`
+      : null);
+
+  const computedQueueData = {
+    ...queueData,
+    doctorId,
+    date,
+    currentAppointmentId,
+    timeFactor,
+    completedCount: completedAppts.length,
+    delayMin,
+    breakUntil: queueData.breakUntil || null,
+    breakRemainingMin,
+    lastRecalcAt: queueData.lastRecalcAt || null,
+    runningLateMsg
+  };
+
+  return {
+    queueRef,
+    queueData: computedQueueData,
+    currentConsultation,
+    currentAppointmentId,
+    readyCandidates: enrichedReadyCandidates,
+    notCheckedIn: enrichedNotCheckedIn,
+    totalActive: allAppts.length,
+    timeFactor,
+    delayMin,
+    breakRemainingMin,
+    completedAppts,
+    readyCandidateUpdates,
+    notCheckedInUpdates
+  };
+}
+
+/**
+ * Dedicated read-only queue retrieval calculation (Phase 92).
+ * Reads appointments and queue metadata to compute order and waiting-time estimates in memory.
+ * NEVER mutates `queues`, `appointments`, `waitPredictions`, or `auditLogs`.
+ * NEVER invokes background tasks or Gemini services.
+ */
+export async function calculateQueueReadOnly(doctorId, date) {
+  if (!doctorId || !date) {
+    return {
+      queue: {},
+      currentConsultation: null,
+      readyCandidates: [],
+      notCheckedIn: [],
+      totalActive: 0,
+      isReadOnly: true
+    };
+  }
+
+  const db = assertDbConnected();
+  const now = clock.now();
+  const snapshot = await computeQueueSnapshot(doctorId, date, { db, now });
+
+  return {
+    queue: { ...snapshot.queueData, isReadOnly: true },
+    currentConsultation: snapshot.currentConsultation,
+    readyCandidates: snapshot.readyCandidates,
+    notCheckedIn: snapshot.notCheckedIn,
+    totalActive: snapshot.totalActive,
+    isReadOnly: true
+  };
+}
+
+/**
+ * Operational single entry point for queue recalculation (PRD Section 5.2 & F7).
+ * Loads active appointments, computes calling order and waits,
+ * commits batched updates, updates queue document, and pre-generates summaries.
+ */
+export async function recalculateQueue(doctorId, date) {
+  if (!doctorId || !date) return { updatedCount: 0, pushes: [] };
+
+  const db = assertDbConnected();
+  const now = clock.now();
+  const snapshot = await computeQueueSnapshot(doctorId, date, { db, now });
+
+  const writesBatch = db.batch();
+  let updatedCount = 0;
+  const pushes = [];
+
+  for (const item of snapshot.readyCandidateUpdates) {
+    writesBatch.update(item.apptRef, item.updateObj);
+    updatedCount++;
+    if (item.pushItem) pushes.push(item.pushItem);
+    if (item.predDoc) {
+      writesBatch.set(db.collection('waitPredictions').doc(item.predDoc.id), item.predDoc.data);
+    }
+  }
+
+  for (const item of snapshot.notCheckedInUpdates) {
+    writesBatch.update(item.apptRef, item.updateObj);
+    updatedCount++;
+  }
 
   // 7. Commit batch writes if any changed
   if (updatedCount > 0) {
@@ -283,29 +394,24 @@ export async function recalculateQueue(doctorId, date) {
   }
 
   // 8. Update Queue Document
-  await queueRef.set(
+  await snapshot.queueRef.set(
     {
       doctorId,
       date,
-      currentAppointmentId,
-      timeFactor,
-      completedCount: completedAppts.length,
-      delayMin,
-      breakUntil: queueData.breakUntil || null,
+      currentAppointmentId: snapshot.currentAppointmentId,
+      timeFactor: snapshot.timeFactor,
+      completedCount: snapshot.completedAppts.length,
+      delayMin: snapshot.delayMin,
+      breakUntil: snapshot.queueData.breakUntil || null,
       lastRecalcAt: now,
-      // Human-readable running-late message for doctor UI
-      runningLateMsg: delayMin > 0
-        ? `Running late by ${delayMin} minutes`
-        : (timeFactor > 1.15
-          ? `Consultations running ~${Math.round((timeFactor - 1) * 100)}% slower today`
-          : null)
+      runningLateMsg: snapshot.queueData.runningLateMsg
     },
     { merge: true }
   );
 
   // Pre-generate summary for next ready candidate so it's ready before call
-  if (readyCandidates.length > 0) {
-    const nextCandidate = readyCandidates[0];
+  if (snapshot.readyCandidates.length > 0) {
+    const nextCandidate = snapshot.readyCandidates[0];
     if (!nextCandidate.summary || !nextCandidate.summary.text) {
       import('./patientSummaryService.js')
         .then(({ preparePatientSummary }) => {
@@ -325,11 +431,11 @@ export async function recalculateQueue(doctorId, date) {
     queueData: {
       doctorId,
       date,
-      currentAppointmentId,
-      timeFactor,
-      completedCount: completedAppts.length,
-      delayMin,
-      breakRemainingMin
+      currentAppointmentId: snapshot.currentAppointmentId,
+      timeFactor: snapshot.timeFactor,
+      completedCount: snapshot.completedAppts.length,
+      delayMin: snapshot.delayMin,
+      breakRemainingMin: snapshot.breakRemainingMin
     }
   };
 }

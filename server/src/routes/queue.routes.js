@@ -2,6 +2,7 @@ import express from 'express';
 import { requireAuth } from '../middleware/authMiddleware.js';
 import { requireRole } from '../middleware/roleMiddleware.js';
 import {
+  getDoctorQueueReadOnly,
   getDoctorQueueToday,
   callNextPatient,
   callSpecificToken,
@@ -23,6 +24,8 @@ import {
 const router = express.Router();
 
 // Doctor Queue & Controls
+router.get('/doctor/:doctorId/readonly', requireAuth, getDoctorQueueReadOnly);
+router.get('/doctor/:doctorId/today/readonly', requireAuth, getDoctorQueueReadOnly);
 router.get('/doctor/:doctorId/today', requireAuth, getDoctorQueueToday);
 router.get('/doctor/:doctorId/wait-prediction', getDoctorWaitPrediction);
 router.post('/call-next', requireAuth, requireRole('doctor', 'admin'), callNextPatient);

@@ -1,7 +1,7 @@
 import { assertDbConnected } from '../config/firebase.js';
 import { clock } from '../utils/clock.js';
 import { AppError, formatSuccessResponse } from '../utils/errors.js';
-import { recalculateQueue } from '../services/queueService.js';
+import { recalculateQueue, calculateQueueReadOnly } from '../services/queueService.js';
 import { getReadyCandidates } from '../domain/priority.js';
 import { writeAuditLog } from '../utils/audit.js';
 import { verifyRecordAccess } from './medicalController.js';
@@ -57,8 +57,35 @@ export async function assertDoctorOwnership(req, targetDoctorId) {
 }
 
 /**
+ * GET /api/queue/doctor/:doctorId/readonly
+ * GET /api/queue/doctor/:doctorId/today/readonly (Phase 92)
+ * Read-only queue retrieval: computes display order and wait-time estimates in memory.
+ * NEVER mutates queues, appointments, waitPredictions, or auditLogs.
+ * NEVER triggers summary pre-generation or AI tasks.
+ */
+export const getDoctorQueueReadOnly = async (req, res, next) => {
+  try {
+    const { doctorId } = req.params;
+    await assertDoctorOwnership(req, doctorId);
+
+    const date = req.query.date || clock.now().toISOString().split('T')[0];
+
+    const result = await calculateQueueReadOnly(doctorId, date);
+
+    res.status(200).json(formatSuccessResponse(result));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * GET /api/queue/doctor/:doctorId/today (PRD F6)
- * Returns today's queue status, current consultation, sorted ready list & un-checked-in list
+ * Returns today's queue status, current consultation, sorted ready list & un-checked-in list.
+ *
+ * Phase 94: Now delegates to calculateQueueReadOnly() — zero Firestore writes.
+ * Previously called recalculateQueue() on every GET, violating HTTP idempotency.
+ * All legitimate recalculation happens via direct imports on POST mutation paths
+ * (call-next, finish, check-in, scheduler, appointment lifecycle).
  */
 export const getDoctorQueueToday = async (req, res, next) => {
   try {
@@ -66,45 +93,10 @@ export const getDoctorQueueToday = async (req, res, next) => {
     await assertDoctorOwnership(req, doctorId);
 
     const date = req.query.date || clock.now().toISOString().split('T')[0];
-    const db = assertDbConnected();
 
-    // Trigger queue recalculation first
-    await recalculateQueue(doctorId, date);
+    const result = await calculateQueueReadOnly(doctorId, date);
 
-    // Fetch queue doc
-    const queueSnap = await db.collection('queues').doc(`${doctorId}_${date}`).get();
-    const queueData = queueSnap.exists ? queueSnap.data() : {};
-
-    // Fetch active appointments
-    const apptsSnap = await db
-      .collection('appointments')
-      .where('doctorId', '==', doctorId)
-      .where('date', '==', date)
-      .get();
-
-    const activeStatuses = [
-      'booked', 'confirmed', 'on_the_way', 'nearby', 'checked_in',
-      'called', 'in_consultation', 'not_arrived', 'late', 'rejoined'
-    ];
-
-    const allAppts = apptsSnap.docs
-      .map((d) => ({ id: d.id, ...d.data() }))
-      .filter((a) => activeStatuses.includes(a.status));
-
-    const currentConsultation = allAppts.find((a) => a.id === queueData.currentAppointmentId) || null;
-    const readyCandidates = getReadyCandidates(allAppts, clock.now());
-
-    const notCheckedIn = allAppts
-      .filter((a) => ['booked', 'confirmed', 'on_the_way', 'nearby', 'not_arrived', 'late'].includes(a.status))
-      .sort((a, b) => (a.timeSlot || a.bookedStartAt || '').localeCompare(b.timeSlot || b.bookedStartAt || ''));
-
-    res.status(200).json(formatSuccessResponse({
-      queue: queueData,
-      currentConsultation,
-      readyCandidates,
-      notCheckedIn,
-      totalActive: allAppts.length
-    }));
+    res.status(200).json(formatSuccessResponse(result));
   } catch (error) {
     next(error);
   }

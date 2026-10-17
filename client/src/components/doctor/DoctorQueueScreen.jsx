@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import API from '../../services/api';
 import PreConsultationSummaryCard from './PreConsultationSummaryCard';
 import { DoctorAskAgent } from './DoctorAskAgent';
+import { useAuth } from '../../context/AuthContext';
 
 /**
  * Doctor Queue Screen Component (PRD F6 & F7 & F15)
@@ -16,8 +17,17 @@ import { DoctorAskAgent } from './DoctorAskAgent';
  *   Extend (+5/+10/+15 min) with Undo, Start/End Break, Mark Procedure
  * - Quota safe: 1 live listener on queues/{doctorId_date}, NO polling
  */
-export default function DoctorQueueScreen({ doctorId = 'DOC-001', doctorName = 'Doctor' }) {
+export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: propDoctorName }) {
   const navigate = useNavigate();
+  const { currentUser, userRole, loading: authLoading } = useAuth();
+
+  // Canonical authenticated doctor identifier (never default blindly to DOC-001)
+  const doctorId = propDoctorId || currentUser?.doctorId || null;
+  const doctorName = propDoctorName || currentUser?.fullName || currentUser?.name || currentUser?.displayName || 'Doctor';
+
+  const todayStr = new Date().toISOString().split('T')[0];
+  const [selectedDate, setSelectedDate] = useState(todayStr);
+
   const [queueData, setQueueData] = useState(null);
   const [currentConsultation, setCurrentConsultation] = useState(null);
   const [readyCandidates, setReadyCandidates] = useState([]);
@@ -33,12 +43,12 @@ export default function DoctorQueueScreen({ doctorId = 'DOC-001', doctorName = '
   const [showAgentModal, setShowAgentModal] = useState(false);
   const [expandedSummaryId, setExpandedSummaryId] = useState(null);
 
-  const todayStr = new Date().toISOString().split('T')[0];
-
   const fetchQueue = useCallback(async () => {
+    if (!doctorId) return;
     try {
       setLoading(true);
-      const res = await API.get(`/queue/doctor/${doctorId}/today`);
+      // Dedicated read-only endpoint: calculates display order in memory without mutating Firestore
+      const res = await API.get(`/queue/doctor/${doctorId}/readonly?date=${selectedDate}`);
       if (res.data?.success) {
         setQueueData(res.data.data.queue);
         setCurrentConsultation(res.data.data.currentConsultation);
@@ -53,16 +63,20 @@ export default function DoctorQueueScreen({ doctorId = 'DOC-001', doctorName = '
     } finally {
       setLoading(false);
     }
-  }, [doctorId]);
+  }, [doctorId, selectedDate]);
 
   // Quota safe: Single Firestore real-time listener on queues/{doctorId_date}, NO polling loop
   useEffect(() => {
+    if (!doctorId) {
+      setLoading(false);
+      return;
+    }
     fetchQueue();
 
     let unsubscribe = null;
     if (db && doctorId) {
       try {
-        const queueDocRef = doc(db, 'queues', `${doctorId}_${todayStr}`);
+        const queueDocRef = doc(db, 'queues', `${doctorId}_${selectedDate}`);
         unsubscribe = onSnapshot(queueDocRef, () => {
           fetchQueue();
         }, (err) => {
@@ -76,12 +90,13 @@ export default function DoctorQueueScreen({ doctorId = 'DOC-001', doctorName = '
     return () => {
       if (unsubscribe) unsubscribe();
     };
-  }, [fetchQueue, doctorId, todayStr]);
+  }, [fetchQueue, doctorId, selectedDate]);
 
   const handleCallNext = async () => {
+    if (!doctorId) return;
     try {
       setActionMessage('');
-      const res = await API.post('/queue/call-next', { doctorId });
+      const res = await API.post('/queue/call-next', { doctorId, date: selectedDate });
       if (res.data?.success) {
         setActionMessage(`Called token ${res.data.data.tokenLabel || res.data.data.tokenNumber}`);
         fetchQueue();
@@ -202,13 +217,45 @@ export default function DoctorQueueScreen({ doctorId = 'DOC-001', doctorName = '
     }
   };
 
+  if (!doctorId) {
+    if (authLoading) {
+      return (
+        <div className="max-w-6xl mx-auto p-6 text-center text-slate-500">
+          Loading doctor credentials...
+        </div>
+      );
+    }
+    return (
+      <div className="max-w-6xl mx-auto p-6" data-testid="doctor-queue-unresolved">
+        <div className="p-8 bg-amber-50 border border-amber-300 text-amber-900 rounded-2xl text-center space-y-3">
+          <h2 className="text-lg font-bold">Doctor Identity Notice</h2>
+          <p className="text-xs text-amber-700 max-w-md mx-auto">
+            No registered doctor identifier (e.g. DOC-xxx) is associated with this account. Please verify clinical staff assignments.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-6xl mx-auto p-4 md:p-6 bg-slate-50 min-h-screen">
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between pb-6 mb-6 border-b border-slate-200 gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">{doctorName} Queue Control Center</h1>
-          <p className="text-sm text-slate-500">Doctor ID: {doctorId} | Date: {new Date().toISOString().split('T')[0]}</p>
+          <div className="flex items-center gap-3 mt-1 text-sm text-slate-500">
+            <p>Doctor ID: <span className="font-mono font-bold text-slate-800">{doctorId}</span></p>
+            <span>|</span>
+            <label className="flex items-center gap-1.5 font-medium text-xs">
+              <span>Date:</span>
+              <input
+                type="date"
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
+                className="px-2 py-0.5 border border-slate-300 rounded text-slate-800 font-mono bg-white"
+              />
+            </label>
+          </div>
         </div>
         <div className="flex items-center gap-3">
           <button
