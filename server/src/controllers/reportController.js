@@ -21,9 +21,18 @@ let lastStorageCheck = 0;
 /**
  * Check if Firebase Cloud Storage is available
  */
-async function checkStorageAvailable() {
-  if (isEmulator || process.env.NODE_ENV === 'test') {
+export async function checkStorageAvailable() {
+  if (process.env.FIREBASE_STORAGE_ENABLED === 'false') {
+    return false;
+  }
+  if (process.env.TEST_STORAGE_UNAVAILABLE === 'true') {
+    return false;
+  }
+  if (process.env.NODE_ENV === 'test' && !process.env.FIREBASE_STORAGE_DISABLED) {
     return true;
+  }
+  if (isEmulator) {
+    return !!process.env.FIREBASE_STORAGE_EMULATOR_HOST;
   }
   const now = Date.now();
   if (storageAvailableCache !== null && now - lastStorageCheck < 60000) {
@@ -46,6 +55,27 @@ async function checkStorageAvailable() {
     return false;
   }
 }
+
+/**
+ * GET /api/reports/status
+ * Return Storage availability status and operational message
+ */
+export const getReportStorageStatus = async (req, res, next) => {
+  try {
+    const storageAvailable = await checkStorageAvailable();
+    res.status(200).json({
+      success: true,
+      data: {
+        storageAvailable,
+        message: storageAvailable
+          ? 'Firebase Cloud Storage is active.'
+          : 'Medical report uploads are temporarily unavailable. Other healthcare features remain accessible.'
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
 
 /**
  * POST /api/reports/upload-url
@@ -114,7 +144,7 @@ export const getReportUploadUrl = async (req, res, next) => {
       return res.status(503).json({
         success: false,
         code: 'STORAGE_NOT_AVAILABLE',
-        message: 'Report upload is not enabled yet. Firebase Cloud Storage bucket is not initialized or created on your plan.'
+        message: 'Medical report uploads are temporarily unavailable. Other healthcare features remain accessible.'
       });
     }
 

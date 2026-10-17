@@ -11,10 +11,25 @@ export const ReportUploadPage = () => {
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState(null);
+  const [storageAvailable, setStorageAvailable] = useState(true);
 
   useEffect(() => {
+    checkStorageStatus();
     fetchReports();
   }, [patientHealthId]);
+
+  const checkStorageStatus = async () => {
+    try {
+      const res = await API.get('/reports/status');
+      if (res.data?.success && res.data.data?.storageAvailable === false) {
+        setStorageAvailable(false);
+      } else {
+        setStorageAvailable(true);
+      }
+    } catch (_) {
+      // Default to checking on upload
+    }
+  };
 
   const fetchReports = async () => {
     setLoading(true);
@@ -29,6 +44,7 @@ export const ReportUploadPage = () => {
   };
 
   const handleFileChange = (e) => {
+    if (!storageAvailable) return;
     const file = e.target.files[0];
     if (!file) return;
 
@@ -53,6 +69,13 @@ export const ReportUploadPage = () => {
 
   const handleUploadSubmit = async (e) => {
     e.preventDefault();
+    if (!storageAvailable) {
+      setMessage({
+        type: 'warning',
+        text: 'Medical report uploads are temporarily unavailable. Other healthcare features remain accessible.'
+      });
+      return;
+    }
     if (!selectedFile || !title) return;
 
     setUploading(true);
@@ -85,7 +108,15 @@ export const ReportUploadPage = () => {
       setSelectedFile(null);
       fetchReports();
     } catch (err) {
-      setMessage({ type: 'error', text: err.response?.data?.message || 'Error uploading report.' });
+      if (err.response?.status === 503 || err.response?.data?.code === 'STORAGE_NOT_AVAILABLE') {
+        setStorageAvailable(false);
+        setMessage({
+          type: 'warning',
+          text: 'Medical report uploads are temporarily unavailable. Other healthcare features remain accessible.'
+        });
+      } else {
+        setMessage({ type: 'error', text: err.response?.data?.message || 'Error uploading report.' });
+      }
     } finally {
       setUploading(false);
     }
@@ -120,13 +151,15 @@ export const ReportUploadPage = () => {
           className={`p-4 rounded-2xl text-xs font-semibold flex items-center space-x-2 ${
             message.type === 'success'
               ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+              : message.type === 'warning'
+              ? 'bg-amber-50 text-amber-900 border border-amber-200'
               : 'bg-rose-50 text-rose-800 border border-rose-200'
           }`}
         >
           {message.type === 'success' ? (
             <CheckCircle className="w-4 h-4 text-emerald-600 flex-shrink-0" />
           ) : (
-            <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0" />
+            <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
           )}
           <span>{message.text}</span>
         </div>
@@ -136,16 +169,26 @@ export const ReportUploadPage = () => {
       <form onSubmit={handleUploadSubmit} className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xl space-y-4">
         <h2 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Upload New Diagnostic Document</h2>
 
+        {!storageAvailable && (
+          <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl text-xs font-semibold text-amber-900 flex items-center space-x-2">
+            <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+            <span>Medical report uploads are temporarily unavailable. Other healthcare features remain accessible.</span>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Document Title *</label>
             <input
               type="text"
               required
+              disabled={!storageAvailable}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="E.g. Blood Test Report, Chest X-Ray..."
-              className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none"
+              className={`w-full p-3 border border-slate-200 rounded-xl text-xs outline-none ${
+                !storageAvailable ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-slate-50'
+              }`}
             />
           </div>
 
@@ -153,8 +196,11 @@ export const ReportUploadPage = () => {
             <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Category</label>
             <select
               value={category}
+              disabled={!storageAvailable}
               onChange={(e) => setCategory(e.target.value)}
-              className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none"
+              className={`w-full p-3 border border-slate-200 rounded-xl text-xs outline-none ${
+                !storageAvailable ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-slate-50'
+              }`}
             >
               <option value="Lab Report">Lab Report</option>
               <option value="Imaging / X-Ray">Imaging / X-Ray</option>
@@ -171,9 +217,12 @@ export const ReportUploadPage = () => {
           </label>
           <input
             type="file"
+            disabled={!storageAvailable}
             accept=".pdf,.jpg,.jpeg,.png"
             onChange={handleFileChange}
-            className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs"
+            className={`w-full p-2 border border-slate-200 rounded-xl text-xs ${
+              !storageAvailable ? 'bg-slate-100 cursor-not-allowed opacity-60' : 'bg-slate-50'
+            }`}
           />
           {selectedFile && (
             <p className="text-[11px] text-emerald-700 font-medium mt-1">
@@ -184,11 +233,21 @@ export const ReportUploadPage = () => {
 
         <button
           type="submit"
-          disabled={uploading || !selectedFile || !title}
-          className="w-full py-3 bg-brand-600 hover:bg-brand-700 text-white font-bold text-xs rounded-xl transition-all shadow-md flex items-center justify-center space-x-2"
+          disabled={!storageAvailable || uploading || !selectedFile || !title}
+          className={`w-full py-3 font-bold text-xs rounded-xl transition-all shadow-md flex items-center justify-center space-x-2 ${
+            !storageAvailable
+              ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+              : 'bg-brand-600 hover:bg-brand-700 text-white'
+          }`}
         >
           {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-          <span>{uploading ? 'Generating Signed URL & Uploading...' : 'Upload Diagnostic Report'}</span>
+          <span>
+            {!storageAvailable
+              ? 'Medical Report Uploads Unavailable'
+              : uploading
+              ? 'Generating Signed URL & Uploading...'
+              : 'Upload Diagnostic Report'}
+          </span>
         </button>
       </form>
 

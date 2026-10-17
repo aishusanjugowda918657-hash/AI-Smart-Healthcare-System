@@ -340,7 +340,7 @@ export const PatientHistoryTimelinePage = ({ defaultHealthId, embedded = false }
       if (err.response?.status === 503 || err.response?.data?.code === 'STORAGE_NOT_AVAILABLE') {
         setUploadStatus({
           type: 'warning',
-          text: 'Report upload is not enabled yet. Cloud Storage needs to be configured in Firebase Console.'
+          text: 'Medical report uploads are temporarily unavailable. Other healthcare features remain accessible.'
         });
       } else {
         setUploadStatus({
@@ -1239,7 +1239,12 @@ export const PatientHistoryTimelinePage = ({ defaultHealthId, embedded = false }
           <form onSubmit={handleUploadReport} className="bg-white rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl">
             <h3 className="font-bold text-slate-800 text-sm">Upload Diagnostic Report</h3>
 
-            {uploadStatus && (
+            <div className="p-3 bg-amber-50 text-amber-900 border border-amber-200 rounded-xl text-xs font-semibold flex items-center space-x-2">
+              <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+              <span>Medical report uploads are temporarily unavailable. Other healthcare features remain accessible.</span>
+            </div>
+
+            {uploadStatus && uploadStatus.text !== 'Medical report uploads are temporarily unavailable. Other healthcare features remain accessible.' && (
               <div
                 className={`p-3 rounded-xl text-xs font-semibold ${
                   uploadStatus.type === 'warning'
@@ -1257,10 +1262,9 @@ export const PatientHistoryTimelinePage = ({ defaultHealthId, embedded = false }
               <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Select File (PDF, JPG, PNG &lt;10 MB) *</label>
               <input
                 type="file"
-                required
+                disabled
                 accept=".pdf,.jpg,.jpeg,.png"
-                onChange={(e) => setUploadFile(e.target.files[0])}
-                className="w-full p-2.5 bg-slate-50 border rounded-xl text-xs outline-none file:mr-3 file:py-1 file:px-2.5 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-slate-200"
+                className="w-full p-2.5 bg-slate-100 border rounded-xl text-xs outline-none cursor-not-allowed opacity-60 file:mr-3 file:py-1 file:px-2.5 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-slate-200"
               />
             </div>
 
@@ -1273,13 +1277,14 @@ export const PatientHistoryTimelinePage = ({ defaultHealthId, embedded = false }
                 }}
                 className="px-4 py-2 bg-slate-100 text-slate-700 font-bold text-xs rounded-xl"
               >
-                Cancel
+                Close
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 bg-brand-600 text-white font-bold text-xs rounded-xl"
+                disabled
+                className="px-4 py-2 bg-slate-200 text-slate-400 font-bold text-xs rounded-xl cursor-not-allowed"
               >
-                Upload
+                Upload (Disabled)
               </button>
             </div>
           </form>

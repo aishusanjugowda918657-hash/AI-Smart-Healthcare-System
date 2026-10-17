@@ -1,6 +1,11 @@
 import admin from 'firebase-admin';
 import dotenv from 'dotenv';
 import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 dotenv.config();
 
@@ -8,6 +13,27 @@ let db = null;
 let auth = null;
 let firebaseInitialized = false;
 const isEmulator = !!process.env.FIRESTORE_EMULATOR_HOST;
+
+function getServiceAccount() {
+  const envPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
+  const candidates = [
+    envPath,
+    envPath ? path.resolve(process.cwd(), envPath) : null,
+    envPath ? path.resolve(process.cwd(), 'server', envPath) : null,
+    path.resolve(__dirname, '../../config/serviceAccountKey.json'),
+    path.resolve(process.cwd(), 'server/config/serviceAccountKey.json'),
+    path.resolve(process.cwd(), 'config/serviceAccountKey.json')
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      try {
+        return JSON.parse(fs.readFileSync(candidate, 'utf8'));
+      } catch (_) {}
+    }
+  }
+  return null;
+}
 
 export const getActiveProjectId = () => {
   if (admin.apps.length > 0 && admin.app().options?.projectId) {
@@ -38,27 +64,29 @@ try {
         projectId: emulatorProjectId,
       });
       firebaseInitialized = true;
-    } else if (process.env.FIREBASE_SERVICE_ACCOUNT_PATH && fs.existsSync(process.env.FIREBASE_SERVICE_ACCOUNT_PATH)) {
-      const serviceAccount = JSON.parse(fs.readFileSync(process.env.FIREBASE_SERVICE_ACCOUNT_PATH, 'utf8'));
-      admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount),
-        storageBucket: process.env.FIREBASE_STORAGE_BUCKET || process.env.VITE_FIREBASE_STORAGE_BUCKET
-      });
-      firebaseInitialized = true;
-    } else if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
-      admin.initializeApp({
-        credential: admin.credential.cert({
-          projectId: process.env.VITE_FIREBASE_PROJECT_ID || 'demo-project',
-          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-          privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
-        })
-      });
-      firebaseInitialized = true;
-    } else if (process.env.VITE_FIREBASE_PROJECT_ID) {
-      admin.initializeApp({
-        projectId: process.env.VITE_FIREBASE_PROJECT_ID || 'demo-project'
-      });
-      firebaseInitialized = true;
+    } else {
+      const serviceAccount = getServiceAccount();
+      if (serviceAccount) {
+        admin.initializeApp({
+          credential: admin.credential.cert(serviceAccount),
+          storageBucket: process.env.FIREBASE_STORAGE_BUCKET || process.env.VITE_FIREBASE_STORAGE_BUCKET
+        });
+        firebaseInitialized = true;
+      } else if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
+        admin.initializeApp({
+          credential: admin.credential.cert({
+            projectId: process.env.VITE_FIREBASE_PROJECT_ID || 'demo-project',
+            clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+            privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
+          })
+        });
+        firebaseInitialized = true;
+      } else if (process.env.VITE_FIREBASE_PROJECT_ID) {
+        admin.initializeApp({
+          projectId: process.env.VITE_FIREBASE_PROJECT_ID || 'demo-project'
+        });
+        firebaseInitialized = true;
+      }
     }
   } else {
     firebaseInitialized = true;

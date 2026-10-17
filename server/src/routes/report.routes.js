@@ -3,12 +3,14 @@ import {
   getReportUploadUrl,
   saveReportMetadata,
   getReportDownloadUrl,
-  getPatientReports
+  getPatientReports,
+  getReportStorageStatus
 } from '../controllers/reportController.js';
 import { requireAuth } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
+router.get('/status', getReportStorageStatus);
 router.post('/upload-url', requireAuth, getReportUploadUrl);
 router.post('/', requireAuth, saveReportMetadata);
 router.get('/:id/download-url', requireAuth, getReportDownloadUrl);
