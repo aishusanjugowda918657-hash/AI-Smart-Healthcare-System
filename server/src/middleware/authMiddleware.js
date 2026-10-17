@@ -45,12 +45,15 @@ export const requireAuth = async (req, res, next) => {
 
     const decodedToken = await auth.verifyIdToken(token);
     let role = decodedToken.role || 'patient';
+    let doctorId = decodedToken.doctorId || null;
     const db = getDb();
     
     if (db) {
       const userDoc = await db.collection('users').doc(decodedToken.uid).get();
       if (userDoc.exists) {
-        role = userDoc.data().role || role;
+        const userData = userDoc.data();
+        role = userData.role || role;
+        doctorId = userData.doctorId || doctorId;
       }
     }
 
@@ -62,7 +65,8 @@ export const requireAuth = async (req, res, next) => {
     req.user = {
       uid: decodedToken.uid,
       email: decodedToken.email,
-      role
+      role,
+      doctorId
     };
 
     next();

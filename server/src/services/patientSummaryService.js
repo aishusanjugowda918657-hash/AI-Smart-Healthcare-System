@@ -138,7 +138,7 @@ export function validateSummaryResponse(text) {
 /**
  * Core Data Gathering & Summary Preparation
  */
-export async function preparePatientSummary({ appointmentId, doctorUid, doctorRole, forceRefresh = false }) {
+export async function preparePatientSummary({ appointmentId, doctorUid, doctorRole, doctorId = null, forceRefresh = false }) {
   const db = assertDbConnected();
 
   // 1. Fetch appointment
@@ -154,7 +154,18 @@ export async function preparePatientSummary({ appointmentId, doctorUid, doctorRo
 
   // 2. Doctor Access Control
   if (doctorRole !== 'admin') {
-    const isAssigned = appt.doctorId === doctorUid || appt.doctorUid === doctorUid;
+    // Resolve canonical doctor ID from trusted profile if not provided
+    let canonicalDoctorId = doctorId;
+    if (!canonicalDoctorId && doctorUid) {
+      const uDoc = await db.collection('users').doc(doctorUid).get().catch(() => null);
+      if (uDoc && uDoc.exists) {
+        canonicalDoctorId = uDoc.data().doctorId || null;
+      }
+    }
+
+    const isAssigned = appt.doctorId === doctorUid ||
+                       appt.doctorUid === doctorUid ||
+                       (canonicalDoctorId && (appt.doctorId === canonicalDoctorId || appt.doctorUid === canonicalDoctorId));
     const isIsolatedTestEnv = isEmulator &&
       process.env.NODE_ENV !== 'production' &&
       process.env.NODE_ENV !== 'staging' &&
@@ -168,7 +179,7 @@ export async function preparePatientSummary({ appointmentId, doctorUid, doctorRo
 
       const pastApptsSnap = await db
         .collection('appointments')
-        .where('doctorId', '==', doctorUid)
+        .where('doctorId', '==', canonicalDoctorId || doctorUid)
         .where('patientHealthId', '==', appt.patientHealthId || appt.patientId || '')
         .get();
 
@@ -181,6 +192,7 @@ export async function preparePatientSummary({ appointmentId, doctorUid, doctorRo
         await writeAuditLog({
           actorUid: doctorUid,
           actorRole: doctorRole,
+          doctorId: canonicalDoctorId || null,
           action: 'DENIED_PRE_CONSULTATION_ACCESS',
           targetType: 'appointment',
           targetId: appointmentId,

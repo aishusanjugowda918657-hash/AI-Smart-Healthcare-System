@@ -220,6 +220,14 @@ export async function verifyRecordAccess({ db, uid, role, patientHealthId, reqQu
     ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
 
     let hasRecentAppt = false;
+    let doctorId = null;
+    if (uid) {
+      const uDoc = await db.collection('users').doc(uid).get().catch(() => null);
+      if (uDoc && uDoc.exists) {
+        doctorId = uDoc.data().doctorId || null;
+      }
+    }
+
     const apptSnap = await db
       .collection('appointments')
       .where('doctorId', '==', uid)
@@ -232,6 +240,20 @@ export async function verifyRecordAccess({ db, uid, role, patientHealthId, reqQu
       const apptDate = new Date(data.date || data.createdAt || Date.now());
       return apptDate >= ninetyDaysAgo || ['booked', 'confirmed', 'checked_in', 'called', 'in_consultation'].includes(data.status);
     });
+
+    if (!hasRecentAppt && doctorId) {
+      const docApptSnap = await db
+        .collection('appointments')
+        .where('doctorId', '==', doctorId)
+        .get();
+      hasRecentAppt = docApptSnap.docs.some((d) => {
+        const data = d.data();
+        const pId = data.patientHealthId || data.healthId;
+        if (pId !== patientHealthId) return false;
+        const apptDate = new Date(data.date || data.createdAt || Date.now());
+        return apptDate >= ninetyDaysAgo || ['booked', 'confirmed', 'checked_in', 'called', 'in_consultation'].includes(data.status);
+      });
+    }
 
     if (!hasRecentAppt) {
       const uidApptSnap = await db

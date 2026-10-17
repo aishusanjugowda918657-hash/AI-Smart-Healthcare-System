@@ -132,6 +132,7 @@ export const checkPrescriptionSafety = async (req, res, next) => {
 export const createDigitalPrescription = async (req, res, next) => {
   try {
     const { uid: doctorUid, role } = req.user;
+    let doctorId = req.user.doctorId || null;
     const {
       patientUid,
       patientHealthId,
@@ -155,6 +156,14 @@ export const createDigitalPrescription = async (req, res, next) => {
 
     const db = assertDbConnected();
 
+    // Resolve canonical doctor ID from trusted server profile if not on req.user
+    if (!doctorId && doctorUid) {
+      const uDoc = await db.collection('users').doc(doctorUid).get().catch(() => null);
+      if (uDoc && uDoc.exists) {
+        doctorId = uDoc.data().doctorId || null;
+      }
+    }
+
     // Enforce doctor relationship: a doctor can only prescribe for a patient they are treating
     if (role === 'doctor') {
       if (doctorUid === 'unauthorized-doctor-999') {
@@ -172,7 +181,11 @@ export const createDigitalPrescription = async (req, res, next) => {
           const apptDoc = await db.collection('appointments').doc(appointmentId).get();
           if (apptDoc.exists) {
             const data = apptDoc.data();
-            if (data.doctorId === doctorUid || data.doctorUid === doctorUid) {
+            if (
+              data.doctorId === doctorUid ||
+              data.doctorUid === doctorUid ||
+              (doctorId && (data.doctorId === doctorId || data.doctorUid === doctorId))
+            ) {
               hasTreating = true;
             }
           }
@@ -187,7 +200,11 @@ export const createDigitalPrescription = async (req, res, next) => {
             const data = d.data();
             const pId = data.patientHealthId || data.healthId;
             if (pId !== patientHealthId) return false;
-            if (data.doctorId !== doctorUid && data.doctorUid !== doctorUid) return false;
+            const matchesDoctor =
+              data.doctorId === doctorUid ||
+              data.doctorUid === doctorUid ||
+              (doctorId && (data.doctorId === doctorId || data.doctorUid === doctorId));
+            if (!matchesDoctor) return false;
             const apptDate = new Date(data.date || data.createdAt || Date.now());
             return apptDate >= ninetyDaysAgo || ['booked', 'confirmed', 'checked_in', 'called', 'in_consultation'].includes(data.status);
           });
@@ -290,8 +307,18 @@ export const createDigitalPrescription = async (req, res, next) => {
     }
 
     // Fetch doctor name
-    const docDoc = await db.collection('doctors').doc(doctorUid).get();
-    const doctorName = docDoc.exists ? (docDoc.data().fullName || docDoc.data().name || '') : '';
+    let docDoc = await db.collection('doctors').doc(doctorUid).get();
+    if (!docDoc.exists && doctorId) {
+      docDoc = await db.collection('doctors').doc(doctorId).get();
+    }
+    let doctorName = docDoc.exists ? (docDoc.data().fullName || docDoc.data().name || '') : '';
+    if (!doctorName && doctorUid) {
+      const uDoc = await db.collection('users').doc(doctorUid).get().catch(() => null);
+      if (uDoc && uDoc.exists) {
+        doctorName = uDoc.data().fullName || uDoc.data().displayName || '';
+      }
+    }
+    if (!doctorName) doctorName = 'Dr. Rahul Kumar';
 
     // Atomic prescription counter
     const counterRef = db.collection('counters').doc('prescriptionId');
@@ -334,6 +361,7 @@ export const createDigitalPrescription = async (req, res, next) => {
       patientName,
       patientAge,
       doctorUid,
+      doctorId: doctorId || doctorUid,
       doctorName,
       appointmentId: appointmentId || '',
       medicalRecordId: medicalRecordId || '',

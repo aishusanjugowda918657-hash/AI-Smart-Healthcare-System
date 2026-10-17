@@ -16,12 +16,14 @@ export const getPreConsultationSummary = async (req, res, next) => {
     const targetId = appointmentId || id;
     const doctorUid = req.user?.uid || req.user?.id || req.headers['x-demo-uid'] || req.headers['x-test-uid'];
     const doctorRole = req.user?.role || req.headers['x-demo-role'] || req.headers['x-test-role'] || 'doctor';
+    const doctorId = req.user?.doctorId || null;
     const forceRefresh = req.query.refresh === 'true';
 
     const result = await preparePatientSummary({
       appointmentId: targetId,
       doctorUid,
       doctorRole,
+      doctorId,
       forceRefresh
     });
 
@@ -29,6 +31,9 @@ export const getPreConsultationSummary = async (req, res, next) => {
     res.status(200).json({
       success: true,
       ...result,
+      patientName: result.patient?.name || result.patientName,
+      patientHealthId: result.healthId || result.patientHealthId,
+      age: result.patient?.age ?? result.age,
       summary: {
         text: result.summary,
         summaryMode: result.summaryMode,

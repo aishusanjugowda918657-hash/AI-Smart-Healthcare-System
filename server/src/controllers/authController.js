@@ -419,6 +419,7 @@ export const loginSync = async (req, res, next) => {
       email: userData.email,
       role: userData.role,
       displayName: userData.displayName || '',
+      doctorId: userData.doctorId || req.user?.doctorId || null,
       mustChangePassword: userData.mustChangePassword || false
     }));
   } catch (error) {

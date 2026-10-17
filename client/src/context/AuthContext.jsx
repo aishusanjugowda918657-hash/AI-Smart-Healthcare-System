@@ -84,10 +84,25 @@ export const AuthProvider = ({ children }) => {
           throw new Error('Your account has no role assigned');
         }
 
+        let tokenDoctorId = null;
+        try {
+          if (user && typeof user.getIdTokenResult === 'function') {
+            const tokenResult = await user.getIdTokenResult();
+            tokenDoctorId = tokenResult?.claims?.doctorId || null;
+          }
+        } catch (_) {}
+
+        const resolvedDoctorId = syncData.doctorId || tokenDoctorId || null;
+
         setUserRole(role);
         setMustChangePassword(!!mustChange);
         setLoginSynced(true);
-        setCurrentUser((prev) => ({ ...(prev || {}), ...user, ...syncData }));
+        setCurrentUser((prev) => ({
+          ...(prev || {}),
+          ...user,
+          ...syncData,
+          doctorId: resolvedDoctorId
+        }));
 
         if (role === 'patient') {
           fetchPatientProfile();
