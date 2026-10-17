@@ -20,13 +20,23 @@ async function runDemoPrep() {
   console.log('Timestamp:', new Date().toISOString());
   console.log('====================================================\n');
 
+  const isFullProfile = process.argv.includes('--full') || process.argv.includes('--strict');
+  const demoProfile = isFullProfile
+    ? 'Full Multi-Staff Hospital Walkthrough'
+    : 'Core Patient-Doctor-Admin Walkthrough (Default)';
+
   const report = {
     projectId: null,
     isEmulator: null,
     emulatorHostVars: 'CLEAR',
     featureFlags: {},
     serviceAccount: 'NOT VERIFIED',
+    demoProfile,
     accountCounts: {},
+    roleStatus: {},
+    availableRoles: [],
+    missingMandatoryRoles: [],
+    missingOptionalRoles: [],
     doctorSlots: 'NOT VERIFIED',
     indexesEvidence: 'NOT VERIFIED',
     rulesEvidence: 'NOT VERIFIED',
@@ -67,7 +77,7 @@ async function runDemoPrep() {
       report.projectId = process.env.VITE_FIREBASE_PROJECT_ID || 'ai-basedsmarthealthcaresystem';
       report.isEmulator = false;
     }
-  } catch (err) {
+  } catch {
     console.log('⚠️ Notice: Backend is not actively listening on :5000, checking local env config.');
     report.projectId = process.env.VITE_FIREBASE_PROJECT_ID || 'ai-basedsmarthealthcaresystem';
     report.isEmulator = false;
@@ -120,26 +130,91 @@ async function runDemoPrep() {
   }
 
   const db = admin.firestore();
-  const auth = admin.auth();
 
-  // 5. Account counts by role (Read-only)
+  // 5. Account readiness & role coverage check (Read-only)
   console.log('\n--- Auditing Accounts by Role ---');
+  console.log(`Demonstration Profile: ${demoProfile}`);
+
+  // Define role requirement matrix for the demonstration
+  const ROLE_DEFINITIONS = {
+    patient: {
+      name: 'Patient',
+      mandatory: true,
+      workflows: 'Registration, clinical self-triage, slot booking, medical history, reminders'
+    },
+    doctor: {
+      name: 'Doctor',
+      mandatory: true,
+      workflows: 'Queue management, consultations, digital prescription, allergy warnings'
+    },
+    admin: {
+      name: 'Admin',
+      mandatory: true,
+      workflows: 'Governance, settings, department management, audit trail, role assignment'
+    },
+    reception: {
+      name: 'Reception',
+      mandatory: isFullProfile,
+      workflows: 'Front desk patient search, QR & manual check-in, duplicate check-in rejection'
+    },
+    nurse: {
+      name: 'Nurse',
+      mandatory: isFullProfile,
+      workflows: 'Emergency red-flag triage intake, vital signs recording'
+    },
+    pharmacy: {
+      name: 'Pharmacy',
+      mandatory: isFullProfile,
+      workflows: 'Prescription dispensing queue, barcode/code verification'
+    }
+  };
+
   try {
     const usersSnap = await db.collection('users').get();
-    const roles = {};
+    const rolesDiscovered = {};
     usersSnap.docs.forEach((doc) => {
       const data = doc.data();
       const r = data.role || 'unassigned';
-      roles[r] = (roles[r] || 0) + 1;
+      rolesDiscovered[r] = (rolesDiscovered[r] || 0) + 1;
     });
-    report.accountCounts = roles;
-    console.log(`✅ Check 5: Firestore Users Total: ${usersSnap.size}`);
-    Object.entries(roles).forEach(([role, count]) => {
-      console.log(`   - Role [${role}]: ${count}`);
-    });
+    report.accountCounts = rolesDiscovered;
+    console.log(`Total Firestore User Profiles: ${usersSnap.size}`);
+
+    for (const [roleKey, roleDef] of Object.entries(ROLE_DEFINITIONS)) {
+      const count = rolesDiscovered[roleKey] || 0;
+      if (count > 0) {
+        report.availableRoles.push(roleKey);
+        report.roleStatus[roleKey] = {
+          status: 'AVAILABLE',
+          count,
+          mandatory: roleDef.mandatory
+        };
+        console.log(`   ✅ Role [${roleKey}]: ${count} account(s) available [${roleDef.mandatory ? 'MANDATORY: PASS' : 'OPTIONAL: READY'}]`);
+      } else {
+        if (roleDef.mandatory) {
+          report.missingMandatoryRoles.push(roleKey);
+          report.roleStatus[roleKey] = {
+            status: 'MISSING',
+            count: 0,
+            mandatory: true
+          };
+          console.error(`   ❌ Role [${roleKey}]: MISSING (0 accounts) [MANDATORY: FAIL] — Required for ${roleDef.workflows}`);
+          report.overallStatus = 'FAIL';
+        } else {
+          report.missingOptionalRoles.push(roleKey);
+          report.roleStatus[roleKey] = {
+            status: 'BLOCKED',
+            count: 0,
+            mandatory: false
+          };
+          console.log(`   ⚠️ Role [${roleKey}]: MISSING (0 accounts) [OPTIONAL: BLOCKED] — Workflows for ${roleDef.name} (${roleDef.workflows}) are BLOCKED until provisioned.`);
+        }
+      }
+    }
   } catch (err) {
     console.error('⚠️ Could not query Firestore users:', err.message);
     report.accountCounts = { error: 'NOT VERIFIED (' + err.message + ')' };
+    report.overallStatus = 'FAIL';
   }
 
   // 6. Doctor availability and slots check (Read-only)
@@ -217,6 +292,10 @@ function printSummary(report) {
   console.log(`Emulator Mode:        ${report.isEmulator ? 'EMULATOR' : 'REAL PRODUCTION'}`);
   console.log(`Service Account:      ${report.serviceAccount}`);
   console.log(`Scheduler Flag:       ${report.featureFlags.scheduler ? 'ENABLED (⚠️ Quota caution)' : 'DISABLED (Safe)'}`);
+  console.log(`Demonstration Profile:${report.demoProfile}`);
+  console.log(`Available Roles:      ${report.availableRoles.join(', ')}`);
+  console.log(`Missing Mandatory:    ${report.missingMandatoryRoles.length > 0 ? report.missingMandatoryRoles.join(', ') + ' ❌ (FAIL)' : 'None (All mandatory roles present) ✅'}`);
+  console.log(`Missing Optional:     ${report.missingOptionalRoles.length > 0 ? report.missingOptionalRoles.join(', ') + ' ⚠️ (Workflows blocked until provisioned)' : 'None'}`);
   console.log(`Doctor Slots:         ${report.doctorSlots}`);
   console.log(`Rules Evidence:       ${report.rulesEvidence}`);
   console.log(`Indexes Evidence:     ${report.indexesEvidence}`);

@@ -55,62 +55,93 @@ Open your browser at `http://localhost:5173`. Ensure network requests in Chrome 
 
 ---
 
-## 2. Before-Demo Checklist
+## 2. Before-Demo Checklist & Role Readiness
 
-Run this checklist prior to an official demonstration rehearsal.
+### 2.1 Presenter's Quick Pre-Flight Checklist
+Before beginning any rehearsal or presentation, confirm all 5 items:
+1. **Target Project:** Backend responds on `/api/health/env` with `projectId: "ai-basedsmarthealthcaresystem"` and `isEmulator: false`.
+2. **Quota & Flag Isolation:** Confirm `FLAG_AI=false`, `FLAG_PUSH=false`, and `FLAG_SCHEDULER=false` via `npm run quota:check`.
+3. **Account Access:** Presenter has authorized credentials for **Patient**, **Doctor**, and **Admin** roles.
+4. **Read-Only First:** Begin the demonstration with read-only screens (dashboards, Doctor Queue inspection in read-only mode, patient history) before attempting any state-changing actions.
+5. **Stop Condition:** **Immediately stop** if the project ID, account permissions, or page routes do not match this guide.
 
+### 2.2 System Verification Checklist
 | Check # | Item | Verification Command / Evidence | Pass Criteria |
 | :---: | :--- | :--- | :--- |
-| **1** | **Readiness Audit** | `npm run demo:prep` | `Overall Readiness: PASS`, 0 emulator hosts. |
+| **1** | **Readiness Audit** | `npm run demo:prep` | `Overall Readiness: PASS`, 0 emulator hosts, all mandatory roles present. |
 | **2** | **Quota Guard** | `npm run quota:check` | `FLAG_SCHEDULER: DISABLED ✅`. |
 | **3** | **Doctor & Index Probe**| `npm run doctor` | Composite indexes respond; active doctors sampled have future slots. |
 | **4** | **Rules & Indexes File**| Inspect `firestore.rules` & `firestore.indexes.json` | Local security rules and 19 composite indexes defined. |
 | **5** | **Account Availability**| Query `users` collection via `npm run demo:prep` | Verified real role accounts exist in Cloud Firestore. |
 | **6** | **E2E Tests Policy** | `npm run realtest` (Stage-limited only) | **Only run if explicitly approved and quota allows.** Never run `--wipe-all`. |
 
-### Role-Based Account Inventory (Live Cloud Firebase)
+### 2.3 Role-Based Account Inventory (Live Cloud Firebase)
 > *Note: For security reasons, passwords and sensitive tokens are never printed or committed. Use credentials established during project provisioning.*
 
-| Role | Email Identifier | Assigned Permissions | Purpose in Demo |
-| :--- | :--- | :--- | :--- |
-| **Patient** | `patient.real@smartcare.org` | Patient portal, self-triage, appointments, timeline | Self-service registration & booking |
-| **Doctor** | `dr.sarah.smith@smartcare.org` | Doctor queue, consultations, prescriptions, clinical notes | Queue management & digital prescription |
-| **Reception** | `reception@smartcare.org` | Patient lookup, QR check-in, manual queue tokens | Check-in & duplicate rejection |
-| **Nurse** | `nurse@smartcare.org` | Emergency triage intake, vital signs, emergency banners | Red-flag triage escalation |
-| **Pharmacy**| `pharmacy@smartcare.org` | Prescription dispense verification, allergy audit | Medication fulfillment |
-| **Admin** | `admin@smartcare.org` | System settings, department schedules, audit logs | Governance & operational monitoring |
+| Role | Live Project Status | Account Readiness | Purpose in Demonstration |
+| :--- | :---: | :---: | :--- |
+| **Patient** | **AVAILABLE (4 accounts)** | **READY (MANDATORY)** | Self-service registration, clinical triage, slot booking, medical history |
+| **Doctor** | **AVAILABLE (25 accounts)**| **READY (MANDATORY)** | Consultation queue, patient calling, digital prescription, allergy checks |
+| **Admin** | **AVAILABLE (1 account)** | **READY (MANDATORY)** | Governance, system settings, audit trail, staff role assignment |
+| **Reception**| **MISSING (0 accounts)** | **BLOCKED (OPTIONAL)** | Front desk QR & manual check-in, duplicate check-in rejection |
+| **Nurse** | **MISSING (0 accounts)** | **BLOCKED (OPTIONAL)** | Emergency red-flag triage intake, vital signs intake |
+| **Pharmacy** | **MISSING (0 accounts)** | **BLOCKED (OPTIONAL)** | Prescription dispense queue, barcode/code verification |
+
+> [!WARNING]
+> **Staff Role Readiness Notice:**
+> The live Firebase project currently contains verified accounts for **Patient**, **Doctor**, and **Admin**.
+> The specialized staff roles (**Reception**, **Nurse**, **Pharmacy**) are **NOT provisioned** in the live database.
+> Workflows requiring these missing roles are marked **BLOCKED** below. Do **NOT** attempt to bypass role authorization with mock headers or hardcoded bypasses during live demonstrations.
+
+### 2.4 Approved Staff Account Provisioning Protocol
+To unblock the Reception, Nurse, or Pharmacy workflows for a full hospital staff demonstration:
+1. An administrator must sign in using the authorized Admin account (`admin@smartcare.org`).
+2. Navigate to `/admin-dashboard` -> **Settings & Roles** tab (or call authenticated endpoint `POST /api/admin/users/:uid/role`).
+3. Set the target user's role to `reception`, `nurse`, or `pharmacy`. This atomically updates Firestore `users/{uid}.role` and sets the Firebase Auth custom claim.
+4. The newly provisioned staff member signs in to refresh their JWT claims before rehearsing those steps.
 
 ---
 
 ## 3. 10-Minute Live Demonstration Walkthrough
 
-Follow these sequential steps during the live demonstration. Each workflow is executed strictly through the application UI with real database persistence.
+> [!IMPORTANT]
+> **Action Classification & Synthetic Data Policy:**
+> - **READ-ONLY:** Viewing existing screens, dashboards, schedules, and audit trails. Safe to present without modifying live records.
+> - **STATE-CHANGING:** Actions that create or write records (registration, booking, clinical notes, prescriptions).
+> - **Synthetic Data Requirement:** Any state-changing step requires **explicit demonstrator approval** and must use **strictly synthetic dummy data** (e.g. fictional names like `Test Patient Demo`).
+> - **Privacy Rule:** Never enter genuine personal identities, real phone numbers, or real patient medical records during a demonstration.
 
 ---
 
 ### Step 1: Patient Registration & National Health ID (1.5 min)
-- **Page / Route:** `/register`
+- **Status:** **ACTIVE / VERIFIED** (Role: `patient`)
+- **Classification:** **STATE-CHANGING** (Creates Auth account & Firestore profile)
+- **Client Page / Route:** `/register`
+- **Backend Endpoint:** `POST /api/auth/register`
 - **Action:**
   1. Click **Register** on the navigation bar.
-  2. Enter full name (e.g., `Amitabh Patel`), email, phone, date of birth, and known allergies (`Penicillin`).
+  2. Enter fictional synthetic name (e.g., `Amitabh Patel`), synthetic email, phone, date of birth, and known allergies (`Penicillin`).
   3. Submit the registration form.
 - **Expected Result:**
-  - Account created in Firebase Authentication.
+  - Account created in Firebase Authentication with custom claim `role: 'patient'`.
   - User document saved in Cloud Firestore `users` collection.
   - Unique National Health ID generated (`HID-YYYY-XXXXX`).
-  - Automatic redirect to Patient Dashboard with welcome greeting.
-- **Safe Fallback:** If email already exists, click **Sign In** with existing pre-registered patient account.
+  - Automatic redirect to Patient Dashboard (`/patient-dashboard`) with welcome banner.
+- **Safe Read-Only Fallback:** Sign in directly with an existing pre-registered patient account to demonstrate the dashboard without creating a new user record.
 - **Likely Failure & Immediate Fix:**
   - *Error:* `EMAIL_EXISTS`.  
-  - *Fix:* Use a fresh unique email address (e.g. `patient.demo+1@smartcare.org`) or login directly.
+  - *Fix:* Use a fresh unique email address or login directly.
 
 ---
 
 ### Step 2: Clinical Rule-Based Triage — Mild Cold (Routine) (1 min)
-- **Page / Route:** `/patient/book` -> Triage Step
+- **Status:** **ACTIVE / VERIFIED** (Role: `patient`)
+- **Classification:** **READ-ONLY** (Pure deterministic rule evaluation)
+- **Client Page / Route:** `/book-appointment` (Triage Assessment Step)
+- **Backend Endpoint:** `POST /api/booking/triage`
 - **Action:**
-  1. Select **Book Appointment**.
-  2. Type reason: *"Mild sore throat, runny nose, slight dry cough since yesterday. No fever or chest discomfort."*
+  1. From `/patient-dashboard`, select **Book Appointment** (navigates to `/book-appointment`).
+  2. Type symptom description: *"Mild sore throat, runny nose, slight dry cough since yesterday. No fever or chest discomfort."*
   3. Complete brief symptom questionnaire.
   4. Submit triage evaluation.
 - **Expected Result:**
@@ -118,7 +149,7 @@ Follow these sequential steps during the live demonstration. Each workflow is ex
   - Suggested department: **General Medicine (`dept-gen`)**.
   - Estimated consultation duration displayed (~15 min).
   - List of available doctors and bookable appointment slots presented.
-- **Safe Fallback:** If AI is disabled (default), rule engine evaluates keywords deterministically with zero latency.
+- **Safe Fallback:** Routine triage evaluation is strictly **READ-ONLY** (it evaluates symptoms and returns recommendations without writing records to Firestore). If AI is disabled (default), rule engine evaluates keywords deterministically with zero latency.
 - **Likely Failure & Immediate Fix:**
   - *Issue:* No doctor slots shown for selected date.  
   - *Fix:* Pick tomorrow or the next business day where doctor slots are open.
@@ -126,33 +157,40 @@ Follow these sequential steps during the live demonstration. Each workflow is ex
 ---
 
 ### Step 3: Emergency Red-Flag Screening — Chest Pain (1 min)
-- **Page / Route:** `/patient/book` (Open in separate incognito tab or re-test)
+- **Status:** **ACTIVE / VERIFIED** (Role: `patient`)
+- **Classification:** **STATE-CHANGING** (Dispatches emergency alert to `alerts` collection in Firestore)
+- **Client Page / Route:** `/book-appointment` (Triage Assessment Step)
+- **Backend Endpoint:** `POST /api/booking/triage`
+- **Live Project Policy:** **EXPLICIT APPROVAL REQUIRED.** Unlike routine triage which is read-only, submitting red-flag symptoms causes `POST /api/booking/triage` to write an urgent alert document directly into Cloud Firestore (`alerts` collection). Demonstrators must obtain explicit approval before demonstrating the red-flag emergency triage path against the real project.
 - **Action:**
-  1. Input reason: *"Severe crushing chest pain radiating to left arm and jaw, sweating heavily, shortness of breath."*
-  2. Submit triage assessment.
+  1. Input synthetic emergency symptoms: *"Severe crushing chest pain radiating to left arm and jaw, sweating heavily, shortness of breath."*
+  2. Submit triage assessment (only with explicit demonstrator approval).
 - **Expected Result:**
   - Red-flag keyword detector immediately triggers **RED (Emergency / Life-Threatening)**.
   - Emergency modal interrupts flow: **"Please call 108 or report immediately to the nearest Emergency Department."**
-  - High-priority clinical alert dispatched to `alerts` collection for triage nurse dashboard.
+  - High-priority clinical alert dispatched to `alerts` collection for triage staff.
   - Routine booking disabled for emergency symptoms.
-- **Safe Fallback:** Rule-based fallback executes locally with sub-10ms response time even if external AI is offline.
+- **Safe Read-Only Fallback:** Explain emergency detection and show UI modal behaviour without submitting red-flag symptoms, avoiding live writes to the `alerts` collection.
 - **Likely Failure & Immediate Fix:**
-  - *Issue:* User accidentally bypasses emergency alert.  
+  - *Issue:* User accidentally dismisses emergency modal.
   - *Fix:* Modal enforces acknowledge button before allowing navigation.
 
 ---
 
 ### Step 4: Slot Reservation & Appointment Booking (1 min)
-- **Page / Route:** `/patient/book`
+- **Status:** **ACTIVE / VERIFIED** (Role: `patient`)
+- **Classification:** **STATE-CHANGING** (Reserves slot & writes appointment record)
+- **Client Page / Route:** `/book-appointment`
+- **Backend Endpoint:** `POST /api/appointments`
 - **Action:**
-  1. For the mild cold consultation, select doctor **Dr. Sarah Smith** (General Medicine).
+  1. For the routine consultation, select doctor **Dr. Sarah Smith** (General Medicine).
   2. Choose an available slot for today or tomorrow.
   3. Click **Confirm Booking**.
 - **Expected Result:**
   - Slot status transitions from `free` -> `booked` atomically in Firestore.
   - Appointment document created with status `booked`.
   - Confirmation card appears with **Appointment Reference Number** and **QR Check-In Code**.
-- **Safe Fallback:** If slot was simultaneously taken, system prompts to select adjacent slot without page crash.
+- **Safe Read-Only Fallback:** Present the slot availability picker without clicking Confirm Booking.
 - **Likely Failure & Immediate Fix:**
   - *Error:* `SLOT_ALREADY_BOOKED`.  
   - *Fix:* Select next available 15-minute slot.
@@ -160,48 +198,65 @@ Follow these sequential steps during the live demonstration. Each workflow is ex
 ---
 
 ### Step 5: Front Desk Reception QR & Manual Check-In (1 min)
-- **Page / Route:** `/reception/checkin` (Login as Receptionist)
+- **Status:** ⚠️ **BLOCKED — Missing Reception Account**
+- **Classification:** **STATE-CHANGING** (Transitions appointment to `checked_in` & generates queue token)
+- **Client Page / Route:** `/reception-dashboard` (Requires `role: 'reception'`)
+- **Backend Endpoint:** `POST /api/checkin/scan` / `POST /api/checkin/manual`
 - **Action:**
-  1. Navigate to Reception Desk portal.
-  2. Search by Patient National Health ID (`HID-...`) or scan Appointment QR Code.
-  3. Verify patient details and click **Check In Patient**.
+  - *Prerequisite:* Must be provisioned by Admin via the Approved Provisioning Protocol.
+  - Front Desk staff searches by Patient Health ID (`HID-...`) or scans appointment QR Code.
+  - Clicks **Check In Patient**.
 - **Expected Result:**
-  - Appointment status changes to `checked_in`.
-  - Queue token issued (e.g. `GEN-004`).
-  - Arrival timestamp recorded (`arrivedAt`).
-- **Safe Fallback:** Manual lookup by patient phone number or name if QR camera is disabled.
-- **Likely Failure & Immediate Fix:**
-  - *Issue:* Camera permission denied.  
-  - *Fix:* Use the manual Health ID text search bar.
+  - Appointment transitions to `checked_in`.
+  - Token issued (e.g. `GEN-004`).
+- **Demonstration Guidance:**
+  - **BLOCKED** in default rehearsal due to absence of live `reception` account.
+  - Do NOT use mock headers (`x-demo-role`).
+  - *Safe Walkthrough Alternative:* Proceed directly to Step 7 to demonstrate doctor queue capabilities using the dedicated read-only viewing mode.
 
 ---
 
 ### Step 6: Idempotency & Duplicate Check-In Rejection (30 sec)
-- **Page / Route:** `/reception/checkin`
+- **Status:** ⚠️ **BLOCKED — Dependent on Step 5 Reception Account**
+- **Classification:** **READ-ONLY / SAFEGUARD** (Evaluates idempotency; blocks duplicate write)
+- **Client Page / Route:** `/reception-dashboard`
+- **Backend Endpoint:** `POST /api/checkin/manual`
 - **Action:**
-  1. Immediately re-enter the same Health ID or scan the same QR Code.
-  2. Click **Check In Patient** again.
+  - Re-submit the same Health ID or scan the same QR Code.
 - **Expected Result:**
-  - System rejects duplicate action: **"Patient is already checked in for today's appointment (Token: GEN-004)."**
-  - No duplicate queue entry or token created.
-- **Safe Fallback:** Reception queue table confirms single active token.
-- **Likely Failure & Immediate Fix:**
-  - *Issue:* Screen reloads.  
-  - *Fix:* Verify token status in the live table below.
+  - Rejection notice: **"Patient is already checked in for today's appointment (Token: GEN-004)."**
+  - Zero duplicate queue tokens created.
+- **Demonstration Guidance:** Blocked pending Step 5 receptionist account provisioning.
 
 ---
 
 ### Step 7: Doctor Queue & Dynamic Prioritization (1 min)
-- **Page / Route:** `/doctor/queue` (Login as Doctor: Dr. Sarah Smith)
+- **Status:** **ACTIVE / VERIFIED** (Role: `doctor`)
+- **Classification:** **READ-ONLY** (Queue inspection via read-only GET endpoints) / **STATE-CHANGING** (Operational workflow actions via dedicated POST routes)
+- **Client Page / Route:** `/doctor/queue` (Login as Doctor: Dr. Sarah Smith)
+- **Backend Endpoints:**
+  - **Read-Only Queue Inspection (Zero Firestore Writes):**
+    - `GET /api/queue/doctor/:doctorId/readonly` (Primary read-only route; computes priority scores and wait-time estimates in-memory via `calculateQueueReadOnly()`)
+    - `GET /api/queue/doctor/:doctorId/today/readonly` (Explicit today-scoped read-only route; delegates to `calculateQueueReadOnly()`)
+    - `GET /api/queue/doctor/:doctorId/today` (Verified Phase 94 safety update: refactored to delegate to `calculateQueueReadOnly()` with zero Firestore writes, eliminating former recalculation side-effects on GET)
+    - *Safety Guarantee:* None of these three GET endpoints write to `queues`, `appointments`, `waitPredictions`, or `auditLogs`, preserving HTTP idempotency and preventing quota burn.
+  - **Operational State-Changing Actions (Dedicated POST Endpoints):**
+    - `POST /api/queue/call-next` (Calls the next patient; atomically transitions token status to `in_consultation`, records `calledAt` & `consultStartAt`, and updates the queue document)
+    - `POST /api/queue/finish` (Completes consultation and recalculates queue)
+    - `POST /api/queue/extend` (Extends active consultation duration)
+    - `POST /api/queue/break` (Starts doctor break and pauses calling)
+    - *Additional Operational POST Routes:* `POST /api/queue/undo-extend`, `POST /api/queue/end-break`, `POST /api/queue/late-start`, `POST /api/queue/call/:id`, `POST /api/queue/hold/:id`
+    - *Operational Rule:* State transitions and Firestore mutations are strictly isolated to these explicit POST routes; they are never triggered by viewing the queue.
 - **Action:**
-  1. Open Doctor Consultation Queue.
-  2. Inspect queue order.
-  3. Click **Call Next Patient** for the checked-in appointment.
+  1. Open Doctor Consultation Queue (`/doctor/queue`).
+  2. Inspect queue order and priority tags (Renders via read-only endpoint `GET /api/queue/doctor/:doctorId/readonly` or `GET /api/queue/doctor/:doctorId/today` without altering database records).
+  3. *(Separate state-changing action — requires approval)*: Click **Call Next Patient** to call the active appointment via `POST /api/queue/call-next`.
 - **Expected Result:**
-  - Patient card appears at top of queue sorted by priority score (Urgency weight + Arrival time).
-  - Token status transitions to `in_consultation`.
-  - Consultation view opens with patient medical history, allergies, and vitals.
-- **Safe Fallback:** Doctor can manually select patient from list if automatic calling is paused.
+  - Live queue view displays today's patient queue ordered by dynamic priority score (Urgency weight + Arrival time) computed strictly in-memory via `calculateQueueReadOnly()`, producing zero Firestore writes.
+  - The Firestore `onSnapshot` listener on the queue document triggers read-only GET refreshes only, preventing recursive read/write cycles and preserving Spark tier quota.
+  - When (and only when) operational POST actions such as **Call Next Patient** are explicitly executed, the appointment status transitions to `in_consultation`.
+  - Consultation workspace opens with patient medical history, allergies, and vitals.
+- **Safe Read-Only Fallback:** View and explain the live queue ranking and priority tags without clicking Call Next Patient or triggering operational POST actions.
 - **Likely Failure & Immediate Fix:**
   - *Issue:* Queue appears empty.  
   - *Fix:* Check selected date filter on queue header (switch to Today).
@@ -209,7 +264,10 @@ Follow these sequential steps during the live demonstration. Each workflow is ex
 ---
 
 ### Step 8: Consultation, Prescription & Allergy Warning Safeguard (1.5 min)
-- **Page / Route:** `/doctor/consultation/:id`
+- **Status:** **ACTIVE / VERIFIED** (Role: `doctor`)
+- **Classification:** **STATE-CHANGING** (Creates digital prescription & visit record)
+- **Client Page / Route:** `/doctor/consultation/:appointmentId` (or `/doctor/consultation`)
+- **Backend Endpoint:** `POST /api/prescriptions`
 - **Action:**
   1. Enter diagnosis: *"Acute Viral Upper Respiratory Infection"*.
   2. Clinical notes: *"Rest, oral hydration, warm saline gargles."*
@@ -228,14 +286,17 @@ Follow these sequential steps during the live demonstration. Each workflow is ex
 ---
 
 ### Step 9: Patient History, Timelines & Medicine Reminders (1 min)
-- **Page / Route:** `/patient/history` (Login back as Patient)
+- **Status:** **ACTIVE / VERIFIED** (Role: `patient`)
+- **Classification:** **READ-ONLY** (Fetches timeline records & reminder schedule)
+- **Client Page / Route:** `/patient-history` & `/medicine-reminders` (Login as Patient)
+- **Backend Endpoints:** `GET /api/patients/:healthId/history`, `GET /api/reminders` (or `GET /api/reminders/today`)
 - **Action:**
-  1. Open Patient History Timeline.
+  1. Open Patient History Timeline (`/patient-history`).
   2. Expand latest visit to view digital prescription and clinical notes.
-  3. View **Medicine Reminders** widget.
+  3. Navigate to **Medicine Reminders** (`/medicine-reminders`).
 - **Expected Result:**
-  - Complete chronological timeline of visits, triage level, and prescriptions.
-  - Medication schedule mapped out (Morning / Noon / Night slots based on prescription instructions).
+  - Complete chronological timeline of visits, triage level, and prescriptions fetched via `GET /api/patients/:healthId/history`.
+  - Medication schedule mapped out (Morning / Noon / Night slots based on prescription instructions) fetched via verified endpoint `GET /api/reminders` (or `GET /api/reminders/today`). Note: `GET /api/reminders/my` is not a valid endpoint.
   - One-click PDF download for prescription receipt.
 - **Safe Fallback:** If PDF rendering is delayed, raw prescription details remain visible on screen.
 - **Likely Failure & Immediate Fix:**
@@ -245,52 +306,69 @@ Follow these sequential steps during the live demonstration. Each workflow is ex
 ---
 
 ### Step 10: Nurse Emergency Vitals Intake (45 sec)
-- **Page / Route:** `/nurse/dashboard` (Login as Nurse)
+- **Status:** ⚠️ **BLOCKED — Missing Nurse Account**
+- **Classification:** **STATE-CHANGING** (Updates vitals & acknowledges alert)
+- **Client Page / Route:** `/nurse-dashboard` (Requires `role: 'nurse'`)
+- **Backend Endpoint:** `POST /api/queue/emergency`
 - **Action:**
-  1. Navigate to Nurse Triage Station.
-  2. Locate the Emergency Alert created in Step 3 (`alerts` collection).
-  3. Record vital signs (BP: 140/90, HR: 110, SpO2: 95%).
-  4. Confirm emergency triage escalation.
+  - *Prerequisite:* Must be provisioned by Admin via the Approved Provisioning Protocol.
+  - Locate the Emergency Alert created in Step 3 (`alerts` collection).
+  - Record vital signs (BP: 140/90, HR: 110, SpO2: 95%).
+  - Confirm emergency triage escalation.
 - **Expected Result:**
-  - Emergency patient is flagged with high-visibility red badge across staff screens.
+  - Emergency patient flagged with high-visibility red badge across staff screens.
   - Alert marked `acknowledged` with nurse UID and timestamp.
-- **Safe Fallback:** Manual walk-in emergency button available directly on nurse dashboard.
+- **Demonstration Guidance:**
+  - **BLOCKED** in default rehearsal due to absence of live `nurse` account.
+  - The emergency alert generated in Step 3 remains securely recorded in Firestore `alerts` collection.
 
 ---
 
 ### Step 11: Pharmacy Verification & Dispensing (45 sec)
-- **Page / Route:** `/pharmacy/queue` (Login as Pharmacist)
+- **Status:** ⚠️ **BLOCKED — Missing Pharmacy Account**
+- **Classification:** **STATE-CHANGING** (Updates prescription status to `dispensed`)
+- **Client Page / Route:** `/pharmacy-dashboard` & `/pharmacy/verify` (Requires `role: 'pharmacy'`)
+- **Backend Endpoint:** `POST /api/prescriptions/:id/dispense`, `GET /api/prescriptions/verify/:code`
 - **Action:**
-  1. Open Pharmacy Dispense Queue.
-  2. Look up prescription generated in Step 8.
-  3. Verify dosage against allergies, click **Dispense Medication**.
+  - *Prerequisite:* Must be provisioned by Admin via the Approved Provisioning Protocol.
+  - Look up prescription generated in Step 8.
+  - Click **Dispense Medication**.
 - **Expected Result:**
   - Prescription status updates to `dispensed`.
   - Dispense timestamp and pharmacist ID recorded for medical compliance.
-- **Safe Fallback:** Manual verification by Patient Health ID.
+- **Demonstration Guidance:**
+  - **BLOCKED** in default rehearsal due to absence of live `pharmacy` account.
+  - The digital prescription generated in Step 8 remains securely recorded in Firestore `prescriptions` collection.
 
 ---
 
 ### Step 12: Admin Governance, Analytics & Audit Logs (45 sec)
-- **Page / Route:** `/admin/analytics` & `/admin/audit` (Login as Admin)
+- **Status:** **ACTIVE / VERIFIED** (Role: `admin`)
+- **Classification:** **READ-ONLY** (Renders operational analytics & audit trail)
+- **Client Page / Route:** `/admin-dashboard` (Tabs: **Accuracy & Analytics** and **Audit Log Viewer**)
+- **Backend Endpoints:** `GET /api/admin/analytics/overview`, `GET /api/admin/audit-logs`
 - **Action:**
-  1. View Department Analytics (patient footfall, triage distribution, wait times).
-  2. Open **Security Audit Trail**.
+  1. Log in with Admin account and open `/admin-dashboard`.
+  2. Click the **Accuracy & Analytics** tab to view department analytics (patient footfall, triage distribution, wait times via `GET /api/admin/analytics/overview`).
+  3. Click the **Audit Log Viewer** tab to inspect the immutable audit logs (via `GET /api/admin/audit-logs`).
 - **Expected Result:**
-  - Immutable audit logs show timestamped records for login, triage, prescription issuance, and dispensing.
+  - System dashboard renders operational metrics.
+  - Immutable audit logs show timestamped records for registration, triage, prescription issuance, and system events.
   - Zero sensitive credentials exposed in audit payloads.
 - **Safe Fallback:** Date range filter narrows log queries to prevent large data transfers.
 
 ---
 
 ### Step 13: Role-Based URL Route Protection (30 sec)
-- **Page / Route:** Direct URL Access Test
+- **Status:** **ACTIVE / VERIFIED** (Role: `patient` / Unauthenticated)
+- **Classification:** **READ-ONLY / SECURITY INTERCEPT** (Client route guard denial)
+- **Client Page / Route:** Direct URL Access Test
 - **Action:**
-  1. As a logged-in **Patient**, attempt to directly open `http://localhost:5173/admin/settings` or `http://localhost:5173/doctor/queue`.
+  1. As a logged-in **Patient**, attempt to directly open `http://localhost:5173/admin-dashboard` or `http://localhost:5173/doctor/queue`.
 - **Expected Result:**
   - Route guard intercepts unauthorized navigation.
   - Access blocked with **403 Forbidden** banner or redirection to authorized patient home page.
-- **Safe Fallback:** Backend API similarly validates role custom claims on all `/api/admin/*` and `/api/doctor/*` endpoints.
+- **Safe Fallback:** Backend API similarly validates role custom claims on all `/api/admin/*` and staff endpoints.
 
 ---
 
@@ -344,20 +422,9 @@ To guarantee that no accidental mock data leaks into live demonstration or produ
 
 ---
 
-## 6. Emergency Recovery & Troubleshooting During Demonstration
-
-| Symptom | Probable Cause | Immediate Remediation |
-| :--- | :--- | :--- |
-| **Backend returns 503 / Database Error** | `serviceAccountKey.json` missing or misconfigured | Confirm file exists in `server/config/` and re-run `npm run demo:prep`. |
-| **Registration returns 400 Bad Request** | Health ID collision or missing field | Ensure all required fields (DOB, phone, allergies) are filled. |
-| **Doctor queue shows no patients** | Appointment date mismatch | Confirm appointment was booked for Today's date. |
-| **Permission Denied / 403 on API call** | Firebase Auth Custom Claims not synced | Sign out and sign in again to refresh the JWT claims token. |
-| **Firestore Quota Exceeded (RESOURCE_EXHAUSTED)** | Quota limit reached (50,000 reads) | Stop all background processes. Verify `FLAG_SCHEDULER=false`. |
-
----
-
-## 7. Demonstration Completion Checklist
-- [x] All 13 core workflows validated via browser UI.
-- [x] Zero mock seed scripts executed against production.
-- [x] Spark plan quota safely preserved (< 1,000 reads during entire walkthrough).
-- [x] Digital audit trail verified under `/admin/audit`.
+## 6. Demonstration Readiness Status
+- **Core Clinical Demonstration (Steps 1, 2, 3, 4, 7, 8, 9, 12, 13):** **STATIC / PRE-FLIGHT VERIFIED** (Authorized Patient, Doctor, and Admin accounts and route contracts verified statically; note that Steps 1, 3, 4, and 8 are state-changing and require demonstrator approval before execution on live project; Step 7 queue viewing is read-only while Call Next is state-changing).
+- **Extended Staff Demonstration (Steps 5, 6, 10, 11):** **BLOCKED** pending administrator staff account provisioning for Reception, Nurse, and Pharmacy.
+- **Live Execution Status:** The current phase has not executed live end-to-end writes against the real project. Local automated test passes (e.g. 271 passing unit/domain mock tests) demonstrate internal code logic but do NOT claim live end-to-end cloud verification or production readiness. Live rehearsal requires explicit demonstrator approval per state-changing step.
+- **Database Safety:** Zero seed scripts or destructive wipers executed.
+- **Quota Impact:** Preserved within Spark plan limits (< 500 document reads).
