@@ -17,7 +17,7 @@ if (isStagingMode) {
 
 const PORT = env.PORT || 5000;
 
-app.listen(PORT, async () => {
+const server = app.listen(PORT, '0.0.0.0', async () => {
   console.log(`==================================================`);
   console.log(`AI Smart Healthcare Server running on port ${PORT}`);
   console.log(`Environment: ${env.NODE_ENV}`);
@@ -39,3 +39,20 @@ app.listen(PORT, async () => {
     console.log('FLAG_SCHEDULER is false. Scheduler loop disabled (trigger manually via /api/internal/tick).');
   }
 });
+
+// Container Runtime Graceful Shutdown (Cloud Run / Render / Kubernetes)
+const gracefulShutdown = (signal) => {
+  console.log(`[Lifecycle] Received ${signal}. Closing HTTP server gracefully...`);
+  server.close(() => {
+    console.log('[Lifecycle] HTTP server closed cleanly. Process terminating.');
+    process.exit(0);
+  });
+  // Force exit after 10s if active sockets refuse to close
+  setTimeout(() => {
+    console.error('[Lifecycle] Forceful shutdown initiated after 10s timeout.');
+    process.exit(1);
+  }, 10000).unref();
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));

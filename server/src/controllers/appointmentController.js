@@ -3,6 +3,7 @@ import { generateAtomicPatientHealthId, isValidHealthIdFormat } from '../service
 import { evaluateTriageRules } from '../domain/triage.js';
 import { calculatePriorityScore } from '../services/tokenPriorityEngine.js';
 import { AppError } from '../utils/errors.js';
+import { formatDateYYYYMMDD, isTimeOverlapping } from '../utils/time.js';
 
 /**
  * Atomically book an appointment with Firestore Transactional Double-Booking Lock
@@ -78,67 +79,94 @@ export const bookAppointment = async (req, res, next) => {
     }
 
     // 2. Fetch and validate doctor info (Fix CODE-Q1)
+    const docLookupKey = doctorUid || req.body.doctorId;
     let doctorDoc = null;
     let resolvedDoctorId = null;
     let resolvedDoctorUid = null;
 
-    const directDocSnap = await db.collection('doctors').doc(doctorUid).get();
-    if (directDocSnap.exists) {
-      doctorDoc = directDocSnap.data();
-      resolvedDoctorId = doctorDoc.doctorId || directDocSnap.id;
-      resolvedDoctorUid = doctorDoc.doctorUid || doctorDoc.uid || directDocSnap.id;
-    } else {
-      const candidates = [
-        doctorUid,
-        doctorUid.startsWith('doc-uid-') ? doctorUid.replace(/^doc-uid-(doc-)?/i, 'DOC-') : null
-      ].filter(Boolean);
-
-      for (const cand of candidates) {
-        const qSnap = await db.collection('doctors')
-          .where('doctorId', '==', cand)
-          .limit(1)
-          .get();
-        if (!qSnap.empty) {
-          doctorDoc = qSnap.docs[0].data();
-          resolvedDoctorId = doctorDoc.doctorId || qSnap.docs[0].id;
-          resolvedDoctorUid = doctorDoc.doctorUid || doctorDoc.uid || qSnap.docs[0].id;
-          break;
-        }
-
-        const qSnapUid = await db.collection('doctors')
-          .where('doctorUid', '==', cand)
-          .limit(1)
-          .get();
-        if (!qSnapUid.empty) {
-          doctorDoc = qSnapUid.docs[0].data();
-          resolvedDoctorId = doctorDoc.doctorId || qSnapUid.docs[0].id;
-          resolvedDoctorUid = doctorDoc.doctorUid || doctorDoc.uid || qSnapUid.docs[0].id;
-          break;
-        }
-      }
-    }
-
-    if (!resolvedDoctorUid) {
-      const userDirectSnap = await db.collection('users').doc(doctorUid).get();
-      if (userDirectSnap.exists && userDirectSnap.data()?.role === 'doctor') {
-        resolvedDoctorUid = userDirectSnap.id;
-        resolvedDoctorId = userDirectSnap.data().doctorId || userDirectSnap.id;
+    if (docLookupKey) {
+      const directDocSnap = await db.collection('doctors').doc(docLookupKey).get();
+      if (directDocSnap.exists) {
+        doctorDoc = directDocSnap.data();
+        resolvedDoctorId = doctorDoc.doctorId || directDocSnap.id;
+        resolvedDoctorUid = doctorDoc.doctorUid || doctorDoc.uid || directDocSnap.id;
       } else {
-        const userQuerySnap = await db.collection('users')
-          .where('doctorId', '==', doctorUid)
-          .where('role', '==', 'doctor')
-          .limit(1)
-          .get();
-        if (!userQuerySnap.empty) {
-          resolvedDoctorUid = userQuerySnap.docs[0].id;
-          resolvedDoctorId = userQuerySnap.docs[0].data().doctorId || userQuerySnap.docs[0].id;
+        const candidates = [
+          docLookupKey,
+          docLookupKey.startsWith('doc-uid-') ? docLookupKey.replace(/^doc-uid-(doc-)?/i, 'DOC-') : null
+        ].filter(Boolean);
+
+        for (const cand of candidates) {
+          const qSnap = await db.collection('doctors')
+            .where('doctorId', '==', cand)
+            .limit(1)
+            .get();
+          if (!qSnap.empty) {
+            doctorDoc = qSnap.docs[0].data();
+            resolvedDoctorId = doctorDoc.doctorId || qSnap.docs[0].id;
+            resolvedDoctorUid = doctorDoc.doctorUid || doctorDoc.uid || qSnap.docs[0].id;
+            break;
+          }
+
+          const qSnapUid = await db.collection('doctors')
+            .where('doctorUid', '==', cand)
+            .limit(1)
+            .get();
+          if (!qSnapUid.empty) {
+            doctorDoc = qSnapUid.docs[0].data();
+            resolvedDoctorId = doctorDoc.doctorId || qSnapUid.docs[0].id;
+            resolvedDoctorUid = doctorDoc.doctorUid || doctorDoc.uid || qSnapUid.docs[0].id;
+            break;
+          }
+        }
+      }
+
+      if (!doctorDoc) {
+        const userDirectSnap = await db.collection('users').doc(docLookupKey).get();
+        if (userDirectSnap.exists && userDirectSnap.data()?.role === 'doctor') {
+          resolvedDoctorUid = userDirectSnap.id;
+          resolvedDoctorId = userDirectSnap.data().doctorId || userDirectSnap.id;
+          doctorDoc = {
+            id: resolvedDoctorId,
+            doctorId: resolvedDoctorId,
+            doctorUid: resolvedDoctorUid,
+            name: userDirectSnap.data().displayName || userDirectSnap.data().name || userDirectSnap.data().fullName,
+            departmentId: userDirectSnap.data().departmentId || 'dept-gen'
+          };
+        } else {
+          const userQuerySnap = await db.collection('users')
+            .where('doctorId', '==', docLookupKey)
+            .where('role', '==', 'doctor')
+            .limit(1)
+            .get();
+          if (!userQuerySnap.empty) {
+            resolvedDoctorUid = userQuerySnap.docs[0].id;
+            resolvedDoctorId = userQuerySnap.docs[0].data().doctorId || userQuerySnap.docs[0].id;
+            doctorDoc = {
+              id: resolvedDoctorId,
+              doctorId: resolvedDoctorId,
+              doctorUid: resolvedDoctorUid,
+              name: userQuerySnap.docs[0].data().displayName || userQuerySnap.docs[0].data().name,
+              departmentId: userQuerySnap.docs[0].data().departmentId || 'dept-gen'
+            };
+          }
         }
       }
     }
 
-    if (!resolvedDoctorUid || !resolvedDoctorId) {
-      throw new AppError('INVALID_DOCTOR', 'Doctor record does not have a valid associated identity mapping.', 400);
+    if (!doctorDoc) {
+      throw new AppError('INVALID_DOCTOR', `Doctor '${docLookupKey || 'unknown'}' does not exist or cannot be resolved.`, 400);
     }
+
+    resolvedDoctorId = resolvedDoctorId || doctorDoc.doctorId || doctorDoc.id || docLookupKey;
+    resolvedDoctorUid = resolvedDoctorUid || doctorDoc.doctorUid || doctorDoc.uid || resolvedDoctorId;
+
+    const resolvedDoctorName = doctorDoc.fullName || doctorDoc.name;
+    if (!resolvedDoctorName) {
+      throw new AppError('INVALID_DOCTOR', 'Doctor record does not contain a valid name.', 400);
+    }
+    const resolvedSpecialty = doctorDoc.specialization || doctorDoc.specialty || '';
+    const resolvedDepartmentName = doctorDoc.departmentName || doctorDoc.department || (departmentId ? departmentId.replace('dept-', '').toUpperCase() : 'General Medicine');
 
     // 3. Derive priority safely (Fix SEC-Q1 & SEC-Q2)
     const ruleResult = evaluateTriageRules(reason);
@@ -156,7 +184,7 @@ export const bookAppointment = async (req, res, next) => {
     const priorityScore = calculatePriorityScore(effectivePriorityCategory, isEmergencyVerified);
 
     // 4. Same-day duplicate policy check (Fix BIZ-Q1)
-    const ACTIVE_APPT_STATUSES = ['booked', 'confirmed', 'checked_in', 'in_consultation'];
+    const ACTIVE_APPT_STATUSES = ['booked', 'confirmed', 'checked_in', 'waiting', 'called', 'in_room', 'on_the_way', 'nearby', 'in_consultation'];
     const safeLockId = `dup_${String(patientHealthId).replace(/[\/\s]/g, '_')}_${String(resolvedDoctorId).replace(/[\/\s]/g, '_')}_${String(date).replace(/[\/\s]/g, '_')}`;
     const safeUidLockId = `dup_uid_${String(targetPatientUid).replace(/[\/\s]/g, '_')}_${String(resolvedDoctorId).replace(/[\/\s]/g, '_')}_${String(date).replace(/[\/\s]/g, '_')}`;
 
@@ -171,12 +199,36 @@ export const bookAppointment = async (req, res, next) => {
       const matchesPatient = data.patientHealthId === patientHealthId ||
         data.patientUid === targetPatientUid ||
         data.ownerUid === targetPatientUid;
-      const matchesDoc = data.doctorId === resolvedDoctorId ||
-        data.doctorId === doctorUid ||
-        (data.doctorUid && data.doctorUid === resolvedDoctorUid);
 
-      if (matchesPatient && matchesDoc && ACTIVE_APPT_STATUSES.includes(statusLower)) {
-        throw new AppError('DUPLICATE_BOOKING', 'You already have an active appointment with this doctor on the selected date.', 409);
+      if (matchesPatient && ACTIVE_APPT_STATUSES.includes(statusLower)) {
+        const existingTime = data.timeSlot || data.bookedStartAt;
+
+        // Same doctor check first
+        const matchesDoc = data.doctorId === resolvedDoctorId ||
+          data.doctorId === doctorUid ||
+          (data.doctorUid && data.doctorUid === resolvedDoctorUid);
+        if (matchesDoc) {
+          throw new AppError('DUPLICATE_BOOKING', 'You already have an active appointment with this doctor on the selected date.', 409);
+        }
+
+        // Rule (a): Overlapping
+        if (existingTime && timeSlot && isTimeOverlapping(existingTime, timeSlot, data.durationMin || 15, 15)) {
+          throw new AppError('OVERLAPPING_APPOINTMENT', `You already have an overlapping appointment on this date at ${existingTime}.`, 409);
+        }
+
+        // Rule (b): Same department
+        const existingDept = data.departmentId || 'dept-gen';
+        const targetDept = departmentId || 'dept-gen';
+        if (existingDept === targetDept) {
+          throw new AppError('SAME_DEPARTMENT_SAME_DAY', 'You already have an active appointment in this department on this date.', 409);
+        }
+
+        // Rule (c): Warning tick for different department on same day
+        const hasSameDayAck = req.body.sameDayAck === true || req.body.sameDayAck === 'true' || req.body.confirmSameDay === true || req.body.sameDayWarningAck === true;
+        if (!hasSameDayAck) {
+          const conflictDeptName = data.departmentName || existingDept.replace('dept-', '').toUpperCase();
+          throw new AppError('SAME_DAY_DIFFERENT_DEPT_WARNING', `You already have an appointment today at ${existingTime || 'scheduled time'} with ${conflictDeptName}. Continue?`, 409);
+        }
       }
     }
 
@@ -184,14 +236,42 @@ export const bookAppointment = async (req, res, next) => {
     let appointmentId;
 
     // 5. Execute atomic transaction to prevent double booking & duplicate active appointments
+    // Derive department letter for token label (G-001, D-001, etc.)
+    let deptLetter = 'G';
+    const effectiveDeptId = departmentId || doctorDoc.departmentId || 'dept-gen';
+    if (effectiveDeptId === 'dept-card') deptLetter = 'C';
+    else if (effectiveDeptId === 'dept-ped' || effectiveDeptId === 'dept-peds') deptLetter = 'P';
+    else if (effectiveDeptId === 'dept-derm') deptLetter = 'D';
+    else if (effectiveDeptId === 'dept-ortho') deptLetter = 'O';
+    else if (effectiveDeptId && effectiveDeptId.startsWith('dept-')) {
+      deptLetter = effectiveDeptId.replace('dept-', '').charAt(0).toUpperCase();
+    }
+
     await db.runTransaction(async (transaction) => {
-      // 0. Concurrency-safe duplicate reservation lock checks (Fix BIZ-Q1)
+      // ALL READS FIRST (Firestore requirement: all reads before writes)
       const dupLockRef = db.collection('appointment_locks').doc(safeLockId);
       const dupUidLockRef = db.collection('appointment_locks').doc(safeUidLockId);
+      const counterRef = db.collection('counters').doc('appointmentId');
+      const deptCounterRef = db.collection('counters').doc(`token_${deptLetter}_${date}`);
 
-      const [dupLockSnap, dupUidLockSnap] = await Promise.all([
+      let conflictQuery = db
+        .collection('appointments')
+        .where('date', '==', date)
+        .where('status', 'in', ['BOOKED', 'booked', 'CHECKED_IN', 'checked_in', 'IN_CONSULTATION', 'in_consultation', 'COMPLETED', 'completed']);
+
+      if (resolvedDoctorUid) {
+        conflictQuery = conflictQuery.where('doctorUid', '==', resolvedDoctorUid);
+      }
+      if (timeSlot) {
+        conflictQuery = conflictQuery.where('timeSlot', '==', timeSlot);
+      }
+
+      const [dupLockSnap, dupUidLockSnap, conflictSnapshot, counterDoc, deptCounterDoc] = await Promise.all([
         transaction.get(dupLockRef),
-        transaction.get(dupUidLockRef)
+        transaction.get(dupUidLockRef),
+        transaction.get(conflictQuery),
+        transaction.get(counterRef),
+        transaction.get(deptCounterRef)
       ]);
 
       const activeLockSnap = dupLockSnap.exists ? dupLockSnap : (dupUidLockSnap.exists ? dupUidLockSnap : null);
@@ -200,24 +280,13 @@ export const bookAppointment = async (req, res, next) => {
         if (lockData.appointmentId) {
           const lockedApptRef = db.collection('appointments').doc(lockData.appointmentId);
           const lockedApptSnap = await transaction.get(lockedApptRef);
-          if (lockedApptSnap.exists) {
-            const lockedStatus = (lockedApptSnap.data().status || '').toLowerCase();
-            if (ACTIVE_APPT_STATUSES.includes(lockedStatus)) {
-              throw new AppError('DUPLICATE_BOOKING', 'You already have an active appointment with this doctor on the selected date.', 409);
-            }
+          if (lockedApptSnap.exists &&
+              lockedApptSnap.data().date === date &&
+              ACTIVE_APPT_STATUSES.includes((lockedApptSnap.data().status || '').toLowerCase())) {
+            throw new AppError('DUPLICATE_BOOKING', 'You already have an active appointment with this doctor on the selected date.', 409);
           }
         }
       }
-
-      // Query for conflicting active appointment on same doctor, date, and slot
-      const conflictQuery = db
-        .collection('appointments')
-        .where('doctorUid', '==', resolvedDoctorUid)
-        .where('date', '==', date)
-        .where('timeSlot', '==', timeSlot)
-        .where('status', 'in', ['BOOKED', 'booked', 'CHECKED_IN', 'checked_in', 'IN_CONSULTATION', 'in_consultation', 'COMPLETED', 'completed']);
-
-      const conflictSnapshot = await transaction.get(conflictQuery);
 
       if (!conflictSnapshot.empty) {
         const error = new Error('Conflict Error: This appointment slot has already been booked by another patient.');
@@ -225,29 +294,15 @@ export const bookAppointment = async (req, res, next) => {
         throw error;
       }
 
-      // Generate atomic appointment ID
-      const counterRef = db.collection('counters').doc('appointmentId');
-      const counterDoc = await transaction.get(counterRef);
       let seq = 1;
       if (counterDoc.exists) {
         seq = (counterDoc.data().currentValue || 0) + 1;
-        transaction.update(counterRef, { currentValue: seq });
-      } else {
-        transaction.set(counterRef, { currentValue: 1 });
       }
-
       const paddedSeq = String(seq).padStart(5, '0');
       appointmentId = `APT-2026-${paddedSeq}`;
 
-      // Derive department code for token number (e.g. CARD-T-015 or GEN-T-001)
-      let deptCode = 'GEN';
-      if (departmentId === 'dept-card') deptCode = 'CARD';
-      else if (departmentId === 'dept-ped') deptCode = 'PED';
-      else if (departmentId && departmentId.startsWith('dept-')) {
-        deptCode = departmentId.replace('dept-', '').toUpperCase();
-      }
-      const tokenSeqStr = String(seq).padStart(3, '0');
-      const tokenNumber = `${deptCode}-T-${tokenSeqStr}`;
+      const tokenNumber = (deptCounterDoc.exists ? deptCounterDoc.data().value || 0 : 0) + 1;
+      const tokenLabel = `${deptLetter}-${String(tokenNumber).padStart(3, '0')}`;
 
       const newApptRef = db.collection('appointments').doc(appointmentId);
 
@@ -257,22 +312,31 @@ export const bookAppointment = async (req, res, next) => {
         ownerUid: targetPatientUid,
         bookedByUid: accountUid,
         patientUid: targetPatientUid,
-        patientHealthId,          // Verified — matches target patient's patientHealthId
+        patientHealthId,
         viewerUids: Array.from(new Set([targetPatientUid, accountUid, resolvedDoctorUid].filter(Boolean))),
         bookedBy: accountUid,
         doctorUid: resolvedDoctorUid,
         doctorId: resolvedDoctorId,
-        departmentId: departmentId || 'dept-gen',
+        doctorName: resolvedDoctorName,
+        specialty: resolvedSpecialty,
+        departmentName: resolvedDepartmentName,
+        departmentId: effectiveDeptId,
+        departmentLetter: deptLetter,
         date,
         timeSlot,
+        bookedStartAt: timeSlot,
         priorityCategory: effectivePriorityCategory,
         reason,
         status: 'BOOKED',
         tokenNumber,
+        tokenLabel,
         createdAt: new Date(),
         updatedAt: new Date()
       };
 
+      // ALL WRITES AFTER READS
+      transaction.set(counterRef, { currentValue: seq }, { merge: true });
+      transaction.set(deptCounterRef, { value: tokenNumber }, { merge: true });
       transaction.set(newApptRef, appointmentData);
 
       // Record duplicate reservation locks (Fix BIZ-Q1)
@@ -342,8 +406,10 @@ export const bookAppointment = async (req, res, next) => {
 export const getMyAppointments = async (req, res, next) => {
   try {
     const { uid: patientUid } = req.user;
-    const { patientId: filterPatientId } = req.query;
+    const { patientId: filterPatientId, tab, limit: queryLimit } = req.query;
     const db = assertDbConnected();
+    const todayStr = formatDateYYYYMMDD();
+    const limit = Math.min(Math.max(Number(queryLimit) || 20, 1), 50);
 
     let targetUid = patientUid;
     if (filterPatientId && filterPatientId !== patientUid) {
@@ -358,7 +424,7 @@ export const getMyAppointments = async (req, res, next) => {
       targetUid = filterPatientId;
     }
 
-    // Fetch patient's healthId by querying patients where ownerUid matches (correct structure: patients/{healthId})
+    // Fetch patient's healthId by querying patients where ownerUid matches
     let patientHealthId = null;
     try {
       const pSnap = await db.collection('patients')
@@ -378,14 +444,15 @@ export const getMyAppointments = async (req, res, next) => {
       snapshot = await db
         .collection('appointments')
         .where('patientUid', '==', targetUid)
+        .limit(50)
         .get();
     } else {
       // Fetch appointments using all patient UID field variations
       const [selfSnap, bookedSnap, patientUidSnap, bookedBySnap] = await Promise.all([
-        db.collection('appointments').where('ownerUid', '==', patientUid).get(),
-        db.collection('appointments').where('bookedByUid', '==', patientUid).get(),
-        db.collection('appointments').where('patientUid', '==', patientUid).get(),
-        db.collection('appointments').where('bookedBy', '==', patientUid).get()
+        db.collection('appointments').where('ownerUid', '==', patientUid).limit(50).get(),
+        db.collection('appointments').where('bookedByUid', '==', patientUid).limit(50).get(),
+        db.collection('appointments').where('patientUid', '==', patientUid).limit(50).get(),
+        db.collection('appointments').where('bookedBy', '==', patientUid).limit(50).get()
       ]);
 
       const map = new Map();
@@ -403,6 +470,7 @@ export const getMyAppointments = async (req, res, next) => {
       const snap2 = await db
         .collection('appointments')
         .where('patientHealthId', '==', patientHealthId)
+        .limit(50)
         .get();
       rawAppointments = snap2.docs.map((d) => ({
         id: d.id,
@@ -411,6 +479,20 @@ export const getMyAppointments = async (req, res, next) => {
       }));
     }
 
+    // Sort by date desc, then bookedStartAt/timeSlot desc
+    rawAppointments.sort((a, b) => {
+      const dateA = a.date || '';
+      const dateB = b.date || '';
+      if (dateA !== dateB) return dateB.localeCompare(dateA);
+      const timeA = a.bookedStartAt || a.timeSlot || '';
+      const timeB = b.bookedStartAt || b.timeSlot || '';
+      return timeB.localeCompare(timeA);
+    });
+
+    const CANCELLED_STATUSES = ['cancelled', 'cancelled_by_patient', 'cancelled_by_doctor', 'cancelled_by_clinic'];
+    const COMPLETED_STATUSES = ['completed', 'no_show'];
+    const ACTIVE_STATUSES = ['booked', 'confirmed', 'checked_in', 'waiting', 'called', 'in_room', 'on_the_way', 'nearby', 'rejoined'];
+
     const appointments = await Promise.all(
       rawAppointments.map(async (appt) => {
         if (!appt.tokenNumber && appt.appointmentId) {
@@ -418,26 +500,119 @@ export const getMyAppointments = async (req, res, next) => {
             const tokenDoc = await db.collection('tokens').doc(`tok-${appt.appointmentId}`).get();
             if (tokenDoc.exists) {
               appt.tokenNumber = tokenDoc.data().tokenNumber;
+              if (tokenDoc.data().tokenLabel) {
+                appt.tokenLabel = tokenDoc.data().tokenLabel;
+              }
             } else {
               const tokenQuery = await db
                 .collection('tokens')
                 .where('appointmentId', '==', appt.appointmentId)
+                .limit(1)
                 .get();
               if (!tokenQuery.empty) {
                 appt.tokenNumber = tokenQuery.docs[0].data().tokenNumber;
+                if (tokenQuery.docs[0].data().tokenLabel) {
+                  appt.tokenLabel = tokenQuery.docs[0].data().tokenLabel;
+                }
               }
             }
           } catch (tErr) {
             console.warn('Token lookup warning:', tErr.message);
           }
         }
+
+        // Format consistent tokenLabel per department (never bare #1)
+        if (!appt.tokenLabel) {
+          const deptLetter = appt.departmentLetter || (appt.departmentId ? appt.departmentId.replace('dept-', '').charAt(0).toUpperCase() : 'G');
+          if (typeof appt.tokenNumber === 'number') {
+            appt.tokenLabel = `${deptLetter}-${String(appt.tokenNumber).padStart(3, '0')}`;
+          } else if (typeof appt.tokenNumber === 'string' && appt.tokenNumber && !appt.tokenNumber.startsWith('#')) {
+            appt.tokenLabel = appt.tokenNumber;
+          } else {
+            appt.tokenLabel = `${deptLetter}-001`;
+          }
+        }
+
+        const statusLower = (appt.status || '').toLowerCase();
+        const isPastDate = (appt.date || '') < todayStr;
+
+        let computedTab = 'past';
+        let displayStatus = appt.status || 'booked';
+        let isMissed = false;
+        let canCancel = false;
+        let canRebook = false;
+
+        if (CANCELLED_STATUSES.includes(statusLower)) {
+          computedTab = 'cancelled';
+          displayStatus = 'cancelled';
+          canCancel = false;
+          canRebook = true;
+        } else if (isPastDate) {
+          computedTab = 'past';
+          if (['booked', 'confirmed', 'not_arrived'].includes(statusLower)) {
+            displayStatus = 'Missed';
+            isMissed = true;
+            canRebook = true;
+            canCancel = false;
+          } else {
+            displayStatus = appt.status;
+            canCancel = false;
+            canRebook = true;
+          }
+        } else {
+          // Today or future
+          if (COMPLETED_STATUSES.includes(statusLower)) {
+            computedTab = 'past';
+            displayStatus = appt.status;
+            canRebook = true;
+          } else if (statusLower === 'not_arrived') {
+            computedTab = 'past';
+            displayStatus = 'Missed';
+            isMissed = true;
+            canRebook = true;
+          } else if (ACTIVE_STATUSES.includes(statusLower)) {
+            computedTab = 'upcoming';
+            displayStatus = appt.status;
+            canCancel = ['booked', 'confirmed'].includes(statusLower);
+          } else {
+            computedTab = 'past';
+            displayStatus = appt.status;
+          }
+        }
+
+        appt.tab = computedTab;
+        appt.displayStatus = displayStatus;
+        appt.isMissed = isMissed;
+        appt.canCancel = canCancel;
+        appt.canRebook = canRebook;
+
         return appt;
       })
     );
 
+    const tabs = {
+      upcoming: appointments.filter(a => a.tab === 'upcoming'),
+      past: appointments.filter(a => a.tab === 'past'),
+      cancelled: appointments.filter(a => a.tab === 'cancelled')
+    };
+
+    let responseData = appointments;
+    if (tab) {
+      const selected = String(tab).toLowerCase();
+      if (tabs[selected]) {
+        responseData = tabs[selected];
+      }
+    }
+
     res.status(200).json({
       success: true,
-      data: appointments
+      data: responseData.slice(0, limit),
+      tabs: {
+        upcoming: tabs.upcoming.slice(0, limit),
+        past: tabs.past.slice(0, limit),
+        cancelled: tabs.cancelled.slice(0, limit)
+      },
+      totalCount: responseData.length
     });
   } catch (error) {
     next(error);

@@ -1120,10 +1120,36 @@ export const getMyMedicalHistory = async (req, res, next) => {
     const { uid } = req.user;
     const db = assertDbConnected();
 
-    let healthId = 'HID-2026-00001';
+    let healthId = null;
     const patientDoc = await db.collection('patients').doc(uid).get();
     if (patientDoc.exists) {
-      healthId = patientDoc.data().patientHealthId || patientDoc.data().healthId || healthId;
+      healthId = patientDoc.data().patientHealthId || patientDoc.data().healthId || null;
+    }
+
+    if (!healthId) {
+      const snap = await db.collection('patients')
+        .where('ownerUid', '==', uid)
+        .where('relation', '==', 'self')
+        .limit(1)
+        .get();
+      if (!snap.empty) {
+        healthId = snap.docs[0].data().patientHealthId || snap.docs[0].data().healthId;
+      } else {
+        const anySnap = await db.collection('patients')
+          .where('ownerUid', '==', uid)
+          .limit(1)
+          .get();
+        if (!anySnap.empty) {
+          healthId = anySnap.docs[0].data().patientHealthId || anySnap.docs[0].data().healthId;
+        }
+      }
+    }
+
+    if (!healthId) {
+      return res.status(404).json({
+        success: false,
+        message: 'Patient profile or Health ID not found for authenticated user'
+      });
     }
 
     req.params = { ...req.params, healthId };

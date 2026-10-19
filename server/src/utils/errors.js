@@ -29,6 +29,7 @@ export const ErrorCodes = Object.freeze({
 
 export const formatErrorResponse = (code, message, details = {}) => ({
   success: false,
+  code: code || ErrorCodes.INTERNAL_ERROR,
   message: message || 'An error occurred',
   error: {
     code: code || ErrorCodes.INTERNAL_ERROR,

@@ -128,6 +128,11 @@ export function useNotifications() {
 
     if (perm !== 'granted') return;
 
+    if (!VAPID_KEY || typeof VAPID_KEY !== 'string' || VAPID_KEY.trim() === '') {
+      console.warn('FCM VAPID key is not configured in VITE_FIREBASE_VAPID_KEY. Push notifications are not enabled; in-app notifications remain active.');
+      return;
+    }
+
     try {
       const messaging = getMessaging(app);
       const token = await getToken(messaging, { vapidKey: VAPID_KEY });
@@ -154,10 +159,13 @@ export function useNotifications() {
     }
   }, [fetchNotifications, showToast]);
 
-  // ── Initial fetch ────────────────────────────────────────
+  // ── Initial fetch & auto-sync if permission already granted ──────────
   useEffect(() => {
     fetchNotifications();
-  }, [fetchNotifications]);
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && VAPID_KEY) {
+      requestPermission();
+    }
+  }, [fetchNotifications, requestPermission]);
 
   return {
     notifications,

@@ -282,7 +282,7 @@ export const saveDoctorSchedule = async (req, res, next) => {
 
     if (!docSnap.exists) {
       const userSnap = await db.collection('users').doc(doctorId).get();
-      const docName = userSnap.exists ? (userSnap.data().displayName || userSnap.data().fullName || 'Dr. Medical Staff') : 'Dr. Medical Staff';
+      const docName = (userSnap.exists ? (userSnap.data().displayName || userSnap.data().fullName) : null) || doctorId;
       await doctorRef.set({
         id: doctorId,
         doctorId,

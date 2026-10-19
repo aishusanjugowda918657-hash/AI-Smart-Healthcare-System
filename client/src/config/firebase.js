@@ -89,5 +89,5 @@ try {
   console.warn("⚠️ Client Firebase initialization error (running in demo mode):", error.message);
 }
 
-export { app, auth, db, googleProvider };
+export { app, auth, db, googleProvider, firebaseConfig };
 

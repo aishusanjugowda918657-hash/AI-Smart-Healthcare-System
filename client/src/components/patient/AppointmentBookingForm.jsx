@@ -63,6 +63,8 @@ export const AppointmentBookingForm = () => {
 
   // Step 6 State: Confirmation & Disclaimer
   const [disclaimerTicked, setDisclaimerTicked] = useState(false);
+  const [sameDayWarning, setSameDayWarning] = useState(null);
+  const [sameDayAck, setSameDayAck] = useState(false);
   const [bookingSubmitting, setBookingSubmitting] = useState(false);
   const [bookingError, setBookingError] = useState(null);
 
@@ -239,8 +241,9 @@ export const AppointmentBookingForm = () => {
         patientHealthId: activeHealthId,
         patientName: activePatientName,
         doctorId: selectedDoctorId,
-        doctorName: selectedDocObj?.name || 'Dr. SmartCare',
+        ...(selectedDocObj?.name ? { doctorName: selectedDocObj.name } : {}),
         departmentId: triageData?.departmentId || 'dept-gen',
+        departmentName: formatDepartmentName(triageData?.departmentId),
         date: appointmentDate,
         visitType: triageData?.visitType || 'new',
         reasonText: `${reasonChips.join(', ')}. ${reasonText}`.trim(),
@@ -249,6 +252,7 @@ export const AppointmentBookingForm = () => {
         clinicalLevel: triageData?.clinicalLevel || 1,
         urgencySuggested: triageData?.urgencySuggested || 'routine',
         disclaimerAck: { acknowledged: true },
+        sameDayAck: Boolean(sameDayAck),
         travelMinutes: travelMinutes || null
       });
 
@@ -263,7 +267,12 @@ export const AppointmentBookingForm = () => {
       setCurrentStep(7);
     } catch (err) {
       console.error('Booking failed:', err);
-      setBookingError(err.response?.data?.message || err.message || 'Failed to complete appointment booking.');
+      if (err.response?.data?.code === 'SAME_DAY_DIFFERENT_DEPT_WARNING') {
+        setSameDayWarning(err.response.data.message || 'You already have an appointment today with another department. Continue?');
+        setSameDayAck(false);
+      } else {
+        setBookingError(err.response?.data?.message || err.message || 'Failed to complete appointment booking.');
+      }
     } finally {
       setBookingSubmitting(false);
     }
@@ -941,7 +950,24 @@ export const AppointmentBookingForm = () => {
         <button
           type="button"
           disabled={!selectedSlotId}
-          onClick={() => setCurrentStep(6)}
+          onClick={async () => {
+            try {
+              const res = await API.get('/appointments/my-appointments');
+              const appts = res.data?.data || [];
+              const activeOnDate = appts.filter(a => a.date === appointmentDate && ['booked', 'confirmed', 'checked_in', 'waiting'].includes(a.status));
+              const conflictDept = activeOnDate.find(a => a.departmentId !== (triageData?.departmentId || 'dept-gen'));
+              if (conflictDept) {
+                const conflictTime = conflictDept.bookedStartAt && conflictDept.bookedStartAt !== 'NOW' ? conflictDept.bookedStartAt : '11:30';
+                const conflictDeptName = formatDepartmentName(conflictDept.departmentId);
+                setSameDayWarning(`You already have an appointment today at ${conflictTime} with ${conflictDeptName}. Continue?`);
+              } else {
+                setSameDayWarning(null);
+              }
+            } catch (e) {
+              // ignore
+            }
+            setCurrentStep(6);
+          }}
           className="flex items-center gap-2 px-6 py-3 bg-teal-500 hover:bg-teal-400 disabled:opacity-40 text-slate-950 font-bold text-sm rounded-xl transition-all shadow-lg shadow-teal-500/20"
         >
           <span>Review & Confirm</span>
@@ -984,6 +1010,27 @@ export const AppointmentBookingForm = () => {
         </div>
       )}
 
+      {/* Same-Day Different Department Warning Notice */}
+      {sameDayWarning && (
+        <div className="bg-amber-950/40 border border-amber-500/60 p-4 rounded-2xl space-y-2">
+          <p className="text-xs text-amber-300 font-bold flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>Same-Day Appointment Notice</span>
+          </p>
+          <label className="flex items-start gap-3 cursor-pointer mt-2">
+            <input
+              type="checkbox"
+              checked={sameDayAck}
+              onChange={(e) => setSameDayAck(e.target.checked)}
+              className="mt-0.5 w-4 h-4 rounded border-slate-700 text-teal-500 focus:ring-teal-500 bg-slate-900"
+            />
+            <span className="text-xs text-amber-200 leading-relaxed font-semibold">
+              {sameDayWarning}
+            </span>
+          </label>
+        </div>
+      )}
+
       {/* Mandatory Disclaimer Tick Box */}
       <div className="bg-amber-950/30 border border-amber-500/40 p-4 rounded-2xl space-y-2">
         <label className="flex items-start gap-3 cursor-pointer">
@@ -1010,7 +1057,7 @@ export const AppointmentBookingForm = () => {
 
         <button
           type="button"
-          disabled={!disclaimerTicked || bookingSubmitting}
+          disabled={!disclaimerTicked || (sameDayWarning && !sameDayAck) || bookingSubmitting}
           onClick={handleFinalBooking}
           className="flex items-center gap-2 px-6 py-3 bg-teal-500 hover:bg-teal-400 disabled:opacity-40 text-slate-950 font-bold text-sm rounded-xl transition-all shadow-lg shadow-teal-500/20"
         >
@@ -1063,7 +1110,7 @@ export const AppointmentBookingForm = () => {
               ['Appointment ID', bookedAppointment.id],
               ['Patient', bookedAppointment.patientName],
               ['Health ID', bookedAppointment.patientHealthId],
-              ['Doctor', bookedAppointment.doctorName || 'Dr. SmartCare'],
+              ['Doctor', bookedAppointment.doctorName || 'Doctor'],
               ['Department', formatDepartmentName(bookedAppointment.departmentId)],
               ['Date', bookedAppointment.date],
               ['Time', bookedAppointment.bookedStartAt && bookedAppointment.bookedStartAt !== 'NOW' ? bookedAppointment.bookedStartAt : 'Walk-in Queue'],

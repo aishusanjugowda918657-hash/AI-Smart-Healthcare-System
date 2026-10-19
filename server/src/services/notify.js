@@ -64,6 +64,10 @@ async function sendFcmWithRetry(tokens, payload, maxAttempts = 3) {
   while (attempt < maxAttempts) {
     attempt++;
     try {
+      if (!admin.apps || admin.apps.length === 0) {
+        console.warn('Firebase Admin app not initialized; skipping FCM multicast.');
+        return { successCount: 0, failureCount: tokens.length, invalidTokens: [] };
+      }
       const messaging = admin.messaging();
       const response = await messaging.sendEachForMulticast({
         tokens,
@@ -78,12 +82,17 @@ async function sendFcmWithRetry(tokens, payload, maxAttempts = 3) {
       const invalidTokens = [];
       response.responses.forEach((r, idx) => {
         if (!r.success) {
-          const code = r.error?.code || '';
+          const code = r.error?.code || r.error?.errorInfo?.code || '';
           if (
             code === 'messaging/registration-token-not-registered' ||
             code === 'messaging/invalid-registration-token'
           ) {
+            // Provider confirmed token is permanently invalid or unregistered
             invalidTokens.push(tokens[idx]);
+          } else if (code === 'messaging/mismatched-credential') {
+            console.warn('[FCM] Mismatched credential detected; token preserved, verify sender ID & service account project.');
+          } else if (code === 'messaging/invalid-argument' || code === 'messaging/invalid-payload') {
+            console.warn('[FCM] Invalid payload structure; token preserved, verify message format.');
           }
         }
       });

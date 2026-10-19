@@ -8,6 +8,7 @@ import { writeAuditLog } from '../utils/audit.js';
 import { recalculateQueue } from '../services/queueService.js';
 import { getGlobalSettings } from '../services/settingsService.js';
 import { notify } from '../services/notify.js';
+import { isTimeOverlapping } from '../utils/time.js';
 
 /**
  * Authorization helper: Verifies user is staff or owner of the appointment
@@ -516,6 +517,45 @@ export const rescheduleAppointment = async (req, res, next) => {
           const isOwnSlot = (apt.slotIds && apt.slotIds.includes(newSlotSnap.id)) || apt.slotId === newSlotSnap.id;
           if (!isOwnSlot) {
             throw new AppError('SLOT_UNAVAILABLE', `Selected slot '${newSlotSnap.id}' is no longer available.`, 409);
+          }
+        }
+      }
+
+      // Read other active appointments for patient on newDate to enforce same-day rules
+      let otherApptsSnap = { docs: [] };
+      if (patientHealthId) {
+        const otherApptsQuery = db.collection('appointments')
+          .where('patientHealthId', '==', patientHealthId)
+          .where('date', '==', newDate);
+        otherApptsSnap = await transaction.get(otherApptsQuery);
+      } else if (targetPatientUid) {
+        const otherApptsQuery = db.collection('appointments')
+          .where('patientUid', '==', targetPatientUid)
+          .where('date', '==', newDate);
+        otherApptsSnap = await transaction.get(otherApptsQuery);
+      }
+
+      const newStartAt = targetNewSlotIds[0] ? (newSlotSnaps[0]?.data()?.startAt || newTime) : newTime;
+      const targetDuration = targetNewSlotIds.length * 10;
+
+      for (const otherDoc of otherApptsSnap.docs) {
+        if (otherDoc.id === id) continue; // Exclude current appointment
+        const oData = otherDoc.data();
+        const oStatus = (oData.status || '').toLowerCase();
+        if (ACTIVE_APPT_STATUSES.includes(oStatus)) {
+          const oTime = oData.bookedStartAt || oData.timeSlot;
+          if (oTime && newStartAt && isTimeOverlapping(oTime, newStartAt, oData.durationMin || 15, targetDuration)) {
+            throw new AppError('OVERLAPPING_APPOINTMENT', `You already have an overlapping appointment on this date at ${oTime}.`, 409);
+          }
+          const oDept = oData.departmentId || 'dept-gen';
+          const targetDept = apt.departmentId || 'dept-gen';
+          if (oDept === targetDept) {
+            throw new AppError('SAME_DEPARTMENT_SAME_DAY', 'You already have an active appointment in this department on this date.', 409);
+          }
+          const hasSameDayAck = req.body.sameDayAck === true || req.body.sameDayAck === 'true' || req.body.confirmSameDay === true || req.body.sameDayWarningAck === true;
+          if (!hasSameDayAck) {
+            const conflictDeptName = oData.departmentName || oDept.replace('dept-', '').toUpperCase();
+            throw new AppError('SAME_DAY_DIFFERENT_DEPT_WARNING', `You already have an appointment today at ${oTime || 'scheduled time'} with ${conflictDeptName}. Continue?`, 409);
           }
         }
       }

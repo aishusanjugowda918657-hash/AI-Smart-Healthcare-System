@@ -58,43 +58,15 @@ export const LiveQueueTracker = () => {
     }
   }, []);
 
-  // Initial load, real-time Firestore listener & polling fallback every 5 seconds
+  // Initial load & polling fallback every 5 seconds
   useEffect(() => {
     fetchQueueStatus();
     const interval = setInterval(() => fetchQueueStatus(false), 5000);
 
-    let unsubscribe = null;
-    let unsubAppts = null;
-    if (db) {
-      try {
-        const todayStr = new Date().toISOString().split('T')[0];
-        const q = query(collection(db, 'tokens'), where('date', '==', todayStr));
-        unsubscribe = onSnapshot(q, () => {
-          fetchQueueStatus(false);
-        });
-
-        // Also listen on appointments for immediate notification when recalculateQueue updates live
-        if (currentUser?.uid) {
-          const apptsQ = query(
-            collection(db, 'appointments'),
-            where('patientId', '==', currentUser.uid),
-            where('date', '==', todayStr)
-          );
-          unsubAppts = onSnapshot(apptsQ, () => {
-            fetchQueueStatus(false);
-          });
-        }
-      } catch (err) {
-        console.warn('LiveQueueTracker onSnapshot error (using polling fallback):', err.message);
-      }
-    }
-
     return () => {
       clearInterval(interval);
-      if (unsubscribe) unsubscribe();
-      if (unsubAppts) unsubAppts();
     };
-  }, [fetchQueueStatus, currentUser?.uid]);
+  }, [fetchQueueStatus]);
 
   // Turn Alert Banner Logic
   const renderTurnAlert = () => {

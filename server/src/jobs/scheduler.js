@@ -177,20 +177,57 @@ export async function noShowSweepJob({ nowOverride, gracePeriodMinutes = 5 } = {
       .where('status', 'in', ['booked', 'confirmed', 'on_the_way', 'nearby', 'not_arrived', 'called', 'late', 'rejoined'])
       .get();
 
-    if (aptSnap.empty) {
-      return { success: true, processedCount: 0, noShowCount: 0 };
-    }
-
     let noShowCount = 0;
     const batch = db.batch();
     const affectedDocDates = new Set();
+
+    // Sweep past appointments (date < todayStr) converting unresolved ones to no_show
+    try {
+      const pastSnap = await db
+        .collection('appointments')
+        .where('date', '<', todayStr)
+        .limit(50)
+        .get();
+
+      for (const doc of pastSnap.docs) {
+        const apt = doc.data();
+        const statusLower = (apt.status || '').toLowerCase();
+        if (['booked', 'confirmed', 'on_the_way', 'nearby', 'not_arrived', 'called', 'late', 'rejoined'].includes(statusLower)) {
+          batch.update(doc.ref, {
+            status: 'no_show',
+            noShowAt: now,
+            updatedAt: now
+          });
+          noShowCount++;
+
+          const isSerious = apt.importance === 'serious' || apt.isSeriousFollowup || (apt.clinicalLevel || 1) >= 2;
+          if (isSerious) {
+            const alertId = `alert_noshow_${doc.id}_${nowMs}`;
+            const alertRef = db.collection('alerts').doc(alertId);
+            batch.set(alertRef, {
+              id: alertId,
+              appointmentId: doc.id,
+              patientHealthId: apt.patientHealthId || apt.healthId,
+              patientName: apt.patientName || 'Patient',
+              reasons: [`Patient missed an important follow-up (${doc.id})`],
+              kind: 'no_show_followup',
+              status: 'open',
+              createdAt: now
+            });
+          }
+        }
+      }
+    } catch (pastErr) {
+      console.warn('Past appointments no-show sweep warning:', pastErr.message);
+    }
 
     for (const doc of aptSnap.docs) {
       const apt = doc.data();
       if (!apt.timeSlot) continue;
 
+      const [year, month, day] = (apt.date || todayStr).split('-').map(Number);
       const [hours, mins] = apt.timeSlot.split(':').map(Number);
-      const apptTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, mins);
+      const apptTime = new Date(year, month - 1, day, hours, mins);
       const apptTimeMs = apptTime.getTime();
       const checkinDeadlineMs = apptTimeMs - checkinDeadlineMinBefore * 60 * 1000;
       const graceEndMs = apt.graceEndAt ? new Date(apt.graceEndAt).getTime() : (apptTimeMs + graceMin * 60 * 1000);
@@ -274,7 +311,7 @@ export async function noShowSweepJob({ nowOverride, gracePeriodMinutes = 5 } = {
           if (slotSnap.exists) {
             const sData = slotSnap.data();
             const [sH, sM] = (sData.startAt || apt.timeSlot || '10:00').split(':').map(Number);
-            const slotStartMs = new Date(now.getFullYear(), now.getMonth(), now.getDate(), sH, sM).getTime();
+            const slotStartMs = new Date(year, month - 1, day, sH, sM).getTime();
 
             if (slotStartMs > nowMs) {
               batch.update(slotRef, {
@@ -777,19 +814,97 @@ export async function escalateTriageAlertsJob({ nowOverride } = {}) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// MAIN SCHEDULER ENTRY POINT
+// JOB LOCK & MAIN SCHEDULER ENTRY POINT
 // ─────────────────────────────────────────────────────────────
+
+/**
+ * Distributed Mutex using Firestore collection 'job_locks'
+ * Ensures zero concurrent duplicate runs across server instances and processes.
+ * When a job is already locked by another worker, gracefully returns { success: true, skipped: true, reason: ... }
+ */
+export async function withJobLock(jobName, fn, { ttlMs = 60000, workerId } = {}) {
+  let db;
+  try {
+    db = assertDbConnected();
+  } catch (err) {
+    // If DB is disconnected, fallback to running directly to prevent silent stalls
+    return await fn();
+  }
+
+  const id = workerId || `worker_${process.pid}_${Math.random().toString(36).slice(2, 8)}`;
+  const lockRef = db.collection('job_locks').doc(jobName);
+  const nowMs = Date.now();
+  let acquired = false;
+
+  try {
+    acquired = await db.runTransaction(async (t) => {
+      const snap = await t.get(lockRef);
+      if (snap.exists) {
+        const data = snap.data();
+        const expiresAt = Number(data.expiresAt) || 0;
+        // If locked and not expired, lock cannot be acquired
+        if (data.locked && expiresAt > nowMs) {
+          return false;
+        }
+      }
+      t.set(lockRef, {
+        jobName,
+        locked: true,
+        lockedAt: new Date(nowMs).toISOString(),
+        expiresAt: nowMs + ttlMs,
+        lockedBy: id
+      }, { merge: true });
+      return true;
+    });
+  } catch (err) {
+    console.warn(`[JobLock] Lock acquisition transaction error on ${jobName}:`, err.message);
+    acquired = false;
+  }
+
+  if (!acquired) {
+    return {
+      success: true,
+      skipped: true,
+      reason: `Job ${jobName} is currently locked by another active process`
+    };
+  }
+
+  try {
+    const result = await fn();
+    try {
+      await lockRef.set({
+        locked: false,
+        releasedAt: new Date().toISOString(),
+        expiresAt: 0,
+        lastResult: typeof result === 'object' && result !== null ? { success: result.success } : null
+      }, { merge: true });
+    } catch (relErr) {
+      console.warn(`[JobLock] Failed to release lock for ${jobName}:`, relErr.message);
+    }
+    return result;
+  } catch (err) {
+    try {
+      await lockRef.set({
+        locked: false,
+        releasedAt: new Date().toISOString(),
+        expiresAt: 0,
+        lastError: err.message
+      }, { merge: true });
+    } catch {}
+    throw err;
+  }
+}
 
 /**
  * runSchedulerJobs() — called by /api/internal/tick and by node-cron.
  * Runs ALL due jobs once. Never throws.
  */
-export async function runSchedulerJobs() {
+export async function runSchedulerJobs({ includeDaily = false } = {}) {
   const results = {};
 
   const run = async (name, fn) => {
     try {
-      results[name] = await fn();
+      results[name] = await withJobLock(name, fn);
     } catch (err) {
       console.error(`❌ Scheduler: ${name} threw unexpectedly:`, err.message);
       results[name] = { success: false, error: err.message };
@@ -808,6 +923,11 @@ export async function runSchedulerJobs() {
   await run('leaveReschedule', leaveRescheduleJob);
   await run('expireWaitlistOffers', expireWaitlistOffersJob);
 
+  if (includeDaily) {
+    await run('cleanup', cleanupJob);
+    await run('generateSlots', () => generateSlotsJob(14));
+  }
+
   results.timestamp = clock.now().toISOString();
   return results;
 }
@@ -824,7 +944,7 @@ export async function startScheduler() {
     // Only log non-trivial results to reduce noise
     const safeRun = (name, fn) => async () => {
       try {
-        const r = await fn();
+        const r = await withJobLock(name, fn);
         const hasWork = Object.values(r || {}).some(
           (v) => typeof v === 'number' && v > 0
         );

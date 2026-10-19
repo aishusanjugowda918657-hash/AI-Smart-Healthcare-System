@@ -385,11 +385,25 @@ export const getPatientUpcomingFollowUps = async (req, res, next) => {
     const { uid: patientUid, patientHealthId } = req.user;
     const db = assertDbConnected();
 
+    let targetHealthId = patientHealthId;
+    if (!targetHealthId && patientUid) {
+      const pDoc = await db.collection('patients').doc(patientUid).get();
+      if (pDoc.exists) {
+        targetHealthId = pDoc.data().patientHealthId || pDoc.data().healthId;
+      }
+      if (!targetHealthId) {
+        const snap = await db.collection('patients').where('ownerUid', '==', patientUid).limit(1).get();
+        if (!snap.empty) {
+          targetHealthId = snap.docs[0].data().patientHealthId || snap.docs[0].data().healthId;
+        }
+      }
+    }
+
     let snapshot;
-    if (patientHealthId) {
+    if (targetHealthId) {
       snapshot = await db
         .collection('followups')
-        .where('healthId', '==', patientHealthId)
+        .where('healthId', '==', targetHealthId)
         .get();
     } else {
       snapshot = await db

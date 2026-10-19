@@ -34,6 +34,18 @@ export const syncPrescriptionReminders = async (req, res, next) => {
     }
 
     const rxData = rxSnapshot.docs[0].data();
+
+    // Verify access rights to sync reminders for this prescription
+    if (req.user?.role !== 'admin') {
+      const access = await verifyRecordAccess({ db, uid: patientUid, role: req.user?.role, patientHealthId: rxData.patientHealthId });
+      if (!access.authorized && rxData.patientUid !== patientUid) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden: You are not authorized to sync reminders for this prescription.'
+        });
+      }
+    }
+
     const createdReminders = [];
     const todayStr = new Date().toISOString().split('T')[0];
 
@@ -86,7 +98,7 @@ export const getTodayReminders = async (req, res, next) => {
     const userUid = req.user?.uid;
     const role = req.user?.role;
     const requestedHealthId = req.query.healthId;
-    const healthId = requestedHealthId || req.user?.patientHealthId;
+    let healthId = requestedHealthId || req.user?.patientHealthId;
     const dateFilter = req.query.date || new Date().toISOString().split('T')[0];
     const db = assertDbConnected();
 
@@ -97,6 +109,19 @@ export const getTodayReminders = async (req, res, next) => {
           success: false,
           message: 'Forbidden: Access to requested patient reminders is unauthorized.'
         });
+      }
+    }
+
+    if (!healthId && role === 'patient' && userUid) {
+      const pDoc = await db.collection('patients').doc(userUid).get();
+      if (pDoc.exists) {
+        healthId = pDoc.data().patientHealthId || pDoc.data().healthId;
+      }
+      if (!healthId) {
+        const snap = await db.collection('patients').where('ownerUid', '==', userUid).limit(1).get();
+        if (!snap.empty) {
+          healthId = snap.docs[0].data().patientHealthId || snap.docs[0].data().healthId;
+        }
       }
     }
 

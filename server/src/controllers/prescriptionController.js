@@ -313,12 +313,18 @@ export const createDigitalPrescription = async (req, res, next) => {
     }
     let doctorName = docDoc.exists ? (docDoc.data().fullName || docDoc.data().name || '') : '';
     if (!doctorName && doctorUid) {
-      const uDoc = await db.collection('users').doc(doctorUid).get().catch(() => null);
-      if (uDoc && uDoc.exists) {
-        doctorName = uDoc.data().fullName || uDoc.data().displayName || '';
+      const dDoc = await db.collection('doctors').doc(doctorUid).get().catch(() => null);
+      if (dDoc && dDoc.exists) {
+        doctorName = dDoc.data().fullName || dDoc.data().name || '';
+      }
+      if (!doctorName) {
+        const uDoc = await db.collection('users').doc(doctorUid).get().catch(() => null);
+        if (uDoc && uDoc.exists) {
+          doctorName = uDoc.data().fullName || uDoc.data().displayName || '';
+        }
       }
     }
-    if (!doctorName) doctorName = 'Dr. Rahul Kumar';
+    if (!doctorName) doctorName = req.user?.displayName || req.user?.fullName || doctorUid || 'Physician';
 
     // Atomic prescription counter
     const counterRef = db.collection('counters').doc('prescriptionId');
@@ -836,25 +842,14 @@ export const getPrescriptionById = async (req, res, next) => {
 
     const rxData = rxDoc.data();
 
-    // Check patient access rights
-    if (role === 'patient') {
-      if (rxData.patientUid && rxData.patientUid !== uid) {
-        const pDoc = await db.collection('patients').doc(uid).get();
-        const myHid = pDoc.exists ? pDoc.data().patientHealthId : null;
-        if (myHid !== rxData.patientHealthId) {
-          const famSnap = await db
-            .collection('patients')
-            .where('primaryAccountUid', '==', uid)
-            .where('patientHealthId', '==', rxData.patientHealthId)
-            .limit(1)
-            .get();
-          if (famSnap.empty) {
-            return res.status(403).json({
-              success: false,
-              message: 'Forbidden: Access to this prescription is unauthorized.'
-            });
-          }
-        }
+    // Verify access rights for both patient and treating doctor
+    if (role !== 'admin') {
+      const access = await verifyRecordAccess({ db, uid, role, patientHealthId: rxData.patientHealthId });
+      if (!access.authorized && rxData.patientUid !== uid) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden: Access to this prescription is unauthorized.'
+        });
       }
     }
 
@@ -872,8 +867,17 @@ export const getMyPrescriptions = async (req, res, next) => {
     const { uid } = req.user;
     const db = assertDbConnected();
 
+    let healthId = null;
     const patientDoc = await db.collection('patients').doc(uid).get();
-    const healthId = patientDoc.exists ? patientDoc.data().patientHealthId : null;
+    if (patientDoc.exists) {
+      healthId = patientDoc.data().patientHealthId || patientDoc.data().healthId;
+    }
+    if (!healthId) {
+      const snap = await db.collection('patients').where('ownerUid', '==', uid).limit(1).get();
+      if (!snap.empty) {
+        healthId = snap.docs[0].data().patientHealthId || snap.docs[0].data().healthId;
+      }
+    }
 
     let prescriptions = [];
     if (healthId) {

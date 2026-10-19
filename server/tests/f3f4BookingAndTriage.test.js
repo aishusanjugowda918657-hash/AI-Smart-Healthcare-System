@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import app from '../src/app.js';
 import { evaluateTriageRules, mergeAIWithRulesTriage } from '../src/domain/triage.js';
@@ -10,6 +10,29 @@ describe('Phase 4 - Feature F3 & F4 Booking, Triage & Check-in QR Verification',
   const doctorId = 'DOC-001';
   const patientHealthId = 'PHI-2026-000000-A';
   const date = '2026-10-25';
+  let db;
+
+  beforeAll(async () => {
+    db = assertDbConnected();
+    await db.collection('doctors').doc(doctorId).set({
+      id: doctorId,
+      doctorId,
+      doctorUid: 'doc-uid-001',
+      fullName: 'Dr. Sarah Smith',
+      specialization: 'Cardiology'
+    }, { merge: true });
+    await db.collection('users').doc('doc-uid-001').set({
+      role: 'doctor',
+      doctorId
+    }, { merge: true });
+  });
+
+  afterAll(async () => {
+    try {
+      await db.collection('doctors').doc(doctorId).delete();
+      await db.collection('users').doc('doc-uid-001').delete();
+    } catch (err) {}
+  });
 
   beforeEach(() => {
     vi.spyOn(geminiService, 'generateText').mockImplementation(async (prompt) => {

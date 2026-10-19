@@ -11,6 +11,7 @@ import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
 
+import { isTimeOverlapping } from '../utils/time.js';
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
@@ -449,7 +450,6 @@ export const createAppointment = async (req, res, next) => {
       patientHealthId,
       patientName = 'Patient',
       doctorId,
-      doctorName = 'Doctor',
       departmentId = 'dept-gen',
       date,
       visitType = 'new',
@@ -459,7 +459,10 @@ export const createAppointment = async (req, res, next) => {
       clinicalLevel = 1,
       urgencySuggested = 'routine',
       disclaimerAck,
-      travelMinutes
+      travelMinutes,
+      sameDayAck,
+      confirmSameDay,
+      sameDayWarningAck
     } = req.body;
 
     const targetSlotIds = Array.isArray(slotIds) && slotIds.length > 0
@@ -495,6 +498,30 @@ export const createAppointment = async (req, res, next) => {
       }
     }
 
+    if (!doctorDoc) {
+      throw new AppError('INVALID_DOCTOR', `Doctor '${doctorId}' does not exist or cannot be resolved.`, 400);
+    }
+
+    const resolvedDoctorName = doctorDoc.fullName || doctorDoc.name;
+    if (!resolvedDoctorName) {
+      throw new AppError('INVALID_DOCTOR', 'Doctor record does not contain a valid name.', 400);
+    }
+
+    const resolvedSpecialty = doctorDoc.specialization || doctorDoc.specialty || '';
+    let resolvedDeptId = departmentId || doctorDoc.departmentId || 'dept-gen';
+    let resolvedDepartmentName = doctorDoc.departmentName || doctorDoc.department || '';
+
+    // Fetch department details
+    let deptLetter = 'G';
+    if (resolvedDeptId) {
+      const deptSnap = await db.collection('departments').doc(resolvedDeptId).get();
+      if (deptSnap.exists) {
+        const dData = deptSnap.data();
+        if (dData.name) resolvedDepartmentName = dData.name;
+        if (dData.letter) deptLetter = dData.letter;
+      }
+    }
+
     // Resolve associated doctor account UID using trusted stored identifiers (Fix CODE-Q1)
     let resolvedDoctorUid = doctorDoc?.doctorUid || doctorDoc?.uid || null;
     if (!resolvedDoctorUid) {
@@ -517,19 +544,7 @@ export const createAppointment = async (req, res, next) => {
       throw new AppError('INVALID_DOCTOR', 'Doctor record does not have a valid associated identity mapping.', 400);
     }
 
-    // Fetch department letter for token prefix
-    let deptLetter = 'G';
-    if (departmentId) {
-      const deptSnap = await db.collection('departments').doc(departmentId).get();
-      if (deptSnap.exists && deptSnap.data().letter) {
-        deptLetter = deptSnap.data().letter;
-      }
-    }
-
     // SERVER-SIDE TRIAGE ENFORCEMENT (Fix SEC-Q2)
-    // Never trust patient-supplied clinicalLevel or urgencySuggested.
-    // Derive clinical level and urgency strictly from trusted server-side triage evaluation.
-    // Only permit staff-assigned clinical levels through an authorized healthcare staff role.
     const isStaff = ['doctor', 'admin', 'reception', 'nurse'].includes(req.user?.role);
     const ruleResult = evaluateTriageRules(reasonText);
 
@@ -544,13 +559,22 @@ export const createAppointment = async (req, res, next) => {
       }
     }
 
-    // SAME-DAY DUPLICATE POLICY CHECK (Fix BIZ-Q1)
-    // Policy: Same patient, doctor, date, and active appointment statuses.
-    // Active statuses: booked, confirmed, checked_in, in_consultation
-    const ACTIVE_APPT_STATUSES = ['booked', 'confirmed', 'checked_in', 'in_consultation'];
-    const safeLockId = `dup_${String(patientHealthId).replace(/[\/\s]/g, '_')}_${String(resolvedDoctorId).replace(/[\/\s]/g, '_')}_${String(date).replace(/[\/\s]/g, '_')}`;
+    // Read initial target slot to inspect proposed start time
+    const initialSlotSnap = await db.collection('slots').doc(targetSlotIds[0]).get();
+    const targetSlotStartAt = initialSlotSnap.exists ? initialSlotSnap.data().startAt : null;
+    const targetDuration = targetSlotIds.length * 10;
 
-    // Fast-path check on existing appointments
+    // SAME-DAY BOOKING POLICY ENFORCEMENT
+    // Active statuses: booked, confirmed, checked_in, waiting, called, in_room, on_the_way, nearby, in_consultation
+    const ACTIVE_APPT_STATUSES = ['booked', 'confirmed', 'checked_in', 'waiting', 'called', 'in_room', 'on_the_way', 'nearby', 'in_consultation'];
+    const cleanHealthId = String(patientHealthId).replace(/[\/\s]/g, '_');
+    const cleanDoctorId = String(resolvedDoctorId).replace(/[\/\s]/g, '_');
+    const cleanDept = String(resolvedDeptId).replace(/[\/\s]/g, '_');
+    const safeLockId = `dup_${cleanHealthId}_${cleanDoctorId}_${String(date).replace(/[\/\s]/g, '_')}`;
+    const safeDeptLockId = `lock_dept_${cleanHealthId}_${cleanDept}_${String(date).replace(/[\/\s]/g, '_')}`;
+    const safeDateLockId = `lock_date_${cleanHealthId}_${String(date).replace(/[\/\s]/g, '_')}`;
+
+    // Fast-path check on existing appointments for patient on date
     const existingActiveApptsQuery = await db.collection('appointments')
       .where('patientHealthId', '==', patientHealthId)
       .where('date', '==', date)
@@ -559,28 +583,91 @@ export const createAppointment = async (req, res, next) => {
     for (const doc of existingActiveApptsQuery.docs) {
       const data = doc.data();
       const statusLower = (data.status || '').toLowerCase();
-      const matchesDoc = data.doctorId === doctorId ||
-        data.doctorId === resolvedDoctorId ||
-        (data.doctorUid && data.doctorUid === resolvedDoctorUid);
+      if (ACTIVE_APPT_STATUSES.includes(statusLower)) {
+        const existingTime = data.bookedStartAt || data.timeSlot;
 
-      if (matchesDoc && ACTIVE_APPT_STATUSES.includes(statusLower)) {
-        throw new AppError('DUPLICATE_BOOKING', 'You already have an active appointment with this doctor on the selected date.', 409);
+        // Same doctor check first
+        const matchesDoc = data.doctorId === doctorId ||
+          data.doctorId === resolvedDoctorId ||
+          (data.doctorUid && data.doctorUid === resolvedDoctorUid);
+        if (matchesDoc) {
+          throw new AppError('DUPLICATE_BOOKING', 'You already have an active appointment with this doctor on the selected date.', 409);
+        }
+
+        // Rule (a): Block overlapping appointments for same patient on same date
+        if (existingTime && targetSlotStartAt && isTimeOverlapping(existingTime, targetSlotStartAt, data.durationMin || 15, targetDuration)) {
+          throw new AppError('OVERLAPPING_APPOINTMENT', `You already have an overlapping appointment on this date at ${existingTime}.`, 409);
+        }
+
+        // Rule (b): Block second active appointment in same department on same date
+        const existingDept = data.departmentId || 'dept-gen';
+        if (existingDept === resolvedDeptId) {
+          throw new AppError('SAME_DEPARTMENT_SAME_DAY', 'You already have an active appointment in this department on this date.', 409);
+        }
+
+        // Rule (c): Allow different departments on same day with warning confirmation tick
+        const hasSameDayAck = sameDayAck === true || sameDayAck === 'true' || confirmSameDay === true || sameDayWarningAck === true;
+        if (!hasSameDayAck) {
+          const conflictDeptName = data.departmentName || existingDept.replace('dept-', '').toUpperCase();
+          throw new AppError('SAME_DAY_DIFFERENT_DEPT_WARNING', `You already have an appointment today at ${existingTime || 'scheduled time'} with ${conflictDeptName}. Continue?`, 409);
+        }
       }
     }
 
     const apptResult = await db.runTransaction(async (tx) => {
-      // 0. Concurrency-safe duplicate reservation lock check (Fix BIZ-Q1)
+      // 0. Concurrency-safe duplicate reservation lock checks inside transaction
       const dupLockRef = db.collection('appointment_locks').doc(safeLockId);
-      const dupLockSnap = await tx.get(dupLockRef);
+      const deptLockRef = db.collection('appointment_locks').doc(safeDeptLockId);
+      const dateLockRef = db.collection('appointment_locks').doc(safeDateLockId);
+
+      const [dupLockSnap, deptLockSnap, dateLockSnap] = await Promise.all([
+        tx.get(dupLockRef),
+        tx.get(deptLockRef),
+        tx.get(dateLockRef)
+      ]);
+
       if (dupLockSnap.exists) {
         const lockData = dupLockSnap.data();
         if (lockData.appointmentId) {
           const lockedApptRef = db.collection('appointments').doc(lockData.appointmentId);
           const lockedApptSnap = await tx.get(lockedApptRef);
-          if (lockedApptSnap.exists) {
-            const lockedStatus = (lockedApptSnap.data().status || '').toLowerCase();
-            if (ACTIVE_APPT_STATUSES.includes(lockedStatus)) {
-              throw new AppError('DUPLICATE_BOOKING', 'You already have an active appointment with this doctor on the selected date.', 409);
+          if (lockedApptSnap.exists &&
+              lockedApptSnap.data().date === date &&
+              ACTIVE_APPT_STATUSES.includes((lockedApptSnap.data().status || '').toLowerCase())) {
+            throw new AppError('DUPLICATE_BOOKING', 'You already have an active appointment with this doctor on the selected date.', 409);
+          }
+        }
+      }
+
+      if (deptLockSnap.exists) {
+        const lockData = deptLockSnap.data();
+        if (lockData.appointmentId) {
+          const lockedApptRef = db.collection('appointments').doc(lockData.appointmentId);
+          const lockedApptSnap = await tx.get(lockedApptRef);
+          if (lockedApptSnap.exists &&
+              lockedApptSnap.data().date === date &&
+              ACTIVE_APPT_STATUSES.includes((lockedApptSnap.data().status || '').toLowerCase())) {
+            throw new AppError('SAME_DEPARTMENT_SAME_DAY', 'You already have an active appointment in this department on this date.', 409);
+          }
+        }
+      }
+
+      if (dateLockSnap.exists) {
+        const lockData = dateLockSnap.data();
+        if (lockData.appointmentId) {
+          const lockedApptRef = db.collection('appointments').doc(lockData.appointmentId);
+          const lockedApptSnap = await tx.get(lockedApptRef);
+          if (lockedApptSnap.exists &&
+              lockedApptSnap.data().date === date &&
+              ACTIVE_APPT_STATUSES.includes((lockedApptSnap.data().status || '').toLowerCase())) {
+            const lockedTime = lockedApptSnap.data().bookedStartAt || lockedApptSnap.data().timeSlot;
+            if (lockedTime && targetSlotStartAt && isTimeOverlapping(lockedTime, targetSlotStartAt, lockedApptSnap.data().durationMin || 15, targetDuration)) {
+              throw new AppError('OVERLAPPING_APPOINTMENT', `You already have an overlapping appointment on this date at ${lockedTime}.`, 409);
+            }
+            const hasSameDayAck = sameDayAck === true || sameDayAck === 'true' || confirmSameDay === true || sameDayWarningAck === true;
+            if (!hasSameDayAck) {
+              const conflictDeptName = lockedApptSnap.data().departmentName || 'General Medicine';
+              throw new AppError('SAME_DAY_DIFFERENT_DEPT_WARNING', `You already have an appointment today at ${lockedTime || 'scheduled time'} with ${conflictDeptName}. Continue?`, 409);
             }
           }
         }
@@ -656,9 +743,7 @@ export const createAppointment = async (req, res, next) => {
       const appointmentId = apptRef.id;
 
       // QR Code Payload: APPT:<appointmentId>:<rawCheckinCode>
-      // This format is parsed by checkinController.scanCheckIn (/api/checkin/scan)
       const qrPayload = `APPT:${appointmentId}:${rawCheckinCode}`;
-      // Also store the raw code so staff can manually verify
       const checkInCodeHash = crypto.createHash('sha256').update(rawCheckinCode).digest('hex');
 
       const bookedStartAt = slotSnaps[0].data().startAt || '09:00';
@@ -675,10 +760,12 @@ export const createAppointment = async (req, res, next) => {
         ownerUid: userId,
         bookedByUid: userId,
         viewerUids: Array.from(new Set([userId, resolvedDoctorUid].filter(Boolean))),
-        doctorId,
+        doctorId: resolvedDoctorId,
         doctorUid: resolvedDoctorUid,
-        doctorName,
-        departmentId,
+        doctorName: resolvedDoctorName,
+        specialty: resolvedSpecialty,
+        departmentName: resolvedDepartmentName,
+        departmentId: resolvedDeptId,
         departmentLetter: deptLetter,
         slotIds: targetSlotIds,
         date,
@@ -695,8 +782,8 @@ export const createAppointment = async (req, res, next) => {
         statusHistory: [{ status: 'booked', at: new Date().toISOString(), by: userId }],
         tokenNumber,
         tokenLabel,
-        checkinCodeHash,        // sha256 hash — kept for backward compat
-        checkInCodeHash,         // capital-I version read by checkinController.scanCheckIn
+        checkinCodeHash,
+        checkInCodeHash,
         checkinCodeExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
         qrPayload,
         live: {
@@ -728,6 +815,25 @@ export const createAppointment = async (req, res, next) => {
         doctorId: resolvedDoctorId,
         doctorUid: resolvedDoctorUid,
         date,
+        createdAt: new Date()
+      });
+
+      // Record deterministic department and date locks
+      tx.set(deptLockRef, {
+        appointmentId,
+        patientHealthId,
+        departmentId: resolvedDeptId,
+        date,
+        createdAt: new Date()
+      });
+
+      tx.set(dateLockRef, {
+        appointmentId,
+        patientHealthId,
+        date,
+        startAt: bookedStartAt,
+        durationMin,
+        departmentId: resolvedDeptId,
         createdAt: new Date()
       });
 

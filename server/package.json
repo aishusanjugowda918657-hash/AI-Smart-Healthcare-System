@@ -17,6 +17,7 @@
     "doctor": "node scripts/doctor.js",
     "backfill:name-lower": "node scripts/backfillNameLower.js",
     "bootstrap": "node scripts/bootstrap.js",
+    "appointments:backfill-names": "node scripts/backfillDoctorNames.js",
     "reset:everything": "node scripts/resetEverything.js",
     "reset:patient": "node scripts/resetPatientData.js",
     "test": "vitest run",

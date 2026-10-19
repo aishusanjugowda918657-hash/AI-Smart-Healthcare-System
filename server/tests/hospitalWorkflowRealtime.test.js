@@ -1,9 +1,36 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import app from '../src/app.js';
 import { processNoShowsAndReminders } from '../src/services/schedulerService.js';
+import { assertDbConnected } from '../src/config/firebase.js';
 
 describe('Hospital Real-Time Workflow & No-Show Engine Integration Tests', () => {
+  let db;
+
+  beforeAll(async () => {
+    db = assertDbConnected();
+    await db.collection('doctors').doc('doc-uid-001').set({
+      id: 'doc-uid-001',
+      doctorId: 'DOC-001',
+      doctorUid: 'doc-uid-001',
+      fullName: 'Dr. Realtime Workflow',
+      departmentId: 'dept-card',
+      role: 'doctor'
+    }, { merge: true });
+    await db.collection('users').doc('doc-uid-001').set({
+      role: 'doctor',
+      doctorId: 'DOC-001'
+    }, { merge: true });
+  });
+
+  afterAll(async () => {
+    if (db) {
+      try {
+        await db.collection('doctors').doc('doc-uid-001').delete();
+        await db.collection('users').doc('doc-uid-001').delete();
+      } catch (err) {}
+    }
+  });
 
   it('New patient registration starts with clean state (no fake history/prescriptions)', async () => {
     const res = await request(app)

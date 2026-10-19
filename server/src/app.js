@@ -53,7 +53,7 @@ const corsOptions = {
     return callback(null, false);
   },
   credentials: true,
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-request-id', 'x-demo-uid', 'x-demo-role', 'x-tick-secret'],
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   optionsSuccessStatus: 200
 };
@@ -92,13 +92,22 @@ app.get('/api/health/env', (req, res) => {
 // Protected Internal Tick Endpoint (PRD Section 7, 3.5)
 // Runs all scheduler jobs once — safe for external pingers (cron-job.org)
 app.post('/api/internal/tick', async (req, res) => {
+  const isRealEnvironment = process.env.NODE_ENV === 'production' || !process.env.FIRESTORE_EMULATOR_HOST;
+  const configuredSecret = env.INTERNAL_TICK_SECRET ? String(env.INTERNAL_TICK_SECRET).trim() : '';
+  const isDefaultSecret = !configuredSecret || ['dev_tick_secret', 'change_me_in_production', 'default'].includes(configuredSecret);
+
+  if (isRealEnvironment && isDefaultSecret) {
+    return res.status(403).json(formatErrorResponse('FORBIDDEN', 'Internal tick endpoint disabled: production tick secret is not configured.'));
+  }
+
   const secretHeader = req.headers['x-tick-secret'];
-  if (secretHeader !== env.INTERNAL_TICK_SECRET) {
+  if (!secretHeader || !configuredSecret || secretHeader !== configuredSecret) {
     return res.status(403).json(formatErrorResponse('FORBIDDEN', 'Invalid internal tick secret'));
   }
 
   try {
-    const results = await runSchedulerJobs();
+    const includeDaily = req.query.includeDaily === 'true' || req.query.scope === 'all';
+    const results = await runSchedulerJobs({ includeDaily });
     return res.status(200).json(formatSuccessResponse({
       ticked: true,
       at: new Date().toISOString(),

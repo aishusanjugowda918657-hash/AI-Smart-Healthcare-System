@@ -555,7 +555,7 @@ export const getMyQueueStatus = async (req, res, next) => {
     // 2. Fetch doctor info & doctor schedule
     const docDoc = await db.collection('doctors').doc(doctorUid).get();
     const docData = docDoc.exists ? docDoc.data() : {};
-    const doctorName = docData.fullName || 'Dr. Sarah Smith';
+    const doctorName = docData.fullName || docData.name || activeAppt.doctorName || 'Doctor';
 
     const deptDoc = await db.collection('departments').doc(activeAppt.departmentId || 'dept-card').get();
     const departmentName = deptDoc.exists ? deptDoc.data().name : 'Cardiology';

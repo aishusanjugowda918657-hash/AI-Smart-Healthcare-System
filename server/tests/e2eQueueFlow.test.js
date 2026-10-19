@@ -1,9 +1,35 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import app from '../src/app.js';
 import { db } from '../src/config/firebase.js';
 
 describe('Phase 6 & 7 - Full E2E Patient Live Queue Workflow Verification', () => {
+  beforeAll(async () => {
+    if (db) {
+      await db.collection('doctors').doc('doc-uid-001').set({
+        id: 'doc-uid-001',
+        doctorId: 'doc-uid-001',
+        doctorUid: 'doc-uid-001',
+        fullName: 'Dr. E2E Doctor',
+        departmentId: 'dept-card',
+        role: 'doctor'
+      }, { merge: true });
+      await db.collection('users').doc('doc-uid-001').set({
+        role: 'doctor',
+        doctorId: 'doc-uid-001'
+      }, { merge: true });
+    }
+  });
+
+  afterAll(async () => {
+    if (db) {
+      try {
+        await db.collection('doctors').doc('doc-uid-001').delete();
+        await db.collection('users').doc('doc-uid-001').delete();
+      } catch (err) {}
+    }
+  });
+
   it('Executes complete booking -> queue status -> doctor call -> completion sequence', async () => {
     const patientUid = `patient-e2e-${Date.now()}`;
     const doctorUid = 'doc-uid-001';

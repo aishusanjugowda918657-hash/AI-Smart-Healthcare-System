@@ -12,53 +12,80 @@
 importScripts('https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-compat.js');
 
-// Firebase config is injected at runtime via a self.__FIREBASE_CONFIG global
-// set by the main app's service worker registration.
-// Fallback to a demo config if not set.
-const firebaseConfig = self.__FIREBASE_CONFIG || {
-  apiKey: 'demo-key',
-  authDomain: 'demo.firebaseapp.com',
-  projectId: 'demo-project',
-  storageBucket: 'demo.appspot.com',
-  messagingSenderId: '000000000000',
-  appId: '1:000000000000:web:demo'
-};
-
-firebase.initializeApp(firebaseConfig);
-const messaging = firebase.messaging();
-
-// ─────────────────────────────────────────────────────────────
-// Background message handler
-// ─────────────────────────────────────────────────────────────
-messaging.onBackgroundMessage((payload) => {
-  const { title, body, icon, badge } = payload.notification || {};
-  const data = payload.data || {};
-
-  const notificationOptions = {
-    body: body || '',
-    icon: icon || '/icon-192.png',
-    badge: badge || '/badge-72.png',
-    data,
-    tag: data.groupKey || data.type || 'healthcare-notification',
-    renotify: false,
-  };
-
-  // Add action buttons for reminder notifications
-  if (data.reminderId) {
-    notificationOptions.actions = [
-      { action: 'taken', title: '✅ Taken' },
-      { action: 'snooze', title: '⏰ Snooze' },
-      { action: 'skip', title: '⏭ Skip' },
-    ];
-  } else if (data.type === 'appointment' || data.type === 'appointment_24h' || data.type === 'appointment_2h') {
-    notificationOptions.actions = [
-      { action: 'confirm', title: '✓ Confirm' },
-      { action: 'cancel', title: '✗ Cancel' },
-    ];
+// Firebase config is resolved from self.__FIREBASE_CONFIG or URL query parameters (?config=...)
+let firebaseConfig = self.__FIREBASE_CONFIG;
+if (!firebaseConfig && typeof self !== 'undefined' && self.location && self.location.search) {
+  try {
+    const params = new URLSearchParams(self.location.search);
+    const raw = params.get('config');
+    if (raw) {
+      firebaseConfig = JSON.parse(decodeURIComponent(raw));
+    }
+  } catch {
+    // Leave undefined to fail closed
   }
+}
 
-  return self.registration.showNotification(title || 'Healthcare Notification', notificationOptions);
-});
+// Production safety: Validate that a genuine project configuration was supplied.
+// Unsafe demo-project fallbacks are strictly removed to prevent cross-project or unintended mutations.
+const isValidConfig = Boolean(
+  firebaseConfig &&
+  typeof firebaseConfig === 'object' &&
+  firebaseConfig.projectId &&
+  typeof firebaseConfig.projectId === 'string' &&
+  firebaseConfig.apiKey &&
+  typeof firebaseConfig.apiKey === 'string' &&
+  firebaseConfig.messagingSenderId
+);
+
+let messaging = null;
+
+if (!isValidConfig) {
+  console.warn(
+    '[FCM SW] Service Worker push messaging disabled: Valid Firebase project configuration is required. ' +
+    'Missing or incomplete project credentials. In-app notifications remain active.'
+  );
+} else {
+  try {
+    firebase.initializeApp(firebaseConfig);
+    messaging = firebase.messaging();
+
+    // ─────────────────────────────────────────────────────────────
+    // Background message handler
+    // ─────────────────────────────────────────────────────────────
+    messaging.onBackgroundMessage((payload) => {
+      const { title, body, icon, badge } = payload.notification || {};
+      const data = payload.data || {};
+
+      const notificationOptions = {
+        body: body || '',
+        icon: icon || '/icon-192.png',
+        badge: badge || '/badge-72.png',
+        data,
+        tag: data.groupKey || data.type || 'healthcare-notification',
+        renotify: false,
+      };
+
+      // Add action buttons for reminder notifications
+      if (data.reminderId) {
+        notificationOptions.actions = [
+          { action: 'taken', title: '✅ Taken' },
+          { action: 'snooze', title: '⏰ Snooze' },
+          { action: 'skip', title: '⏭ Skip' },
+        ];
+      } else if (data.type === 'appointment' || data.type === 'appointment_24h' || data.type === 'appointment_2h') {
+        notificationOptions.actions = [
+          { action: 'confirm', title: '✓ Confirm' },
+          { action: 'cancel', title: '✗ Cancel' },
+        ];
+      }
+
+      return self.registration.showNotification(title || 'Healthcare Notification', notificationOptions);
+    });
+  } catch (err) {
+    console.error('[FCM SW] Failed to initialize Firebase Messaging in service worker:', err.message);
+  }
+}
 
 // ─────────────────────────────────────────────────────────────
 // Notification click handler

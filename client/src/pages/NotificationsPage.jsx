@@ -81,6 +81,25 @@ function NotificationsPage() {
         </div>
       )}
 
+      {permissionState === 'granted' && (
+        <div className="mb-6 p-4 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <CheckCheck className="w-5 h-5 text-emerald-600 shrink-0" />
+            <div>
+              <p className="text-sm font-semibold text-emerald-900">Push notifications enabled</p>
+              <p className="text-xs text-emerald-700">This device is registered to receive alerts and reminders.</p>
+            </div>
+          </div>
+          <button
+            id="sync-device-btn"
+            onClick={requestPermission}
+            className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 bg-emerald-100 hover:bg-emerald-200 px-3 py-1.5 rounded-xl transition-colors"
+          >
+            Re-sync Device
+          </button>
+        </div>
+      )}
+
       {permissionState === 'denied' && (
         <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-start gap-3">
           <BellOff className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />

@@ -17,8 +17,8 @@ export const PatientDashboard = () => {
   const [nextAppointment, setNextAppointment] = useState(null);
   const [loadingStats, setLoadingStats] = useState(true);
 
-  // New states for Appointment Persistence and Cancelling
-  const [activeTab, setActiveTab] = useState('active'); // 'active' or 'history'
+  // States for Appointment Persistence, Tabs and Actions
+  const [activeTab, setActiveTab] = useState('upcoming'); // 'upcoming', 'past', 'cancelled'
   const [selectedAppt, setSelectedAppt] = useState(null);
   const [qrCodeUrl, setQrCodeUrl] = useState('');
   const [cancelAppt, setCancelAppt] = useState(null);
@@ -112,11 +112,19 @@ export const PatientDashboard = () => {
     : 'Not specified';
 
   const activeStatuses = ['booked', 'confirmed', 'checked_in', 'waiting', 'called', 'in_room'];
-  const historyStatuses = ['completed', 'cancelled', 'no_show'];
 
-  const displayedAppointments = appointments.filter(a => 
-    activeTab === 'active' ? activeStatuses.includes(a.status) : historyStatuses.includes(a.status)
-  );
+  const displayedAppointments = appointments.filter(a => {
+    if (activeTab === 'upcoming') {
+      return a.tab === 'upcoming' || (!a.tab && activeStatuses.includes(a.status));
+    }
+    if (activeTab === 'past') {
+      return a.tab === 'past' || (!a.tab && (a.status === 'completed' || a.status === 'no_show'));
+    }
+    if (activeTab === 'cancelled') {
+      return a.tab === 'cancelled' || (!a.tab && a.status === 'cancelled');
+    }
+    return false;
+  });
 
   return (
     <div className="space-y-6">
@@ -219,8 +227,8 @@ export const PatientDashboard = () => {
         />
         <StatCard
           title="Queue Status"
-          value={nextAppointment?.tokenNumber ? `Token #${nextAppointment.tokenNumber}` : 'No Active Token'}
-          subtitle={nextAppointment ? `Doctor: ${nextAppointment.doctorName}` : 'Check-in to generate token'}
+          value={nextAppointment?.tokenLabel ? `Token ${nextAppointment.tokenLabel}` : nextAppointment?.tokenNumber ? `Token ${nextAppointment.tokenNumber}` : 'No Active Token'}
+          subtitle={nextAppointment ? `Doctor: ${nextAppointment.doctorName || 'Doctor Visit'}` : 'Check-in to generate token'}
           icon={Clock}
           color="amber"
         />
@@ -294,18 +302,24 @@ export const PatientDashboard = () => {
           </Link>
         </div>
 
-        <div className="flex border-b border-slate-100 px-6">
+        <div className="flex border-b border-slate-100 px-6 gap-2">
           <button
-            onClick={() => setActiveTab('active')}
-            className={`px-4 py-3 text-sm font-bold border-b-2 transition-colors ${activeTab === 'active' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            onClick={() => setActiveTab('upcoming')}
+            className={`px-4 py-3 text-sm font-bold border-b-2 transition-colors ${activeTab === 'upcoming' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
           >
-            Active / Upcoming
+            Upcoming
           </button>
           <button
-            onClick={() => setActiveTab('history')}
-            className={`px-4 py-3 text-sm font-bold border-b-2 transition-colors ${activeTab === 'history' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            onClick={() => setActiveTab('past')}
+            className={`px-4 py-3 text-sm font-bold border-b-2 transition-colors ${activeTab === 'past' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
           >
-            Past / History
+            Past
+          </button>
+          <button
+            onClick={() => setActiveTab('cancelled')}
+            className={`px-4 py-3 text-sm font-bold border-b-2 transition-colors ${activeTab === 'cancelled' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+          >
+            Cancelled
           </button>
         </div>
 
@@ -316,7 +330,7 @@ export const PatientDashboard = () => {
             <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 text-sm">
               <Calendar className="w-10 h-10 mb-3 text-slate-200" />
               <p>No {activeTab} appointments found.</p>
-              {activeTab === 'active' && (
+              {activeTab === 'upcoming' && (
                 <Link to="/book-appointment" className="text-indigo-600 font-bold mt-2 hover:underline">
                   Book an appointment →
                 </Link>
@@ -325,7 +339,12 @@ export const PatientDashboard = () => {
           ) : (
             <div className="divide-y divide-slate-100">
               {displayedAppointments.map((appt) => {
-                const statusIcon = ['booked', 'confirmed'].includes(appt.status)
+                const isMissed = appt.displayStatus === 'Missed' || (appt.tab === 'past' && ['booked', 'confirmed', 'not_arrived'].includes(appt.status));
+                const statusLabel = isMissed ? 'Missed' : appt.displayStatus || appt.status.replace('_', ' ');
+
+                const statusIcon = isMissed
+                  ? <AlertCircle className="w-4 h-4 text-amber-500" />
+                  : ['booked', 'confirmed'].includes(appt.status)
                   ? <Hourglass className="w-4 h-4 text-amber-500" />
                   : appt.status === 'completed'
                   ? <CheckCircle2 className="w-4 h-4 text-emerald-500" />
@@ -333,12 +352,18 @@ export const PatientDashboard = () => {
                   ? <XCircle className="w-4 h-4 text-rose-500" />
                   : <Stethoscope className="w-4 h-4 text-indigo-500" />;
 
-                const statusColor = ['booked', 'confirmed'].includes(appt.status) ? 'bg-amber-50 text-amber-700 border-amber-100'
-                  : appt.status === 'completed' ? 'bg-emerald-50 text-emerald-700 border-emerald-100'
-                  : ['cancelled', 'no_show'].includes(appt.status) ? 'bg-rose-50 text-rose-700 border-rose-100'
+                const statusColor = isMissed
+                  ? 'bg-amber-50 text-amber-800 border-amber-200'
+                  : ['booked', 'confirmed'].includes(appt.status)
+                  ? 'bg-amber-50 text-amber-700 border-amber-100'
+                  : appt.status === 'completed'
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-100'
+                  : ['cancelled', 'no_show'].includes(appt.status)
+                  ? 'bg-rose-50 text-rose-700 border-rose-100'
                   : 'bg-indigo-50 text-indigo-700 border-indigo-100'; // checked_in, waiting, called, in_room
 
-                const canCancel = ['booked', 'confirmed'].includes(appt.status);
+                const canCancel = ['booked', 'confirmed'].includes(appt.status) && appt.tab === 'upcoming' && !appt.isPast;
+                const canRebook = appt.tab === 'past' || isMissed;
 
                 return (
                   <div key={appt.id || appt.appointmentId} className="flex flex-col sm:flex-row sm:items-center justify-between px-6 py-5 hover:bg-slate-50 transition-colors gap-4">
@@ -347,7 +372,7 @@ export const PatientDashboard = () => {
                         <Stethoscope className="w-5 h-5 text-indigo-600" />
                       </div>
                       <div className="min-w-0 space-y-1">
-                        <p className="font-bold text-slate-900 text-base truncate">{appt.doctorName || 'Dr. SmartCare'}</p>
+                        <p className="font-bold text-slate-900 text-base truncate">{appt.doctorName || 'Doctor'}</p>
                         <p className="text-xs font-medium text-slate-500">
                           {appt.departmentId ? appt.departmentId.replace('dept-', '').replace(/-/g,' ').toUpperCase() : 'General Medicine'}
                         </p>
@@ -368,11 +393,11 @@ export const PatientDashboard = () => {
                     <div className="flex flex-row sm:flex-col items-center sm:items-end justify-between sm:justify-center gap-3 shrink-0 mt-2 sm:mt-0 pt-3 sm:pt-0 border-t sm:border-0 border-slate-100">
                       <div className="flex items-center gap-2">
                         <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold border capitalize ${statusColor}`}>
-                          {statusIcon} {appt.status.replace('_', ' ')}
+                          {statusIcon} {statusLabel}
                         </span>
-                        {appt.tokenNumber && (
+                        {(appt.tokenLabel || appt.tokenNumber) && (
                           <span className="text-xs font-mono font-bold text-teal-700 bg-teal-50 border border-teal-200 px-3 py-1 rounded-full">
-                            Token #{appt.tokenNumber}
+                            Token {appt.tokenLabel || `#${appt.tokenNumber}`}
                           </span>
                         )}
                       </div>
@@ -383,6 +408,14 @@ export const PatientDashboard = () => {
                         >
                           View Details
                         </button>
+                        {canRebook && (
+                          <Link
+                            to="/book-appointment"
+                            className="px-4 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-lg transition-colors border border-indigo-200"
+                          >
+                            Rebook
+                          </Link>
+                        )}
                         {canCancel && (
                           <button
                             onClick={() => setCancelAppt(appt)}
@@ -462,7 +495,7 @@ export const PatientDashboard = () => {
                 </div>
                 <div>
                   <p className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Token Number</p>
-                  <p className="font-mono font-bold text-teal-600 mt-1">{selectedAppt.tokenLabel || `Token #${selectedAppt.tokenNumber}` || 'Pending'}</p>
+                  <p className="font-mono font-bold text-teal-600 mt-1">{selectedAppt.tokenLabel || (selectedAppt.tokenNumber ? `Token ${selectedAppt.tokenNumber}` : 'Pending')}</p>
                 </div>
                 <div>
                   <p className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Visit Type</p>

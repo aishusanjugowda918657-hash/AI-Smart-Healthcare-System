@@ -19,15 +19,19 @@ const EMERGENCY_KEYWORDS = [
   'நெஞ்சு வலி', 'மூச்சுத்திணறல்', 'கடுமையான ரத்தப்போக்கு', 'மயக்கம்'
 ];
 
-/**
- * Emergency Pre-check before any AI call
- */
 export function checkEmergencyKeywords(message = '') {
   const lower = message.toLowerCase();
   for (const kw of EMERGENCY_KEYWORDS) {
     if (lower.includes(kw.toLowerCase())) {
       return true;
     }
+  }
+  // Flexible clinical matching for chest/heart emergency variations
+  if ((lower.includes('chest') || lower.includes('heart')) && (lower.includes('pain') || lower.includes('attack'))) {
+    return true;
+  }
+  if ((lower.includes('सीने') || lower.includes('छाती') || lower.includes('दिल')) && lower.includes('दर्द')) {
+    return true;
   }
   return false;
 }

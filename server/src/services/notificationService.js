@@ -15,10 +15,12 @@ export const createNotification = async ({ userId, title, message, type = 'syste
 
   const notifData = {
     id,
-    userId,
-    patientHealthId,   // Fix P4: store Health ID when notification is patient-specific
+    uid: userId,       // Compatible with notificationController & notify.js
+    userId,            // Backward compatibility
+    patientHealthId,   // Store Health ID when notification is patient-specific
     title,
-    message,
+    body: message,     // Standard body field
+    message,           // Backward compatibility
     type,
     read: false,
     createdAt: new Date(),

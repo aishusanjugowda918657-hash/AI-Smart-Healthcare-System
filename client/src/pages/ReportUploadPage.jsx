@@ -1,9 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Upload, FileText, Download, CheckCircle, AlertCircle, Loader2, Image, File } from 'lucide-react';
 import API from '../services/api';
+import { useAuth } from '../context/AuthContext';
 
 export const ReportUploadPage = () => {
-  const [patientHealthId, setPatientHealthId] = useState('HID-2026-00001');
+  const { patientProfile } = useAuth();
+  const [patientHealthId, setPatientHealthId] = useState(
+    patientProfile?.healthId || patientProfile?.patientHealthId || 'HID-2026-00001'
+  );
   const [reports, setReports] = useState([]);
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('Lab Report');
@@ -12,6 +16,12 @@ export const ReportUploadPage = () => {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState(null);
   const [storageAvailable, setStorageAvailable] = useState(true);
+
+  useEffect(() => {
+    if (patientProfile?.healthId || patientProfile?.patientHealthId) {
+      setPatientHealthId(patientProfile.healthId || patientProfile.patientHealthId);
+    }
+  }, [patientProfile]);
 
   useEffect(() => {
     checkStorageStatus();
@@ -92,6 +102,26 @@ export const ReportUploadPage = () => {
 
       const { reportId, storagePath, uploadUrl } = urlRes.data?.data || {};
 
+      // Step 1.5: Upload actual binary file to signed uploadUrl
+      if (uploadUrl) {
+        let targetUrl = uploadUrl;
+        if (targetUrl.startsWith('/api')) {
+          const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+          const rootUrl = apiBase.endsWith('/api') ? apiBase.slice(0, -4) : apiBase;
+          targetUrl = `${rootUrl}${targetUrl}`;
+        }
+        const binaryRes = await fetch(targetUrl, {
+          method: 'PUT',
+          body: selectedFile,
+          headers: {
+            'Content-Type': selectedFile.type || 'application/octet-stream'
+          }
+        });
+        if (!binaryRes.ok) {
+          throw new Error(`File binary upload to storage failed (${binaryRes.status} ${binaryRes.statusText})`);
+        }
+      }
+
       // Step 2: Save metadata to backend
       const saveRes = await API.post('/reports', {
         id: reportId,
@@ -115,7 +145,7 @@ export const ReportUploadPage = () => {
           text: 'Medical report uploads are temporarily unavailable. Other healthcare features remain accessible.'
         });
       } else {
-        setMessage({ type: 'error', text: err.response?.data?.message || 'Error uploading report.' });
+        setMessage({ type: 'error', text: err.response?.data?.message || err.message || 'Error uploading report.' });
       }
     } finally {
       setUploading(false);
@@ -125,12 +155,17 @@ export const ReportUploadPage = () => {
   const handleDownload = async (reportId) => {
     try {
       const res = await API.get(`/reports/${reportId}/download-url`);
-      const downloadUrl = res.data?.data?.downloadUrl;
+      let downloadUrl = res.data?.data?.downloadUrl;
       if (downloadUrl) {
+        if (downloadUrl.startsWith('/api')) {
+          const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+          const rootUrl = apiBase.endsWith('/api') ? apiBase.slice(0, -4) : apiBase;
+          downloadUrl = `${rootUrl}${downloadUrl}`;
+        }
         window.open(downloadUrl, '_blank');
       }
     } catch (err) {
-      alert('Error fetching download link: ' + err.message);
+      alert('Error fetching download link: ' + (err.response?.data?.message || err.message));
     }
   };
 

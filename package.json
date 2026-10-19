@@ -12,6 +12,7 @@
     "server:dev": "npm run dev --prefix server",
     "server:emulator": "npm run dev:emulator:server --prefix server",
     "bootstrap": "npm run bootstrap --prefix server",
+    "appointments:backfill-names": "npm run appointments:backfill-names --prefix server --",
     "reset:everything": "npm run reset:everything --prefix server",
     "seed": "npm run seed --prefix server",
     "test": "npm run test --prefix server",

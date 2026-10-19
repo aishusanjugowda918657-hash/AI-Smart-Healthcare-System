@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import app from '../src/app.js';
 import { getDb } from '../src/config/firebase.js';
@@ -10,6 +10,19 @@ describe('Phase 16 - Family Members & Dependents API Verification', () => {
   beforeAll(async () => {
     const db = getDb();
     if (db) {
+      await db.collection('doctors').doc('doc-uid-001').set({
+        id: 'doc-uid-001',
+        doctorId: 'DOC-001',
+        doctorUid: 'doc-uid-001',
+        fullName: 'Dr. Family Pediatrician',
+        departmentId: 'dept-ped',
+        role: 'doctor'
+      }, { merge: true });
+      await db.collection('users').doc('doc-uid-001').set({
+        role: 'doctor',
+        doctorId: 'DOC-001'
+      }, { merge: true });
+
       const snap = await db.collection('patients')
         .where('primaryAccountUid', '==', 'demo-patient-001')
         .get();
@@ -19,6 +32,16 @@ describe('Phase 16 - Family Members & Dependents API Verification', () => {
           await doc.ref.delete();
         }
       }
+    }
+  });
+
+  afterAll(async () => {
+    const db = getDb();
+    if (db) {
+      try {
+        await db.collection('doctors').doc('doc-uid-001').delete();
+        await db.collection('users').doc('doc-uid-001').delete();
+      } catch (err) {}
     }
   });
 

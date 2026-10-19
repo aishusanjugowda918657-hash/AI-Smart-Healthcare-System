@@ -95,14 +95,14 @@ export const ActiveAppointmentsBanner = () => {
                   <span className="px-2.5 py-0.5 bg-teal-500/20 text-teal-300 font-bold uppercase tracking-widest text-[10px] rounded border border-teal-500/30">
                     {appt.status.replace('_', ' ')}
                   </span>
-                  {appt.tokenNumber && (
+                  {(appt.tokenLabel || appt.tokenNumber) && (
                     <span className="px-2.5 py-0.5 bg-indigo-500/20 text-indigo-300 font-bold uppercase tracking-widest text-[10px] rounded border border-indigo-500/30 font-mono">
-                      Token #{appt.tokenNumber}
+                      Token {appt.tokenLabel || `#${appt.tokenNumber}`}
                     </span>
                   )}
                 </div>
                 <div>
-                  <h4 className="text-base font-bold text-slate-100">{appt.doctorName || 'Dr. SmartCare'}</h4>
+                  <h4 className="text-base font-bold text-slate-100">{appt.doctorName || 'Doctor'}</h4>
                   <p className="text-xs text-slate-400">{formatDepartmentName(appt.departmentId)}</p>
                 </div>
                 <div className="flex flex-wrap gap-4 text-xs text-slate-300 font-medium">

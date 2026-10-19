@@ -1,59 +1,29 @@
+import path from 'path';
 import { assertDbConnected, isEmulator, admin } from '../config/firebase.js';
 import { verifyRecordAccess } from './medicalController.js';
+import {
+  validateFile,
+  buildStoragePath,
+  checkStorageAvailability,
+  generateSignedUploadUrl,
+  generateSignedDownloadUrl,
+  deleteStoredFile,
+  saveEmulatorFile,
+  getEmulatorFile,
+  deleteEmulatorFile,
+  ALLOWED_MIME_TYPES,
+  MAX_FILE_SIZE_BYTES
+} from '../services/storageAdapter.js';
 
-const ALLOWED_TYPES = [
-  'application/pdf',
-  'image/jpeg',
-  'image/png',
-  'image/jpg',
-  'pdf',
-  'jpg',
-  'png',
-  'jpeg'
-];
-
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB in bytes
-
-// In-memory cache for storage bucket availability check
-let storageAvailableCache = null;
-let lastStorageCheck = 0;
+const ALLOWED_TYPES = ALLOWED_MIME_TYPES;
+const MAX_FILE_SIZE = MAX_FILE_SIZE_BYTES;
 
 /**
- * Check if Firebase Cloud Storage is available
+ * Check if storage provider is available
  */
 export async function checkStorageAvailable() {
-  if (process.env.FIREBASE_STORAGE_ENABLED === 'false') {
-    return false;
-  }
-  if (process.env.TEST_STORAGE_UNAVAILABLE === 'true') {
-    return false;
-  }
-  if (process.env.NODE_ENV === 'test' && !process.env.FIREBASE_STORAGE_DISABLED) {
-    return true;
-  }
-  if (isEmulator) {
-    return !!process.env.FIREBASE_STORAGE_EMULATOR_HOST;
-  }
-  const now = Date.now();
-  if (storageAvailableCache !== null && now - lastStorageCheck < 60000) {
-    return storageAvailableCache;
-  }
-  try {
-    if (!admin || !admin.storage) {
-      storageAvailableCache = false;
-      lastStorageCheck = now;
-      return false;
-    }
-    const bucket = admin.storage().bucket();
-    const [exists] = await bucket.exists();
-    storageAvailableCache = !!exists;
-    lastStorageCheck = now;
-    return storageAvailableCache;
-  } catch (err) {
-    storageAvailableCache = false;
-    lastStorageCheck = now;
-    return false;
-  }
+  const result = await checkStorageAvailability();
+  return result.available;
 }
 
 /**
@@ -62,13 +32,14 @@ export async function checkStorageAvailable() {
  */
 export const getReportStorageStatus = async (req, res, next) => {
   try {
-    const storageAvailable = await checkStorageAvailable();
+    const status = await checkStorageAvailability();
     res.status(200).json({
       success: true,
       data: {
-        storageAvailable,
-        message: storageAvailable
-          ? 'Firebase Cloud Storage is active.'
+        storageAvailable: status.available,
+        provider: status.provider,
+        message: status.available
+          ? `${status.provider.toUpperCase()} Cloud Storage is active.`
           : 'Medical report uploads are temporarily unavailable. Other healthcare features remain accessible.'
       }
     });
@@ -96,18 +67,28 @@ export const getReportUploadUrl = async (req, res, next) => {
       });
     }
 
-    const isAllowedType = ALLOWED_TYPES.some((t) => targetType.includes(t));
-    if (!isAllowedType) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid File Type: Only PDF, JPG, and PNG files are allowed.'
-      });
-    }
+    const validation = validateFile({
+      fileName,
+      fileType: targetType,
+      fileSize: targetSize
+    });
 
-    if (targetSize > MAX_FILE_SIZE) {
+    if (!validation.valid) {
+      if (validation.code === 'INVALID_FILE_TYPE') {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid File Type: Only PDF, JPG, and PNG files are allowed.'
+        });
+      }
+      if (validation.code === 'FILE_SIZE_EXCEEDED') {
+        return res.status(400).json({
+          success: false,
+          message: 'File Size Exceeded: Maximum allowed file size for diagnostic reports is 10 MB.'
+        });
+      }
       return res.status(400).json({
         success: false,
-        message: 'File Size Exceeded: Maximum allowed file size for diagnostic reports is 10 MB.'
+        message: validation.error || 'Validation Error: Invalid file attributes.'
       });
     }
 
@@ -138,9 +119,9 @@ export const getReportUploadUrl = async (req, res, next) => {
       });
     }
 
-    // Check whether Firebase Storage is available on the project
-    const storageReady = await checkStorageAvailable();
-    if (!storageReady) {
+    // Check whether Storage is available on the project
+    const storageStatus = await checkStorageAvailability();
+    if (!storageStatus.available) {
       return res.status(503).json({
         success: false,
         code: 'STORAGE_NOT_AVAILABLE',
@@ -149,35 +130,22 @@ export const getReportUploadUrl = async (req, res, next) => {
     }
 
     const reportId = `rep-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
-    const sanitizedFileName = String(fileName).replace(/[^a-zA-Z0-9._-]/g, '_');
-    const storagePath = `reports/${targetHealthId}/${reportId}_${sanitizedFileName}`;
+    const storagePath = buildStoragePath({ healthId: targetHealthId, reportId, fileName });
 
-    let uploadUrl;
-    if (isEmulator || process.env.NODE_ENV === 'test') {
-      uploadUrl = `https://storage.googleapis.com/demo-healthcare-bucket/${storagePath}?uploadToken=mock-upload-${Date.now()}`;
-    } else {
-      try {
-        const bucket = admin.storage().bucket();
-        const file = bucket.file(storagePath);
-        const [signedUrl] = await file.getSignedUrl({
-          version: 'v4',
-          action: 'write',
-          expires: Date.now() + 15 * 60 * 1000, // 15 minutes
-          contentType: targetType
-        });
-        uploadUrl = signedUrl;
-      } catch (signErr) {
-        uploadUrl = `https://storage.googleapis.com/${admin.storage().bucket().name}/${storagePath}?token=direct-${Date.now()}`;
-      }
-    }
+    const signedUpload = await generateSignedUploadUrl({
+      storagePath,
+      contentType: targetType,
+      expiresInSec: 900
+    });
 
     res.status(200).json({
       success: true,
       data: {
         reportId,
-        uploadUrl,
-        storagePath,
-        expiresInSec: 900
+        uploadUrl: signedUpload.uploadUrl,
+        storagePath: signedUpload.storagePath,
+        expiresInSec: signedUpload.expiresInSec,
+        provider: signedUpload.provider
       }
     });
   } catch (error) {
@@ -328,21 +296,14 @@ export const getReportDownloadUrl = async (req, res, next) => {
     }
 
     let downloadUrl = reportData.fileUrl;
-    if (reportData.storagePath && !isEmulator && process.env.NODE_ENV !== 'test') {
-      try {
-        const bucket = admin.storage().bucket();
-        const file = bucket.file(reportData.storagePath);
-        const [signedUrl] = await file.getSignedUrl({
-          version: 'v4',
-          action: 'read',
-          expires: Date.now() + 15 * 60 * 1000 // 15 minutes
-        });
-        downloadUrl = signedUrl;
-      } catch (e) {
-        downloadUrl = reportData.fileUrl || `https://storage.googleapis.com/${reportData.storagePath}`;
-      }
+    if (reportData.storagePath) {
+      const signedDownload = await generateSignedDownloadUrl({
+        storagePath: reportData.storagePath,
+        expiresInSec: 900
+      });
+      downloadUrl = signedDownload.downloadUrl;
     } else if (!downloadUrl) {
-      downloadUrl = `https://storage.googleapis.com/demo-healthcare-bucket/${reportData.storagePath}?token=download-${Date.now()}`;
+      downloadUrl = `https://storage.googleapis.com/demo-healthcare-bucket/reports/${targetHealthId}/${id}?token=download-${Date.now()}`;
     }
 
     res.status(200).json({
@@ -352,6 +313,73 @@ export const getReportDownloadUrl = async (req, res, next) => {
         downloadUrl,
         expiresInSec: 900
       }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * DELETE /api/reports/:id
+ * Delete diagnostic report and remove from private storage
+ */
+export const deleteReport = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { uid, role } = req.user;
+
+    const db = assertDbConnected();
+    const reportDoc = await db.collection('reports').doc(id).get();
+
+    if (!reportDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Report not found' });
+    }
+
+    const reportData = reportDoc.data();
+    const targetHealthId = reportData.healthId || reportData.patientHealthId;
+
+    const access = await verifyRecordAccess({
+      db,
+      uid,
+      role,
+      patientHealthId: targetHealthId,
+      reqQuery: req.query
+    });
+
+    if (!access.authorized) {
+      return res.status(403).json({ success: false, message: access.message || access.reason });
+    }
+
+    // Clean up physical file from storage provider
+    if (reportData.storagePath) {
+      await deleteStoredFile({ storagePath: reportData.storagePath });
+    }
+
+    // Delete Firestore metadata record
+    await db.collection('reports').doc(id).delete();
+
+    // Log deletion event in audit logs
+    const requestId = req?.requestId || req?.headers?.['x-request-id'] || `req-${Date.now()}`;
+    await db.collection('auditLogs').add({
+      actorUid: uid,
+      actorRole: role,
+      userId: uid,
+      userRole: role,
+      action: 'DELETE_REPORT',
+      targetType: 'report',
+      targetId: id,
+      healthId: targetHealthId,
+      patientHealthId: targetHealthId,
+      details: { fileName: reportData.fileName, storagePath: reportData.storagePath },
+      at: new Date(),
+      timestamp: new Date(),
+      requestId
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Diagnostic report deleted successfully.',
+      data: { id }
     });
   } catch (error) {
     next(error);
@@ -404,3 +432,111 @@ export const getPatientReports = async (req, res, next) => {
     next(error);
   }
 };
+
+/**
+ * PUT /api/reports/emulator-storage/*
+ * Handle binary upload into local emulator storage
+ */
+export const uploadEmulatorStorageFile = async (req, res, next) => {
+  try {
+    const rawPath = req.params[0] || req.params.filePath;
+    if (!rawPath) {
+      return res.status(400).json({ success: false, message: 'Storage path is required.' });
+    }
+    const storagePath = rawPath.replace(/^\/+/, '');
+
+    const buffer = Buffer.isBuffer(req.body)
+      ? req.body
+      : typeof req.body === 'string'
+      ? Buffer.from(req.body)
+      : Buffer.alloc(0);
+
+    if (buffer.length === 0) {
+      return res.status(400).json({ success: false, message: 'Upload body is empty. Binary file data required.' });
+    }
+
+    if (buffer.length > MAX_FILE_SIZE_BYTES) {
+      return res.status(400).json({
+        success: false,
+        code: 'FILE_SIZE_EXCEEDED',
+        message: `File size exceeds 10 MB limit (${(buffer.length / (1024 * 1024)).toFixed(2)} MB uploaded).`
+      });
+    }
+
+    const result = saveEmulatorFile({ storagePath, buffer });
+    res.status(200).json({
+      success: true,
+      message: 'Synthetic diagnostic document stored in local emulator storage.',
+      data: {
+        storagePath: result.storagePath,
+        sizeBytes: result.sizeBytes
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * GET /api/reports/emulator-storage/*
+ * Serve binary file from local emulator storage
+ */
+export const downloadEmulatorStorageFile = async (req, res, next) => {
+  try {
+    const rawPath = req.params[0] || req.params.filePath;
+    if (!rawPath) {
+      return res.status(400).json({ success: false, message: 'Storage path is required.' });
+    }
+    const storagePath = rawPath.replace(/^\/+/, '');
+
+    const file = getEmulatorFile({ storagePath });
+    if (!file.exists) {
+      return res.status(404).json({
+        success: false,
+        code: 'OBJECT_NOT_FOUND',
+        message: 'Document object not found in storage.'
+      });
+    }
+
+    const ext = path.extname(storagePath).toLowerCase();
+    const mimeMap = {
+      '.pdf': 'application/pdf',
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.dcm': 'application/dicom',
+      '.txt': 'text/plain'
+    };
+    const contentType = mimeMap[ext] || 'application/octet-stream';
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Length', file.sizeBytes);
+    res.setHeader('Content-Disposition', `inline; filename="${path.basename(storagePath)}"`);
+    res.send(file.data);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * DELETE /api/reports/emulator-storage/*
+ * Delete binary file from local emulator storage
+ */
+export const deleteEmulatorStorageFile = async (req, res, next) => {
+  try {
+    const rawPath = req.params[0] || req.params.filePath;
+    if (!rawPath) {
+      return res.status(400).json({ success: false, message: 'Storage path is required.' });
+    }
+    const storagePath = rawPath.replace(/^\/+/, '');
+
+    const result = deleteEmulatorFile({ storagePath });
+    res.status(200).json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+

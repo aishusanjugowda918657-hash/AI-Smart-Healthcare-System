@@ -13,9 +13,19 @@ describe('Regression Tests: Slot Availability (Bug 1) & Queue Duplicate Preventi
   const trackedTestSlots = new Set();
   const trackedTestDoctors = new Set();
 
-  beforeEach(() => {
+  beforeEach(async () => {
     clock.reset();
     db = assertDbConnected();
+    await db.collection('doctors').doc('DOC-001').set({
+      id: 'DOC-001',
+      doctorId: 'DOC-001',
+      doctorUid: 'doc_uid_regression',
+      fullName: 'Dr. Regression Doctor'
+    }, { merge: true });
+    await db.collection('users').doc('doc_uid_regression').set({
+      role: 'doctor',
+      doctorId: 'DOC-001'
+    }, { merge: true });
   });
 
   afterEach(async () => {
@@ -249,6 +259,69 @@ describe('Regression Tests: Slot Availability (Bug 1) & Queue Duplicate Preventi
       // Verify that all IDs are distinct and none are duplicated
       const ids = notCheckedIn.map((a) => a.id);
       expect(new Set(ids).size).toBe(3);
+    });
+
+    it('correctly sorts appointments with 12-hour AM/PM and mixed hour formats', async () => {
+      const rand = Math.floor(Math.random() * 1000000);
+      const testDoctorId = `DOC-TIME-${rand}`;
+      const docUid = `doc_uid_time_${rand}`;
+      trackedTestDoctors.add(docUid);
+
+      await db.collection('doctors').doc(docUid).set({
+        id: docUid,
+        doctorId: testDoctorId,
+        fullName: 'Dr. Time Sort'
+      });
+
+      const appt1Id = `appt_time_1_${rand}`;
+      const appt2Id = `appt_time_2_${rand}`;
+      const appt3Id = `appt_time_3_${rand}`;
+      trackedTestAppts.add(appt1Id);
+      trackedTestAppts.add(appt2Id);
+      trackedTestAppts.add(appt3Id);
+
+      // Seed out of order: 2:00 PM (14:00), 9:00 AM (09:00), 11:30 AM (11:30)
+      await db.collection('appointments').doc(appt1Id).set({
+        id: appt1Id,
+        doctorId: testDoctorId,
+        doctorUid: docUid,
+        date: todayStr,
+        timeSlot: '2:00 PM',
+        status: 'booked',
+        tokenNumber: 'OPT-TIME-003'
+      });
+
+      await db.collection('appointments').doc(appt2Id).set({
+        id: appt2Id,
+        doctorId: testDoctorId,
+        doctorUid: docUid,
+        date: todayStr,
+        timeSlot: '9:00 AM',
+        status: 'booked',
+        tokenNumber: 'OPT-TIME-001'
+      });
+
+      await db.collection('appointments').doc(appt3Id).set({
+        id: appt3Id,
+        doctorId: testDoctorId,
+        doctorUid: docUid,
+        date: todayStr,
+        timeSlot: '11:30 AM',
+        status: 'booked',
+        tokenNumber: 'OPT-TIME-002'
+      });
+
+      const res = await request(app)
+        .get(`/api/queue/doctor/${testDoctorId}/today?date=${todayStr}`)
+        .set('x-demo-uid', docUid)
+        .set('x-demo-role', 'doctor');
+
+      expect(res.status).toBe(200);
+      const notCheckedIn = res.body.data.notCheckedIn;
+      expect(notCheckedIn.length).toBe(3);
+      expect(notCheckedIn[0].timeSlot).toBe('9:00 AM');
+      expect(notCheckedIn[1].timeSlot).toBe('11:30 AM');
+      expect(notCheckedIn[2].timeSlot).toBe('2:00 PM');
     });
 
     it('does not leak appointments belonging to other doctors into the queue', async () => {

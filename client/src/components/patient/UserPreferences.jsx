@@ -177,6 +177,9 @@ export const UserPreferences = () => {
 
         {/* Push Notification FCM Device Tokens */}
         <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+          <p className="text-xs text-slate-500 mb-1">
+            <span className="font-semibold text-slate-700">Note:</span> In-app notifications (the header bell) are active for all your appointments and queue updates. Optional browser push alerts can be enabled below if supported.
+          </p>
           <label className="font-bold text-slate-700 flex items-center space-x-2">
             <Smartphone className="w-4 h-4 text-indigo-600" />
             <span>Register FCM Device Token</span>

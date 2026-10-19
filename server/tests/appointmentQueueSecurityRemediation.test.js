@@ -55,7 +55,7 @@ describe('Phase 28 — Appointment and Queue Security Remediation Regression Sui
     trackedDocIds.patients.clear();
   });
 
-  const helperSeedDoctor = async (doctorId, docUid) => {
+  const helperSeedDoctor = async (doctorId, docUid, departmentId = 'dept-gen') => {
     trackedDocIds.doctors.add(doctorId);
     if (docUid && docUid !== doctorId) trackedDocIds.doctors.add(docUid);
     const docData = {
@@ -65,7 +65,8 @@ describe('Phase 28 — Appointment and Queue Security Remediation Regression Sui
       doctorUid: docUid,
       name: `Dr. ${doctorId}`,
       fullName: `Dr. ${doctorId}`,
-      departmentId: 'dept-gen',
+      departmentId,
+      departmentName: departmentId === 'dept-derm' ? 'Dermatology' : 'General Medicine',
       active: true
     };
     await db.collection('doctors').doc(doctorId).set(docData);
@@ -380,8 +381,8 @@ describe('Phase 28 — Appointment and Queue Security Remediation Regression Sui
       const patientUid = `patient_diff_doc_${rand}`;
       const healthId = `HID-DIFF-DOC-${rand}`;
 
-      await helperSeedDoctor(docAId, docAUid);
-      await helperSeedDoctor(docBId, docBUid);
+      await helperSeedDoctor(docAId, docAUid, 'dept-gen');
+      await helperSeedDoctor(docBId, docBUid, 'dept-derm');
       await helperSeedSlot(slotAId, docAId, testDate, '09:00');
       await helperSeedSlot(slotBId, docBId, testDate, '10:00');
 
@@ -410,9 +411,11 @@ describe('Phase 28 — Appointment and Queue Security Remediation Regression Sui
           slotIds: [slotBId],
           patientHealthId: healthId,
           doctorId: docBId,
+          departmentId: 'dept-derm',
           date: testDate,
           reasonText: 'Consult Doctor B',
-          disclaimerAck: { acknowledged: true }
+          disclaimerAck: { acknowledged: true },
+          sameDayAck: true
         });
       expect(resB.status).toBe(201);
       trackedDocIds.appointments.add(resB.body.data.id);

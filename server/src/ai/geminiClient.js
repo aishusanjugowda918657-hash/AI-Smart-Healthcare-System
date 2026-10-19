@@ -2,7 +2,7 @@
  * Gemini AI Client Wrapper (PRD Section 9.1)
  * Native function-calling loop with tool handlers, timeouts, and fallback error handling.
  */
-import { ai } from '../config/gemini.js';
+import { getAiClient } from '../config/gemini.js';
 import { isAiAvailable } from './guards.js';
 import { getTriageFallback } from './fallbacks.js';
 import { buildTriagePrompt } from './prompts/triage.js';
@@ -10,11 +10,19 @@ import { getModelName } from '../services/geminiService.js';
 
 const GEMINI_TIMEOUT_MS = 15000;
 
+function sanitizeError(msg) {
+  if (!msg || typeof msg !== 'string') return 'Unknown Gemini error';
+  return msg
+    .replace(/key=[a-zA-Z0-9_\-]+/gi, 'key=[REDACTED]')
+    .replace(/AIza[0-9A-Za-z-_]{35}/g, '[REDACTED_API_KEY]');
+}
+
 /**
  * Execute clinical triage analysis via Gemini API
  */
 export async function analyzeTriageWithGemini(reasonText = '', answers = {}) {
-  if (!isAiAvailable() || !ai) {
+  const aiClient = getAiClient();
+  if (!isAiAvailable() || !aiClient) {
     return getTriageFallback(reasonText);
   }
 
@@ -34,7 +42,7 @@ export async function analyzeTriageWithGemini(reasonText = '', answers = {}) {
       followUpQuestion: parsed.followUpQuestion || 'How long have you had these symptoms?'
     };
   } catch (error) {
-    console.warn('⚠️ Gemini API triage error, falling back to rule engine:', error.message);
+    console.warn('⚠️ Gemini API triage error, falling back to rule engine:', sanitizeError(error.message));
     return getTriageFallback(reasonText);
   }
 }
@@ -43,14 +51,15 @@ export async function analyzeTriageWithGemini(reasonText = '', answers = {}) {
  * Generate Text using Gemini AI
  */
 export async function generateText({ system = '', prompt = '' }) {
-  if (!isAiAvailable() || !ai) {
+  const aiClient = getAiClient();
+  if (!isAiAvailable() || !aiClient) {
     return null;
   }
 
   const model = getModelName();
   try {
     const contents = system ? `${system}\n\n${prompt}` : prompt;
-    const req = ai.models.generateContent({ model, contents });
+    const req = aiClient.models.generateContent({ model, contents });
 
     const timeout = new Promise((_, reject) =>
       setTimeout(() => reject(new Error('Gemini API timeout')), GEMINI_TIMEOUT_MS)
@@ -61,7 +70,7 @@ export async function generateText({ system = '', prompt = '' }) {
     if (typeof response?.text === 'string') return response.text;
     return response?.candidates?.[0]?.content?.parts?.[0]?.text || null;
   } catch (err) {
-    console.warn('⚠️ Gemini generateText error:', err.message);
+    console.warn('⚠️ Gemini generateText error:', sanitizeError(err.message));
     return null;
   }
 }
@@ -70,7 +79,8 @@ export async function generateText({ system = '', prompt = '' }) {
  * Generate JSON using Gemini AI with schema validation and retry
  */
 export async function generateJson({ system = '', prompt = '', schema = null, timeoutMs = 15000 }) {
-  if (!isAiAvailable() || !ai) {
+  const aiClient = getAiClient();
+  if (!isAiAvailable() || !aiClient) {
     return null;
   }
 
@@ -80,7 +90,7 @@ export async function generateJson({ system = '', prompt = '', schema = null, ti
     attempts++;
     try {
       const contents = system ? `${system}\n\nReturn strictly JSON.\n${prompt}` : `${prompt}\nReturn strictly JSON.`;
-      const req = ai.models.generateContent({
+      const req = aiClient.models.generateContent({
         model,
         contents,
         config: {
@@ -102,7 +112,7 @@ export async function generateJson({ system = '', prompt = '', schema = null, ti
       }
       return parsed;
     } catch (err) {
-      console.warn(`⚠️ Gemini generateJson attempt ${attempts} failed:`, err.message);
+      console.warn(`⚠️ Gemini generateJson attempt ${attempts} failed:`, sanitizeError(err.message));
       if (attempts >= 2) return null;
     }
   }
@@ -113,7 +123,8 @@ export async function generateJson({ system = '', prompt = '', schema = null, ti
  * Function-Calling Loop (runWithTools)
  */
 export async function runWithTools({ system = '', messages = [], tools = [], toolHandler = null, context = {}, maxRounds = 5 }) {
-  if (!isAiAvailable() || !ai) {
+  const aiClient = getAiClient();
+  if (!isAiAvailable() || !aiClient) {
     return null;
   }
 
@@ -134,7 +145,7 @@ export async function runWithTools({ system = '', messages = [], tools = [], too
     while (round < maxRounds) {
       round++;
 
-      const req = ai.models.generateContent({
+      const req = aiClient.models.generateContent({
         model,
         contents,
         config: {

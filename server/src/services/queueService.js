@@ -16,6 +16,43 @@ import {
  * writes `live` payload ONLY when changed (batched), and updates queue document.
  */
 /**
+ * Parses diverse time representations (HH:mm, 12h AM/PM, ISO string, Date object)
+ * to total integer minutes from midnight for safe, deterministic sorting.
+ */
+function parseTimeToMinutes(timeVal) {
+  if (!timeVal) return 999999;
+  if (typeof timeVal === 'number') return timeVal;
+  if (timeVal instanceof Date) return timeVal.getHours() * 60 + timeVal.getMinutes();
+  if (timeVal?.toMillis) {
+    const d = new Date(timeVal.toMillis());
+    return d.getHours() * 60 + d.getMinutes();
+  }
+  if (typeof timeVal === 'string') {
+    const trimmed = timeVal.trim();
+    if (trimmed.includes('T')) {
+      const d = new Date(trimmed);
+      if (!isNaN(d.getTime())) {
+        return d.getHours() * 60 + d.getMinutes();
+      }
+    }
+    const ampmMatch = trimmed.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
+    if (ampmMatch) {
+      let h = parseInt(ampmMatch[1], 10);
+      const m = parseInt(ampmMatch[2], 10);
+      const period = ampmMatch[3]?.toUpperCase();
+      if (period === 'PM' && h < 12) h += 12;
+      if (period === 'AM' && h === 12) h = 0;
+      return h * 60 + m;
+    }
+    const match = trimmed.match(/^(\d{1,2}):(\d{2})/);
+    if (match) {
+      return parseInt(match[1], 10) * 60 + parseInt(match[2], 10);
+    }
+  }
+  return 999999;
+}
+
+/**
  * Shared in-memory queue state and wait-time computation engine.
  * Reads appointments and queue metadata to compute order and waiting-time estimates.
  * Pure read-only computation: NEVER performs database writes or triggers background tasks.
@@ -236,9 +273,16 @@ async function computeQueueSnapshot(doctorId, date, { db, now }) {
   });
 
   // Calculate live payload for un-checked-in active appointments
-  const notCheckedIn = allAppts.filter(
-    (a) => ['booked', 'confirmed', 'on_the_way', 'nearby', 'not_arrived', 'late'].includes(a.status)
-  );
+  const notCheckedIn = allAppts
+    .filter((a) => ['booked', 'confirmed', 'on_the_way', 'nearby', 'not_arrived', 'late'].includes(a.status))
+    .sort((a, b) => {
+      const minA = parseTimeToMinutes(a.timeSlot || a.bookedStartAt);
+      const minB = parseTimeToMinutes(b.timeSlot || b.bookedStartAt);
+      if (minA !== minB) return minA - minB;
+      const tokA = String(a.tokenNumber ?? a.id ?? '');
+      const tokB = String(b.tokenNumber ?? b.id ?? '');
+      return tokA.localeCompare(tokB);
+    });
 
   const notCheckedInUpdates = [];
 
