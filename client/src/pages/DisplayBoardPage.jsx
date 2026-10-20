@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useParams } from 'react-router-dom';
 
 /**
  * Public Display Board Page (PRD F6 & Section 12)
@@ -6,7 +7,9 @@ import React, { useState, useEffect } from 'react';
  * Shows ONLY token labels (e.g., G-014), room numbers, and status.
  * CRITICAL PRIVACY RULE: NEVER displays patient names, ages, or diagnoses.
  */
-export default function DisplayBoardPage({ departmentId = 'dept-card' }) {
+export default function DisplayBoardPage({ departmentId: propDeptId }) {
+  const params = useParams();
+  const departmentId = params?.department || params?.departmentId || propDeptId || 'dept-card';
   const [boardData, setBoardData] = useState({ nowServing: [], nextTokens: [] });
   const [loading, setLoading] = useState(true);
 

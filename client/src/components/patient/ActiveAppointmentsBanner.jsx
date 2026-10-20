@@ -282,16 +282,16 @@ export const ActiveAppointmentsBanner = () => {
               <button
                 onClick={() => { setCancelAppt(null); setCancelReason(''); }}
                 disabled={isCancelling}
-                className="px-5 py-2.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-xl font-bold text-sm transition-colors disabled:opacity-50"
+                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-sm shadow-md transition-colors disabled:opacity-50"
               >
-                Keep Appointment
+                Keep it
               </button>
               <button
                 onClick={handleCancel}
                 disabled={isCancelling || !cancelReason.trim()}
-                className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl font-bold text-sm transition-colors disabled:opacity-50 flex items-center gap-2"
+                className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-medium text-sm transition-colors disabled:opacity-50 flex items-center gap-2"
               >
-                {isCancelling ? 'Cancelling...' : 'Yes, Cancel'}
+                {isCancelling ? 'Cancelling...' : 'Yes, cancel'}
               </button>
             </div>
           </div>

@@ -194,6 +194,69 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
     }
   };
 
+  const handleStartBreakMin = async (minutes) => {
+    try {
+      setBreakMin(minutes);
+      const res = await API.post('/queue/break', { doctorId, minutes });
+      if (res.data?.success) {
+        setActionMessage(`Break started for ${minutes} minutes.`);
+        fetchQueue();
+      }
+    } catch (err) {
+      setError(err.response?.data?.message || err.message);
+    }
+  };
+
+  const handleHoldToken = async (id, tokenText) => {
+    try {
+      const res = await API.post(`/queue/hold/${id}`);
+      if (res.data?.success) {
+        setActionMessage(`Token ${tokenText || id} placed on hold.`);
+        fetchQueue();
+      }
+    } catch (err) {
+      setError(err.response?.data?.message || err.message);
+    }
+  };
+
+  const handleMarkProcedure = async () => {
+    if (!currentConsultation) return;
+    try {
+      const res = await API.post('/queue/procedure', {
+        appointmentId: currentConsultation.id,
+        extraMinutes: 20
+      });
+      if (res.data?.success) {
+        setActionMessage('Marked in-room clinical procedure (+20 min expected duration).');
+        fetchQueue();
+      }
+    } catch (err) {
+      setError(err.response?.data?.message || err.message);
+    }
+  };
+
+  const handleAddEmergency = async () => {
+    const apptId = window.prompt('Enter Appointment ID or Token to upgrade to Emergency Priority:');
+    if (!apptId || !apptId.trim()) return;
+    const clinicalReason = window.prompt('Enter mandatory clinical reason for Emergency upgrade:');
+    if (!clinicalReason || !clinicalReason.trim()) {
+      alert('A clinical rationale is mandatory to mark Emergency priority.');
+      return;
+    }
+    try {
+      const res = await API.post('/queue/emergency', {
+        appointmentId: apptId.trim(),
+        reason: clinicalReason.trim()
+      });
+      if (res.data?.success) {
+        setActionMessage(`Emergency priority assigned to ${apptId.trim()}: ${clinicalReason.trim()}`);
+        fetchQueue();
+      }
+    } catch (err) {
+      setError(err.response?.data?.message || err.message);
+    }
+  };
+
   const getLevelBadge = (level) => {
     if (level === 3) {
       return <span className="px-2.5 py-1 text-xs font-bold rounded-full bg-red-100 text-red-800 border border-red-300">EMERGENCY (Lv 3)</span>;
@@ -237,6 +300,8 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
     );
   }
 
+  const isDoctorOnBreak = queueData?.breakUntil && new Date(queueData.breakUntil) > new Date();
+
   return (
     <div className="max-w-6xl mx-auto p-4 md:p-6 bg-slate-50 min-h-screen">
       {/* Header */}
@@ -257,23 +322,35 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
             </label>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           <button
             onClick={fetchQueue}
-            className="px-3 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition"
+            className="px-3 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition"
           >
             Refresh Queue
           </button>
-          <button
-            onClick={handleToggleBreak}
-            className={`px-4 py-2 text-sm font-semibold text-white rounded-lg shadow-sm transition ${
-              queueData?.breakUntil && new Date(queueData.breakUntil) > new Date()
-                ? 'bg-emerald-600 hover:bg-emerald-700'
-                : 'bg-amber-600 hover:bg-amber-700'
-            }`}
-          >
-            {queueData?.breakUntil && new Date(queueData.breakUntil) > new Date() ? 'End Break' : `Start Break (${breakMin}m)`}
-          </button>
+
+          {isDoctorOnBreak ? (
+            <button
+              onClick={handleToggleBreak}
+              className="px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm transition"
+            >
+              End Break
+            </button>
+          ) : (
+            <div className="flex items-center gap-1 bg-amber-50 border border-amber-200 p-1 rounded-lg">
+              <span className="text-[11px] font-bold text-amber-900 px-1.5">Start Break:</span>
+              {[10, 15, 30].map((m) => (
+                <button
+                  key={m}
+                  onClick={() => handleStartBreakMin(m)}
+                  className="px-2.5 py-1 text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white rounded transition shadow-xs"
+                >
+                  {m}m
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
@@ -427,8 +504,31 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
               </div>
             </div>
 
+            {/* In-Room Procedure Control */}
+            <div>
+              <label className="text-xs font-medium text-slate-600 block mb-1.5">Clinical Procedure</label>
+              <button
+                onClick={handleMarkProcedure}
+                disabled={!currentConsultation}
+                className="w-full py-2 bg-purple-50 hover:bg-purple-100 disabled:opacity-40 text-purple-900 border border-purple-300 font-semibold text-xs rounded transition flex items-center justify-center space-x-1"
+              >
+                <span>Mark Procedure (+20m)</span>
+              </button>
+            </div>
+
+            {/* Emergency Priority Upgrade */}
+            <div>
+              <label className="text-xs font-medium text-slate-600 block mb-1.5">Emergency Triage</label>
+              <button
+                onClick={handleAddEmergency}
+                className="w-full py-2 bg-rose-50 hover:bg-rose-100 text-rose-900 border border-rose-300 font-semibold text-xs rounded transition flex items-center justify-center space-x-1"
+              >
+                <span>+ Add Emergency</span>
+              </button>
+            </div>
+
             {/* Delay / Late Start */}
-            <div className="pt-2">
+            <div className="pt-1 border-t border-slate-100">
               <label className="text-xs font-medium text-slate-600 block mb-1.5">Doctor Late Start</label>
               <button
                 onClick={async () => {
@@ -455,7 +555,7 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
               <h2 className="text-sm font-bold text-slate-800 uppercase tracking-wide">
                 READY WAITING QUEUE ({readyCandidates.length})
               </h2>
-              <span className="text-xs text-slate-400">Sorted by Priority Engine</span>
+              <span className="text-xs text-slate-400">Sorted by Priority Engine (Emergency &gt; Urgent &gt; Routine + Fairness Bump)</span>
             </div>
 
             {loading ? (
@@ -464,134 +564,186 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
               <div className="py-8 text-center text-slate-400 text-sm">No checked-in patients currently waiting.</div>
             ) : (
               <div className="space-y-3">
-                {readyCandidates.map((pt, idx) => (
-                  <div key={pt.id} className="space-y-2">
-                    <div
-                      className={`p-4 rounded-lg border transition flex flex-col md:flex-row md:items-center justify-between gap-3 ${
-                        pt.clinicalLevel === 3
-                          ? 'bg-red-50/60 border-red-200'
-                          : pt.clinicalLevel === 2
-                          ? 'bg-amber-50/50 border-amber-200'
-                          : 'bg-white border-slate-200 hover:border-slate-300'
-                      }`}
-                    >
-                    <div className="flex items-start gap-3">
-                      <span className="text-xl font-black text-slate-800 w-16">{pt.tokenLabel || pt.tokenNumber}</span>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h4 className="font-bold text-slate-900">{pt.patientName}</h4>
-                          {getLevelBadge(pt.clinicalLevel)}
-                        </div>
-                        <p className="text-xs text-slate-500 mt-0.5">Booked: {pt.timeSlot || formatTimeStr(pt.bookedStartAt)} | Check-in: {formatTimeStr(pt.checkedInAt)}</p>
-
-                        {/* Vulnerability Tags */}
-                        {pt.tags && pt.tags.length > 0 && (
-                          <div className="flex gap-1.5 mt-1.5">
-                            {pt.tags.map((t) => (
-                              <span key={t} className="px-2 py-0.5 text-[10px] font-semibold uppercase bg-slate-100 text-slate-700 rounded border border-slate-200">
-                                {t}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => setExpandedSummaryId(expandedSummaryId === pt.id ? null : pt.id)}
-                        className="px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-300 font-semibold text-xs rounded transition"
-                        title="View or prepare pre-consultation summary"
-                      >
-                        {expandedSummaryId === pt.id ? 'Hide Summary' : 'Summary'}
-                      </button>
-                      <button
-                        onClick={async () => {
-                          try {
-                            const res = await API.post(`/queue/call/${pt.id}`, {
-                              reason: 'Doctor priority selection'
-                            });
-                            if (res.data?.success) fetchQueue();
-                          } catch (err) {
-                            setError(err.response?.data?.message || err.message);
-                          }
-                        }}
-                        className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 font-semibold text-xs rounded transition"
-                      >
-                        Call Specific
-                      </button>
-                      <button
-                        onClick={() => handleNoShow(pt.id)}
-                        className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-semibold text-xs rounded transition"
-                        title="Mark patient as No-Show"
-                      >
-                        No-Show
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Expanded Pre-Consultation Summary for Ready Candidate */}
-                  {expandedSummaryId === pt.id && (
-                    <div className="mt-2 pt-2 border-t border-slate-100">
-                      <PreConsultationSummaryCard
-                        appointmentId={pt.id}
-                        patientName={pt.patientName}
-                        patientHealthId={pt.patientHealthId}
-                        age={pt.age || pt.patientAge}
-                        token={pt.tokenLabel || pt.tokenNumber}
-                        onAskAgent={(hid) => {
-                          setAgentSelectedHealthId(hid);
-                          setShowAgentModal(true);
-                        }}
-                        onComplexityChanged={fetchQueue}
-                      />
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-            )}
-          </div>
-
-          {/* Not Checked In List */}
-          <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                UPCOMING BOOKED (NOT YET CHECKED IN) ({notCheckedIn.length})
-              </h2>
-              <span className="text-[10px] text-slate-400 font-mono">Chronological</span>
-            </div>
-            {notCheckedIn.length === 0 ? (
-              <p className="text-xs text-slate-400 italic py-3 text-center">No upcoming booked patients awaiting check-in.</p>
-            ) : (
-              <div className="divide-y divide-slate-100">
-                {Array.from(new Map(notCheckedIn.map(item => [item.id, item])).values()).map((pt) => {
-                  const tokenText = pt.tokenLabel || (pt.tokenNumber ? `Token #${pt.tokenNumber}` : pt.appointmentId || pt.id);
-                  const patientDisplayName = pt.patientName || pt.patientHealthId || 'Patient';
-                  const scheduledTime = pt.timeSlot || pt.bookedStartAt || 'Scheduled';
-                  const isConfirmed = pt.status === 'confirmed';
+                {readyCandidates.map((pt) => {
+                  const checkInTime = pt.checkedInAt ? new Date(pt.checkedInAt).getTime() : (pt.updatedAt?._seconds ? pt.updatedAt._seconds * 1000 : null);
+                  const minutesSinceCheckin = checkInTime ? Math.max(0, Math.floor((Date.now() - checkInTime) / 60000)) : 0;
                   return (
-                    <div key={pt.id} className="py-2.5 flex items-center justify-between text-sm hover:bg-slate-50/50 px-2 rounded-lg transition-colors">
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold text-slate-800 font-mono">{tokenText}</span>
-                        <span className="text-slate-600 font-medium ml-1">{patientDisplayName}</span>
-                        {pt.patientHealthId && pt.patientName && (
-                          <span className="text-[10px] text-slate-400 font-mono">({pt.patientHealthId})</span>
-                        )}
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold uppercase tracking-wider ${
-                          isConfirmed ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-600'
-                        }`}>
-                          {isConfirmed ? 'Confirmed' : 'Booked'}
-                        </span>
+                    <div key={pt.id} className="space-y-2">
+                      <div
+                        className={`p-4 rounded-lg border transition flex flex-col md:flex-row md:items-center justify-between gap-3 ${
+                          pt.clinicalLevel === 3
+                            ? 'bg-red-50/60 border-red-200'
+                            : pt.clinicalLevel === 2
+                            ? 'bg-amber-50/50 border-amber-200'
+                            : 'bg-white border-slate-200 hover:border-slate-300'
+                        }`}
+                      >
+                        <div className="flex items-start gap-3">
+                          <span className="text-xl font-black text-slate-800 w-16">{pt.tokenLabel || pt.tokenNumber}</span>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h4 className="font-bold text-slate-900">{pt.patientName}</h4>
+                              {getLevelBadge(pt.clinicalLevel)}
+                              {pt.isHeldByDoctor && (
+                                <span className="px-2 py-0.5 bg-amber-100 text-amber-800 font-bold text-[10px] rounded-full border border-amber-300">
+                                  ON HOLD
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs text-slate-500 mt-0.5">
+                              Booked: {pt.timeSlot || formatTimeStr(pt.bookedStartAt)} | Check-in: {formatTimeStr(pt.checkedInAt)} ({minutesSinceCheckin}m ago)
+                            </p>
+
+                            {/* Vulnerability Tags */}
+                            {pt.tags && pt.tags.length > 0 && (
+                              <div className="flex gap-1.5 mt-1.5">
+                                {pt.tags.map((t) => (
+                                  <span key={t} className="px-2 py-0.5 text-[10px] font-semibold uppercase bg-slate-100 text-slate-700 rounded border border-slate-200">
+                                    {t}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => setExpandedSummaryId(expandedSummaryId === pt.id ? null : pt.id)}
+                            className="px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-300 font-semibold text-xs rounded transition"
+                            title="View or prepare pre-consultation summary"
+                          >
+                            {expandedSummaryId === pt.id ? 'Hide Summary' : 'Summary'}
+                          </button>
+
+                          {/* Call Specific with Mandatory Reason */}
+                          <button
+                            onClick={async () => {
+                              const reason = window.prompt(`Enter mandatory clinical rationale for calling ${pt.patientName || pt.tokenLabel} out of order:`);
+                              if (!reason || !reason.trim()) {
+                                setActionMessage('Call out of order cancelled: Clinical rationale is required.');
+                                return;
+                              }
+                              try {
+                                const res = await API.post(`/queue/call/${pt.id}`, { reason: reason.trim() });
+                                if (res.data?.success) {
+                                  setActionMessage(`Called token ${pt.tokenLabel || pt.tokenNumber} out of order: ${reason.trim()}`);
+                                  fetchQueue();
+                                }
+                              } catch (err) {
+                                setError(err.response?.data?.message || err.message);
+                              }
+                            }}
+                            className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 font-semibold text-xs rounded transition"
+                          >
+                            Call Specific
+                          </button>
+
+                          {/* Hold Token */}
+                          <button
+                            onClick={() => handleHoldToken(pt.id, pt.tokenLabel || pt.tokenNumber)}
+                            className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 font-semibold text-xs rounded transition"
+                            title="Temporarily hold this token"
+                          >
+                            Hold
+                          </button>
+
+                          <button
+                            onClick={() => handleNoShow(pt.id)}
+                            className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-semibold text-xs rounded transition"
+                            title="Mark patient as No-Show"
+                          >
+                            No-Show
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2 text-xs text-slate-500 font-mono">
-                        <span>🕒 {scheduledTime}</span>
-                      </div>
+
+                      {/* Expanded Pre-Consultation Summary for Ready Candidate */}
+                      {expandedSummaryId === pt.id && (
+                        <div className="mt-2 pt-2 border-t border-slate-100">
+                          <PreConsultationSummaryCard
+                            appointmentId={pt.id}
+                            patientName={pt.patientName}
+                            patientHealthId={pt.patientHealthId}
+                            age={pt.age || pt.patientAge}
+                            token={pt.tokenLabel || pt.tokenNumber}
+                            onAskAgent={(hid) => {
+                              setAgentSelectedHealthId(hid);
+                              setShowAgentModal(true);
+                            }}
+                            onComplexityChanged={fetchQueue}
+                          />
+                        </div>
+                      )}
                     </div>
                   );
                 })}
               </div>
             )}
+          </div>
+
+          {/* Not Arrived & Late Patient Lists */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Not Arrived List */}
+            <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                  NOT ARRIVED ({notCheckedIn.filter(p => p.status !== 'late').length})
+                </h2>
+                <span className="text-[10px] text-slate-400 font-mono">Booked / En Route</span>
+              </div>
+              {notCheckedIn.filter(p => p.status !== 'late').length === 0 ? (
+                <p className="text-xs text-slate-400 italic py-3 text-center">No upcoming appointments pending arrival.</p>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {notCheckedIn.filter(p => p.status !== 'late').map((pt) => {
+                    const tokenText = pt.tokenLabel || (pt.tokenNumber ? `Token #${pt.tokenNumber}` : pt.id);
+                    const patientDisplayName = pt.patientName || pt.patientHealthId || 'Patient';
+                    const scheduledTime = pt.timeSlot || pt.bookedStartAt || 'Scheduled';
+                    return (
+                      <div key={pt.id} className="py-2 flex items-center justify-between text-xs hover:bg-slate-50 px-1 rounded transition-colors">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-semibold text-slate-800 font-mono">{tokenText}</span>
+                          <span className="text-slate-600 ml-1">{patientDisplayName}</span>
+                        </div>
+                        <span className="text-slate-400 font-mono">🕒 {scheduledTime}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Late List */}
+            <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-xs font-semibold text-rose-600 uppercase tracking-wider">
+                  LATE ARRIVALS ({notCheckedIn.filter(p => p.status === 'late').length})
+                </h2>
+                <span className="text-[10px] text-rose-500 font-mono">Missed Slot</span>
+              </div>
+              {notCheckedIn.filter(p => p.status === 'late').length === 0 ? (
+                <p className="text-xs text-slate-400 italic py-3 text-center">No late appointments.</p>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {notCheckedIn.filter(p => p.status === 'late').map((pt) => {
+                    const tokenText = pt.tokenLabel || (pt.tokenNumber ? `Token #${pt.tokenNumber}` : pt.id);
+                    const patientDisplayName = pt.patientName || pt.patientHealthId || 'Patient';
+                    return (
+                      <div key={pt.id} className="py-2 flex items-center justify-between text-xs hover:bg-rose-50/50 px-1 rounded transition-colors">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-semibold text-rose-800 font-mono">{tokenText}</span>
+                          <span className="text-slate-600 ml-1">{patientDisplayName}</span>
+                        </div>
+                        <span className="px-1.5 py-0.5 bg-rose-100 text-rose-700 text-[10px] font-bold rounded">
+                          LATE
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>

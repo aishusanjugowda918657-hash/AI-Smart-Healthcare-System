@@ -35,7 +35,7 @@ import MedicineTracker from './components/patient/MedicineTracker';
 import TodayQueueList from './components/doctor/TodayQueueList';
 import ConsultationWorkspace from './components/doctor/ConsultationWorkspace';
 import ScheduleConfigurator from './components/doctor/ScheduleConfigurator';
-import FollowUpList from './components/doctor/FollowUpList';
+import { FollowUpList } from './components/patient/FollowUpList';
 import PatientsNeedingAttention from './components/doctor/PatientsNeedingAttention';
 import DoctorQueueScreen from './components/doctor/DoctorQueueScreen';
 import DoctorPatientsPage from './pages/DoctorPatientsPage';
@@ -44,7 +44,10 @@ import DoctorAskAgentPage from './pages/DoctorAskAgentPage';
 import PharmacyVerifyPage from './pages/PharmacyVerifyPage';
 import PatientHistoryTimelinePage from './pages/PatientHistoryTimelinePage';
 import ReportUploadPage from './pages/ReportUploadPage';
-import { NurseDashboard, ReceptionDashboard, PharmacyDashboard } from './pages/Placeholders';
+import { PharmacyDashboard } from './pages/Placeholders';
+import { ReceptionDashboard } from './pages/ReceptionDashboard';
+import { NurseDashboard } from './pages/NurseDashboard';
+import DisplayBoardPage from './pages/DisplayBoardPage';
 
 import ManageDoctors from './components/admin/ManageDoctors';
 import ManageDepartments from './components/admin/ManageDepartments';
@@ -83,6 +86,9 @@ export const App = () => {
               <Route path="/welcome" element={<LandingPage />} />
               <Route path="/login" element={<Login />} />
               <Route path="/register" element={<PatientRegister />} />
+              <Route path="/display/:department" element={<DisplayBoardPage />} />
+              <Route path="/display/:departmentId" element={<DisplayBoardPage />} />
+              <Route path="/display" element={<DisplayBoardPage />} />
 
               {/* Redirects for legacy entry & role selection routes */}
               <Route path="/role-selection" element={<Navigate to="/login" replace />} />
@@ -110,7 +116,7 @@ export const App = () => {
                 </Route>
 
                 <Route element={<ProtectedRoute allowedRoles={['pharmacy']} />}>
-                  <Route path="/pharmacy-dashboard" element={<PharmacyDashboard />} />
+                  <Route path="/pharmacy-dashboard" element={<PharmacyVerifyPage />} />
                   <Route path="/pharmacy/verify" element={<PharmacyVerifyPage />} />
                 </Route>
 
@@ -134,6 +140,8 @@ export const App = () => {
                   <Route path="/reports" element={<ReportUploadPage />} />
                   <Route path="/prescriptions" element={<PrescriptionViewer />} />
                   <Route path="/medicine-reminders" element={<MedicineTracker />} />
+                  <Route path="/followups" element={<FollowUpList />} />
+                  <Route path="/follow-ups" element={<FollowUpList />} />
                   <Route path="/notifications" element={<NotificationsPage />} />
                   <Route path="/ai-chat" element={<ChatbotPage />} />
                 </Route>
@@ -160,8 +168,6 @@ export const App = () => {
                   <Route path="/schedule-config" element={<Navigate to="/doctor/schedule" replace />} />
                   <Route path="/consultation-workspace" element={<Navigate to="/doctor/queue" replace />} />
                   <Route path="/consultation" element={<Navigate to="/doctor/queue" replace />} />
-                  <Route path="/followups" element={<Navigate to="/doctor/alerts" replace />} />
-                  <Route path="/follow-ups" element={<Navigate to="/doctor/alerts" replace />} />
                 </Route>
 
                 {/* Admin Routes */}

@@ -4,6 +4,7 @@ import { StatCard } from '../components/common/StatCard';
 import { PatientWelcomeOverlay } from '../components/patient/PatientWelcomeOverlay';
 import FamilyMembersManager from '../components/patient/FamilyMembersManager';
 import { HealthIdCard } from '../components/patient/HealthIdCard';
+import AppointmentDetailsActions from '../components/patient/AppointmentDetailsActions';
 import API from '../services/api';
 import { Calendar, Clock, Pill, FileText, User, Phone, Heart, Shield, Bot, AlertCircle, CheckCircle2, XCircle, Hourglass, Stethoscope } from 'lucide-react';
 import { Link } from 'react-router-dom';
@@ -561,6 +562,21 @@ export const PatientDashboard = () => {
               </div>
             </div>
             
+            {/* Lifecycle Actions */}
+            <div className="p-6 pt-0 border-t border-slate-100">
+              <AppointmentDetailsActions
+                appointment={selectedAppt}
+                onUpdate={(updated) => {
+                  setSelectedAppt(updated);
+                  fetchDashboardData();
+                }}
+                onRebook={() => {
+                  setSelectedAppt(null);
+                  window.location.href = '/book-appointment';
+                }}
+              />
+            </div>
+            
             {/* Actions */}
             <div className="p-5 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
               <button
@@ -618,17 +634,17 @@ export const PatientDashboard = () => {
               <button
                 onClick={() => { setCancelAppt(null); setCancelReason(''); setCancelError(''); }}
                 disabled={isCancelling}
-                className="px-5 py-2.5 bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 rounded-xl font-bold text-sm transition-colors disabled:opacity-50"
+                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-sm shadow-md transition-colors disabled:opacity-50"
               >
-                Keep Appointment
+                Keep it
               </button>
               <button
                 onClick={handleCancelAppointment}
                 disabled={isCancelling}
-                className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-sm transition-colors disabled:opacity-50 flex items-center gap-2"
+                className="px-5 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-xl font-medium text-sm transition-colors disabled:opacity-50 flex items-center gap-2"
               >
-                {isCancelling ? <span className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"/> : null}
-                {isCancelling ? 'Cancelling...' : 'Yes, Cancel'}
+                {isCancelling ? <span className="w-4 h-4 border-2 border-slate-400 border-t-slate-800 rounded-full animate-spin"/> : null}
+                {isCancelling ? 'Cancelling...' : 'Yes, cancel'}
               </button>
             </div>
           </div>

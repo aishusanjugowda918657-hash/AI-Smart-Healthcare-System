@@ -11,21 +11,24 @@ import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 
 export const PatientHistoryTimelinePage = ({ defaultHealthId, embedded = false }) => {
-  const { user } = useAuth();
+  const { currentUser, userRole, patientProfile: authProfile } = useAuth();
   const { t } = useLanguage();
   const location = useLocation();
 
-  const isDoctor = user?.role === 'doctor';
+  const isDoctor = userRole === 'doctor' || currentUser?.role === 'doctor';
 
   // Target Health ID state (defaults to prop, nav state or current user's profile)
-  const initialHealthId = defaultHealthId || location.state?.patientHealthId || user?.patientHealthId || user?.healthId || 'HID-2026-00001';
+  const myHealthId = authProfile?.healthId || authProfile?.patientHealthId || currentUser?.patientHealthId || currentUser?.healthId;
+  const initialHealthId = defaultHealthId || location.state?.patientHealthId || myHealthId || 'HID-2026-00001';
   const [selectedHealthId, setSelectedHealthId] = useState(initialHealthId);
 
   useEffect(() => {
     if (defaultHealthId && defaultHealthId !== selectedHealthId) {
       setSelectedHealthId(defaultHealthId);
+    } else if ((!selectedHealthId || selectedHealthId === 'HID-2026-00001') && myHealthId) {
+      setSelectedHealthId(myHealthId);
     }
-  }, [defaultHealthId]);
+  }, [defaultHealthId, myHealthId]);
 
   // Patient Profile & Family Selector State
   const [patientProfile, setPatientProfile] = useState(null);
@@ -83,7 +86,7 @@ export const PatientHistoryTimelinePage = ({ defaultHealthId, embedded = false }
   // 1. Fetch Patient Profile & Family Options
   useEffect(() => {
     fetchProfileAndFamily();
-  }, [user]);
+  }, [currentUser, userRole, myHealthId]);
 
   const fetchProfileAndFamily = async () => {
     try {
@@ -444,8 +447,8 @@ export const PatientHistoryTimelinePage = ({ defaultHealthId, embedded = false }
               onChange={(e) => setSelectedHealthId(e.target.value)}
               className="bg-transparent text-xs font-bold text-slate-700 outline-none pr-4"
             >
-              <option value={user?.patientHealthId || user?.healthId || 'HID-2026-00001'}>
-                Me (Self) {user?.displayName ? `- ${user.displayName}` : ''}
+              <option value={myHealthId || 'HID-2026-00001'}>
+                Me (Self) {currentUser?.displayName || currentUser?.fullName ? `- ${currentUser.displayName || currentUser.fullName}` : ''}
               </option>
               {familyMembers.map((fam) => (
                 <option key={fam.healthId || fam.id} value={fam.healthId || fam.id}>

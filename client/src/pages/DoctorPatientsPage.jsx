@@ -70,9 +70,19 @@ export const DoctorPatientsPage = () => {
     }
   };
 
-  const handleOpenPatient = (patient) => {
+  const handleOpenPatient = async (patient) => {
     setAccessError(null);
     const healthId = patient.healthId || patient.patientHealthId;
+    try {
+      const checkRes = await API.get(`/doctor/patients/${healthId}/access-check`);
+      if (checkRes.data?.data && checkRes.data.data.hasAccess === false) {
+        setAccessError(checkRes.data.data.message || 'No access. Ask the patient to share their history.');
+        return;
+      }
+    } catch (err) {
+      console.warn('Access check notice:', err.message);
+    }
+
     navigate(`/patient-history`, {
       state: {
         patientHealthId: healthId,

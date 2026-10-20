@@ -165,11 +165,16 @@ export const PreConsultationSummaryCard = ({
     );
   };
 
-  const displayText = summaryData?.summary || summaryData?.text || 'No summary available.';
-  const pName = summaryData?.patient?.name || patientName || 'Patient';
-  const pAge = summaryData?.patient?.age ?? age;
-  const pHealthId = summaryData?.healthId || patientHealthId || 'HID-XXXX';
+  const displayText = typeof summaryData?.summary === 'string'
+    ? summaryData.summary
+    : (summaryData?.summary?.text || summaryData?.text || 'No summary available.');
+  const pName = summaryData?.patient?.name || summaryData?.patientName || patientName || 'Patient';
+  const pAge = summaryData?.patient?.age ?? summaryData?.age ?? age;
+  const pHealthId = summaryData?.healthId || summaryData?.patientHealthId || patientHealthId || 'HID-XXXX';
   const pToken = summaryData?.token || token || 'T-001';
+  const flags = summaryData?.flags || summaryData?.summary?.flags || [];
+  const summaryMode = summaryData?.summaryMode || summaryData?.summary?.summaryMode || 'rule-based';
+  const isCorrected = summaryData?.isCorrected || summaryData?.summary?.isCorrected;
 
   return (
     <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-3 text-slate-800">
@@ -189,12 +194,12 @@ export const PreConsultationSummaryCard = ({
 
         <div className="flex items-center gap-2">
           <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 border ${
-            summaryData?.summaryMode === 'ai'
+            summaryMode === 'ai'
               ? 'bg-purple-50 text-purple-700 border-purple-200'
               : 'bg-slate-100 text-slate-700 border-slate-200'
           }`}>
             <Sparkles className="w-3 h-3 text-purple-600" />
-            <span>{summaryData?.summaryMode === 'ai' ? 'AI Summary' : 'Rule-Based'}</span>
+            <span>{summaryMode === 'ai' ? 'AI Summary' : 'Rule-Based'}</span>
           </span>
 
           <button
@@ -208,9 +213,9 @@ export const PreConsultationSummaryCard = ({
       </div>
 
       {/* Safety-Critical Rule-Based Badges */}
-      {summaryData?.flags && summaryData.flags.length > 0 && (
+      {flags.length > 0 && (
         <div className="flex flex-wrap gap-1.5 pt-0.5">
-          {summaryData.flags.map((flag, idx) => getFlagBadge(flag, idx))}
+          {flags.map((flag, idx) => getFlagBadge(flag, idx))}
         </div>
       )}
 

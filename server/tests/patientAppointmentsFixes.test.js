@@ -155,6 +155,97 @@ describe('Patient Appointments Fixes Regression Suite', () => {
       expect(docSnap.data().status).toBe('booked');
     });
 
+    it('exact production case: on 2026-10-19, appointment dated 2026-10-05 with status booked appears in Past as Missed and never Upcoming', async () => {
+      clock.setMockTime('2026-10-19T10:00:00+05:30');
+      try {
+        const prodApptId = `apt-prod-20261005-${Date.now()}`;
+        await db.collection('appointments').doc(prodApptId).set({
+          id: prodApptId,
+          appointmentId: prodApptId,
+          patientUid: testPatientUid,
+          ownerUid: testPatientUid,
+          patientHealthId: testHealthId,
+          date: '2026-10-05',
+          bookedStartAt: '14:10',
+          status: 'booked',
+          doctorId: docGenId,
+          doctorUid: docGenUid,
+          departmentId: 'dept-derm',
+          tokenNumber: 1,
+          tokenLabel: 'D-001'
+        });
+
+        const res = await request(app)
+          .get('/api/appointments/my-appointments')
+          .set('x-demo-uid', testPatientUid);
+
+        expect(res.status).toBe(200);
+        const inUpcoming = res.body.tabs.upcoming.some((a) => a.id === prodApptId);
+        expect(inUpcoming).toBe(false);
+
+        const inPast = res.body.tabs.past.find((a) => a.id === prodApptId);
+        expect(inPast).toBeDefined();
+        expect(inPast.displayStatus).toBe('Missed');
+        expect(inPast.isMissed).toBe(true);
+        expect(inPast.canCancel).toBe(false);
+        expect(inPast.canRebook).toBe(true);
+      } finally {
+        clock.reset();
+      }
+    });
+
+    it('Asia/Kolkata boundary case: appointment on current hospital day 2026-10-19 appears in Upcoming while 2026-10-18 appears in Past as Missed', async () => {
+      // 2026-10-19 at 00:30 AM IST (which is 2026-10-18 19:00 UTC)
+      clock.setMockTime('2026-10-18T19:00:00.000Z');
+      try {
+        const todayApptId = `apt-today-${Date.now()}`;
+        const yesterdayApptId = `apt-yesterday-${Date.now()}`;
+
+        await db.collection('appointments').doc(todayApptId).set({
+          id: todayApptId,
+          appointmentId: todayApptId,
+          patientUid: testPatientUid,
+          ownerUid: testPatientUid,
+          patientHealthId: testHealthId,
+          date: '2026-10-19',
+          bookedStartAt: '10:00',
+          status: 'booked',
+          doctorId: docGenId,
+          doctorUid: docGenUid,
+          departmentId: 'dept-gen'
+        });
+
+        await db.collection('appointments').doc(yesterdayApptId).set({
+          id: yesterdayApptId,
+          appointmentId: yesterdayApptId,
+          patientUid: testPatientUid,
+          ownerUid: testPatientUid,
+          patientHealthId: testHealthId,
+          date: '2026-10-18',
+          bookedStartAt: '17:00',
+          status: 'booked',
+          doctorId: docGenId,
+          doctorUid: docGenUid,
+          departmentId: 'dept-gen'
+        });
+
+        const res = await request(app)
+          .get('/api/appointments/my-appointments')
+          .set('x-demo-uid', testPatientUid);
+
+        expect(res.status).toBe(200);
+        expect(res.body.tabs.upcoming.some((a) => a.id === todayApptId)).toBe(true);
+        expect(res.body.tabs.upcoming.some((a) => a.id === yesterdayApptId)).toBe(false);
+
+        const pastYesterday = res.body.tabs.past.find((a) => a.id === yesterdayApptId);
+        expect(pastYesterday).toBeDefined();
+        expect(pastYesterday.displayStatus).toBe('Missed');
+        expect(pastYesterday.canCancel).toBe(false);
+      } finally {
+        clock.reset();
+      }
+    });
+
     it('list endpoint respects limit and cursor pagination', async () => {
       const res = await request(app)
         .get('/api/appointments/my-appointments?limit=1')

@@ -933,10 +933,14 @@ export const acknowledgeTriageAlert = async (req, res, next) => {
 export const overrideClinicalLevel = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { clinicalLevel } = req.body;
+    const { clinicalLevel, reason } = req.body;
 
     if (![1, 2, 3].includes(Number(clinicalLevel))) {
       throw new AppError('VALIDATION_ERROR', 'clinicalLevel must be 1 (routine), 2 (urgent), or 3 (emergency).', 400);
+    }
+
+    if (!reason || !reason.trim()) {
+      throw new AppError('REASON_REQUIRED', 'Clinical reason is mandatory for triage level adjustment.', 400);
     }
 
     const db = assertDbConnected();
@@ -952,7 +956,22 @@ export const overrideClinicalLevel = async (req, res, next) => {
       clinicalLevel: Number(clinicalLevel),
       urgencySuggested: urgencyMap[clinicalLevel],
       clinicalLevelVerifiedBy: req.user.uid,
+      clinicalOverrideReason: reason.trim(),
       updatedAt: new Date()
+    });
+
+    await writeAuditLog({
+      actorUid: req.user.uid,
+      actorRole: req.user.role,
+      action: 'OVERRIDE_CLINICAL_LEVEL',
+      targetType: 'appointment',
+      targetId: id,
+      healthId: snap.data().patientHealthId || null,
+      details: {
+        newLevel: Number(clinicalLevel),
+        urgency: urgencyMap[clinicalLevel],
+        reason: reason.trim()
+      }
     });
 
     res.status(200).json(formatSuccessResponse({

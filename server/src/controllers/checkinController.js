@@ -138,11 +138,19 @@ export const manualCheckIn = async (req, res, next) => {
     // Search Strategy 2: Token Label + Date
     if (!targetDoc && (tokenLabel || query)) {
       const labelToSearch = (tokenLabel || query).trim();
-      const tokenSnap = await db
+      let tokenSnap = await db
         .collection('appointments')
         .where('date', '==', todayStr)
-        .where('tokenNumber', '==', labelToSearch)
+        .where('tokenLabel', '==', labelToSearch)
         .get();
+
+      if (tokenSnap.empty) {
+        tokenSnap = await db
+          .collection('appointments')
+          .where('date', '==', todayStr)
+          .where('tokenNumber', '==', labelToSearch)
+          .get();
+      }
 
       if (!tokenSnap.empty) {
         targetDoc = { id: tokenSnap.docs[0].id, ...tokenSnap.docs[0].data() };

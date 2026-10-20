@@ -592,7 +592,7 @@ export const getDoctorDashboardSummary = async (req, res, next) => {
     // Schedule status message adhering strictly to non-blaming wording rule
     let runningLateMsg = 'On schedule';
     if (delayMin > 0) {
-      runningLateMsg = `Schedule is running ${delayMin} minutes behind`;
+      runningLateMsg = `Schedule is running ${delayMin} minutes behind: consultations are taking more time`;
     } else if (timeFactor > 1.15) {
       runningLateMsg = 'Consultations are taking more time';
     }
@@ -891,41 +891,23 @@ export const doctorCheckPatientAccess = async (req, res, next) => {
       return res.status(200).json(formatSuccessResponse({ hasAccess: true, reason: 'active_share_grant' }));
     }
 
-    // 2. Check appointment in last 90 days
+    // 2. Check appointment in last 90 days (queried by patientHealthId to avoid un-deployed composite index failure)
     const ninetyDaysAgo = new Date();
     ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
     const ninetyDaysAgoStr = ninetyDaysAgo.toISOString().split('T')[0];
 
     const apptSnap = await db.collection('appointments')
-      .where('doctorId', '==', targetDoctorId)
       .where('patientHealthId', '==', healthId)
-      .where('date', '>=', ninetyDaysAgoStr)
-      .limit(1)
+      .limit(50)
       .get();
 
-    if (!apptSnap.empty) {
-      return res.status(200).json(formatSuccessResponse({ hasAccess: true, reason: 'treating_doctor_90days' }));
-    }
+    const hasTreatingRelationship = apptSnap.docs.some((doc) => {
+      const data = doc.data();
+      const isDocMatch = data.doctorId === targetDoctorId || data.doctorId === doctorUid || data.doctorUid === doctorUid;
+      return isDocMatch && data.date >= ninetyDaysAgoStr;
+    });
 
-    const apptUidSnap = await db.collection('appointments')
-      .where('doctorId', '==', doctorUid)
-      .where('patientHealthId', '==', healthId)
-      .where('date', '>=', ninetyDaysAgoStr)
-      .limit(1)
-      .get();
-
-    if (!apptUidSnap.empty) {
-      return res.status(200).json(formatSuccessResponse({ hasAccess: true, reason: 'treating_doctor_90days' }));
-    }
-
-    const apptByDoctorUidSnap = await db.collection('appointments')
-      .where('doctorUid', '==', doctorUid)
-      .where('patientHealthId', '==', healthId)
-      .where('date', '>=', ninetyDaysAgoStr)
-      .limit(1)
-      .get();
-
-    if (!apptByDoctorUidSnap.empty) {
+    if (hasTreatingRelationship) {
       return res.status(200).json(formatSuccessResponse({ hasAccess: true, reason: 'treating_doctor_90days' }));
     }
 

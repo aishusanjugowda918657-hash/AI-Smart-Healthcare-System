@@ -501,15 +501,30 @@ export const ConsultationWorkspace = () => {
             {patientFlags && patientFlags.length > 0 && (
               <div className="pt-3 border-t border-slate-100 flex flex-wrap gap-2 items-center">
                 <span className="text-[10px] font-bold text-slate-400 uppercase">Clinical Flags:</span>
-                {patientFlags.map((flag, idx) => (
-                  <span
-                    key={idx}
-                    className="px-2.5 py-1 text-xs font-bold rounded-lg bg-amber-50 text-amber-900 border border-amber-200 flex items-center space-x-1"
-                  >
-                    <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
-                    <span>{typeof flag === 'string' ? flag : flag.label || flag.flag || 'Flag'}</span>
-                  </span>
-                ))}
+                {patientFlags.map((flag, idx) => {
+                  const text = typeof flag === 'string' ? flag : flag.label || flag.flag || 'Flag';
+                  const lower = text.toLowerCase();
+                  let colorClass = 'bg-amber-50 text-amber-900 border-amber-200';
+                  if (lower.includes('allergy') || lower.includes('urgent') || lower.includes('emergency')) {
+                    colorClass = 'bg-rose-50 text-rose-700 border-rose-300';
+                  } else if (lower.includes('follow-up') || lower.includes('adherence') || lower.includes('overdue')) {
+                    colorClass = 'bg-amber-50 text-amber-800 border-amber-300';
+                  } else if (lower.includes('first visit') || lower.includes('new patient')) {
+                    colorClass = 'bg-blue-50 text-blue-700 border-blue-300';
+                  } else if (lower.includes('caregiver') || lower.includes('accompanied')) {
+                    colorClass = 'bg-slate-100 text-slate-700 border-slate-300';
+                  }
+
+                  return (
+                    <span
+                      key={idx}
+                      className={`px-2.5 py-1 text-xs font-bold rounded-lg border flex items-center space-x-1 ${colorClass}`}
+                    >
+                      <AlertTriangle className="w-3.5 h-3.5" />
+                      <span>{text}</span>
+                    </span>
+                  );
+                })}
               </div>
             )}
           </div>
