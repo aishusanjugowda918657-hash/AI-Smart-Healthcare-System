@@ -47,13 +47,22 @@ const corsOptions = {
       .split(',')
       .map((o) => o.trim())
       .filter(Boolean);
-    if (allowedOrigins.includes(origin)) {
+    const isDev = env.NODE_ENV === 'development';
+    if (allowedOrigins.includes(origin) || (isDev && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin))) {
       return callback(null, origin);
     }
     return callback(null, false);
   },
   credentials: true,
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-request-id', 'x-demo-uid', 'x-demo-role', 'x-tick-secret'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'x-request-id',
+    'x-demo-uid',
+    'x-demo-email',
+    'x-demo-role',
+    'x-tick-secret'
+  ],
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   optionsSuccessStatus: 200
 };
