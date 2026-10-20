@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import API from '../../services/api';
 import { Calendar, Clock, Stethoscope, CheckCircle, XCircle, AlertCircle, RefreshCw, X } from 'lucide-react';
 import QRCode from 'qrcode';
+import { getTodayInHospitalTz } from '../../utils/formatters';
 
 const formatDepartmentName = (deptId) => {
   if (!deptId) return 'General Medicine';
@@ -21,13 +22,24 @@ export const ActiveAppointmentsBanner = () => {
     setLoading(true);
     try {
       const res = await API.get('/appointments/my-appointments');
-      if (res.data?.data) {
-        const activeStatuses = ['booked', 'confirmed', 'on_the_way', 'nearby', 'checked_in', 'waiting', 'called', 'in_room'];
-        const activeAppts = res.data.data.filter(a => activeStatuses.includes(a.status));
-        // Sort by date desc
-        activeAppts.sort((a, b) => new Date(b.date) - new Date(a.date));
-        setAppointments(activeAppts);
+      const todayStr = getTodayInHospitalTz();
+      const activeStatuses = ['booked', 'confirmed', 'on_the_way', 'nearby', 'checked_in', 'waiting', 'called', 'in_room'];
+
+      let activeAppts = [];
+      if (res.data?.tabs?.upcoming) {
+        activeAppts = res.data.tabs.upcoming.filter(a => (a.date || '') >= todayStr);
+      } else if (res.data?.data) {
+        activeAppts = res.data.data.filter(a => {
+          const isUpcoming = a.tab === 'upcoming' || (!a.tab && activeStatuses.includes((a.status || '').toLowerCase()));
+          return isUpcoming && (a.date || '') >= todayStr && a.tab !== 'past';
+        });
       }
+
+      // Strictly ensure NO past appointments appear in Upcoming Active Banner
+      activeAppts = activeAppts.filter(a => (a.date || '') >= todayStr && a.tab !== 'past');
+      // Sort by date asc (soonest first)
+      activeAppts.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+      setAppointments(activeAppts);
     } catch (err) {
       console.warn('Failed to fetch active appointments for banner', err.message);
     } finally {
@@ -87,7 +99,8 @@ export const ActiveAppointmentsBanner = () => {
 
       <div className="grid gap-4">
         {appointments.map(appt => {
-          const isCancelable = ['booked', 'confirmed'].includes(appt.status);
+          const todayStr = getTodayInHospitalTz();
+          const isCancelable = ['booked', 'confirmed'].includes(appt.status) && (appt.date || '') >= todayStr && appt.tab !== 'past';
           return (
             <div key={appt.id} className="bg-slate-800/80 border border-teal-500/30 rounded-2xl p-5 shadow-lg flex flex-col md:flex-row justify-between gap-4">
               <div className="space-y-2 flex-1">

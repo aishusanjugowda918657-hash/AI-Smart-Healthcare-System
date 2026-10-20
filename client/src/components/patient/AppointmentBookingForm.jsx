@@ -329,14 +329,24 @@ export const AppointmentBookingForm = () => {
             }`}
           >
             <User className="w-6 h-6 text-purple-400 mb-2" />
-            <h4 className="font-bold text-sm">Guest / Temporary</h4>
-            <p className="text-[11px] text-slate-400 mt-1">One-time appointment entry</p>
+            <h4 className="font-bold text-sm">Someone else</h4>
+            <p className="text-[11px] text-slate-400 mt-1">Guest / Temporary dependent</p>
           </div>
         </div>
 
         {patientType === 'family' && (
           <div className="bg-slate-800/50 p-4 rounded-2xl border border-slate-700 space-y-3">
-            <label className="block text-xs font-semibold text-slate-300">Select Family Member Profile</label>
+            <div className="flex items-center justify-between">
+              <label className="block text-xs font-semibold text-slate-300">Select Family Member Profile</label>
+              <a
+                href="/family"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[11px] font-bold text-teal-400 hover:text-teal-300 flex items-center gap-1"
+              >
+                + Add Family Member
+              </a>
+            </div>
             {familyMembers.length > 0 ? (
               <select
                 value={selectedFamilyId}
@@ -553,17 +563,25 @@ export const AppointmentBookingForm = () => {
 
           <div className="flex flex-col sm:flex-row gap-3 pt-2">
             <a
+              href="https://www.google.com/maps/search/emergency+hospital+near+me"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-5 py-3 bg-rose-700 hover:bg-rose-600 text-white font-bold text-xs rounded-xl text-center shadow-lg"
+            >
+              🏥 Go to Emergency
+            </a>
+            <a
               href="tel:108"
               className="px-5 py-3 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl text-center shadow-lg"
             >
-              🚨 Call Emergency Desk (108)
+              🚨 Call Emergency Desk
             </a>
             <button
               type="button"
               onClick={handleProceedToDoctors}
               className="px-5 py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs rounded-xl text-center border border-slate-700"
             >
-              Continue Anyway (Book Regular Slot)
+              Continue booking anyway
             </button>
           </div>
         </div>
@@ -985,24 +1003,80 @@ export const AppointmentBookingForm = () => {
         <p className="text-xs text-slate-400 mt-1">Review your booking details and accept the clinical disclaimer.</p>
       </div>
 
-      <div className="bg-slate-800/80 p-5 rounded-2xl border border-slate-700 space-y-3 text-xs text-slate-300">
-        <div className="flex justify-between border-b border-slate-700 pb-2">
-          <span className="text-slate-400">Department</span>
-          <span className="font-bold text-slate-100 uppercase">{formatDepartmentName(triageData?.departmentId)}</span>
-        </div>
-        <div className="flex justify-between border-b border-slate-700 pb-2">
-          <span className="text-slate-400">Date & Slot</span>
-          <span className="font-bold text-slate-100">{appointmentDate}</span>
-        </div>
-        <div className="flex justify-between border-b border-slate-700 pb-2">
-          <span className="text-slate-400">Urgency Level</span>
-          <span className="font-bold text-teal-400 uppercase">{triageData?.urgencySuggested || 'ROUTINE'}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-slate-400">Reason</span>
-          <span className="font-semibold text-slate-200">{reasonText || reasonChips.join(', ') || 'Routine Consultation'}</span>
-        </div>
-      </div>
+      {(() => {
+        const selectedDocObj = doctorOptions.find((d) => (d.doctorId || d.id) === selectedDoctorId);
+        const allSlots = [...(slotsData.cards || []), ...(slotsData.fullList || [])];
+        const selectedSlotObj = allSlots.find((s) => (s.slotId === selectedSlotId || s.id === selectedSlotId));
+        const slotTime = selectedSlotObj?.startAt || 'Scheduled Slot';
+
+        let checkInDeadline = '10 minutes before slot';
+        if (slotTime && slotTime.includes(':')) {
+          const [h, m] = slotTime.split(':').map(Number);
+          const totalM = h * 60 + m - 10;
+          if (totalM >= 0) {
+            const dh = String(Math.floor(totalM / 60)).padStart(2, '0');
+            const dm = String(totalM % 60).padStart(2, '0');
+            checkInDeadline = `${dh}:${dm} (10 minutes before slot)`;
+          }
+        }
+
+        const patientName = patientType === 'family'
+          ? (familyMembers.find(m => (m.patientUid || m.id) === selectedFamilyId)?.fullName || 'Family Member')
+          : patientType === 'temp'
+          ? (tempPatient.name || 'Temporary Patient')
+          : (patientProfile?.fullName || currentUser?.displayName || 'Patient');
+
+        const patientAge = patientType === 'family'
+          ? (familyMembers.find(m => (m.patientUid || m.id) === selectedFamilyId)?.age || 'N/A')
+          : patientType === 'temp'
+          ? (tempPatient.age ? `${tempPatient.age} years` : 'N/A')
+          : (patientProfile?.age || (patientProfile?.dob ? `${new Date().getFullYear() - new Date(patientProfile.dob).getFullYear()} years` : 'N/A'));
+
+        const patientHid = patientType === 'family'
+          ? (familyMembers.find(m => (m.patientUid || m.id) === selectedFamilyId)?.patientHealthId || familyMembers.find(m => (m.patientUid || m.id) === selectedFamilyId)?.healthId || 'N/A')
+          : (patientProfile?.patientHealthId || patientProfile?.healthId || currentUser?.patientHealthId || currentUser?.healthId || 'N/A');
+
+        return (
+          <div className="bg-slate-800/80 p-5 rounded-2xl border border-slate-700 space-y-3 text-xs text-slate-300">
+            <div className="flex justify-between border-b border-slate-700 pb-2">
+              <span className="text-slate-400">Patient Name</span>
+              <span className="font-bold text-slate-100">{patientName}</span>
+            </div>
+            <div className="flex justify-between border-b border-slate-700 pb-2">
+              <span className="text-slate-400">Age</span>
+              <span className="font-bold text-slate-100">{patientAge}</span>
+            </div>
+            <div className="flex justify-between border-b border-slate-700 pb-2">
+              <span className="text-slate-400">Health ID (UHID)</span>
+              <span className="font-mono font-bold text-teal-400">{patientHid}</span>
+            </div>
+            <div className="flex justify-between border-b border-slate-700 pb-2">
+              <span className="text-slate-400">Doctor</span>
+              <span className="font-bold text-slate-100">{selectedDocObj?.name || 'Selected Doctor'}</span>
+            </div>
+            <div className="flex justify-between border-b border-slate-700 pb-2">
+              <span className="text-slate-400">Department</span>
+              <span className="font-bold text-slate-100 uppercase">{formatDepartmentName(triageData?.departmentId)}</span>
+            </div>
+            <div className="flex justify-between border-b border-slate-700 pb-2">
+              <span className="text-slate-400">Date &amp; Time</span>
+              <span className="font-bold text-slate-100">{appointmentDate} at {slotTime}</span>
+            </div>
+            <div className="flex justify-between border-b border-slate-700 pb-2">
+              <span className="text-amber-400 font-semibold">Check-in Deadline</span>
+              <span className="font-bold text-amber-300">{checkInDeadline}</span>
+            </div>
+            <div className="flex justify-between border-b border-slate-700 pb-2">
+              <span className="text-slate-400">Urgency Level</span>
+              <span className="font-bold text-teal-400 uppercase">{triageData?.urgencySuggested || 'ROUTINE'}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400">Reason</span>
+              <span className="font-semibold text-slate-200">{reasonText || reasonChips.join(', ') || 'Routine Consultation'}</span>
+            </div>
+          </div>
+        );
+      })()}
 
       {bookingError && (
         <div className="p-3 bg-rose-950/60 border border-rose-500 text-rose-200 text-xs font-bold rounded-xl">
@@ -1061,7 +1135,7 @@ export const AppointmentBookingForm = () => {
           onClick={handleFinalBooking}
           className="flex items-center gap-2 px-6 py-3 bg-teal-500 hover:bg-teal-400 disabled:opacity-40 text-slate-950 font-bold text-sm rounded-xl transition-all shadow-lg shadow-teal-500/20"
         >
-          {bookingSubmitting ? 'Confirming...' : 'Book Appointment'}
+          {bookingSubmitting ? 'Confirming...' : 'Confirm Booking'}
           <CheckCircle className="w-4 h-4" />
         </button>
       </div>
@@ -1114,6 +1188,7 @@ export const AppointmentBookingForm = () => {
               ['Department', formatDepartmentName(bookedAppointment.departmentId)],
               ['Date', bookedAppointment.date],
               ['Time', bookedAppointment.bookedStartAt && bookedAppointment.bookedStartAt !== 'NOW' ? bookedAppointment.bookedStartAt : 'Walk-in Queue'],
+              ['Live Wait Estimate', bookedAppointment.estimatedWaitMin ? `${bookedAppointment.estimatedWaitMin} minutes` : 'Approx. 15-20 min expected wait'],
               ['Visit Type', bookedAppointment.visitType || 'New'],
               ['Clinical Urgency', bookedAppointment.urgencySuggested || 'Routine'],
               ['Status', (bookedAppointment.status || 'booked').toUpperCase()],
@@ -1123,6 +1198,11 @@ export const AppointmentBookingForm = () => {
                 <span className="font-bold text-slate-100 text-right font-mono text-[11px] break-all">{value || '\u2014'}</span>
               </div>
             ))}
+          </div>
+
+          {/* SHORT Disclaimer (PRD / M3 requirement: disclaimer appears ONLY at step 6 and on details page) */}
+          <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-700/60 text-[11px] text-slate-400 text-center">
+            ⚠️ <span className="font-semibold text-slate-300">Notice:</span> Waiting times are dynamic estimates. If your condition worsens or emergency symptoms develop, seek immediate emergency care or call 108.
           </div>
         </div>
       )}

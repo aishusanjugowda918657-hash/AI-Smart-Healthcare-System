@@ -7,7 +7,7 @@ import Badge from './Badge';
 
 export const Navbar = () => {
   const { currentUser, userRole, loginSynced, patientProfile, logout } = useAuth();
-  const { notifications, unreadCount, markAsRead } = useNotifications();
+  const { notifications, unreadCount, markAsRead, markRead, markAllRead } = useNotifications();
   const [showNotifMenu, setShowNotifMenu] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
@@ -78,7 +78,17 @@ export const Navbar = () => {
                 <div className="absolute right-0 mt-2 w-80 bg-white rounded-2xl shadow-xl border border-slate-200 p-4 z-50 animate-in fade-in slide-in-from-top-2">
                   <div className="flex items-center justify-between pb-2 border-b border-slate-100 mb-2">
                     <h4 className="font-bold text-xs text-slate-800 uppercase tracking-wider">Notifications</h4>
-                    <Badge variant="primary">{unreadCount} New</Badge>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="primary">{unreadCount} New</Badge>
+                      {unreadCount > 0 && (
+                        <button
+                          onClick={markAllRead}
+                          className="text-[10px] text-indigo-600 hover:text-indigo-800 font-semibold cursor-pointer"
+                        >
+                          Mark all read
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   <div className="max-h-60 overflow-y-auto divide-y divide-slate-100">
@@ -88,11 +98,23 @@ export const Navbar = () => {
                       notifications.map((n) => (
                         <div
                           key={n.id}
-                          onClick={() => markAsRead(n.id)}
-                          className={`py-2 px-1 cursor-pointer hover:bg-slate-50 transition-colors ${!n.read ? 'bg-indigo-50/50' : ''}`}
+                          className={`py-2 px-1 flex items-center justify-between gap-2 hover:bg-slate-50 transition-colors ${!n.read ? 'bg-indigo-50/50' : ''}`}
                         >
-                          <p className="text-xs font-semibold text-slate-800">{n.title}</p>
-                          <p className="text-[11px] text-slate-500 line-clamp-2">{n.message}</p>
+                          <div className="flex-1">
+                            <p className="text-xs font-semibold text-slate-800">{n.title}</p>
+                            <p className="text-[11px] text-slate-500 line-clamp-2">{n.message}</p>
+                          </div>
+                          {!n.read && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                (markRead || markAsRead)(n.id);
+                              }}
+                              className="text-[10px] px-2 py-0.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded font-semibold shrink-0 cursor-pointer"
+                            >
+                              Mark read
+                            </button>
+                          )}
                         </div>
                       ))
                     )}

@@ -46,4 +46,19 @@ export const calculateAge = (dobString) => {
   return age >= 0 ? age : 0;
 };
 
+export const getTodayInHospitalTz = () => {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(new Date());
+};
+
+export const isPastAppointment = (dateString) => {
+  if (!dateString) return false;
+  const todayStr = getTodayInHospitalTz();
+  return String(dateString).trim() < todayStr;
+};
+
 

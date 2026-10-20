@@ -30,6 +30,13 @@ describe('Phase 11: F16 Doctor Leave & Waitlist Auto-Fill Tests', () => {
     db = assertDbConnected();
 
     // Seed test doctor & slots
+    const oldOffers = await db.collection('offers').where('appointmentId', '==', 'appt-f16-affected').get();
+    if (!oldOffers.empty) {
+      const b = db.batch();
+      oldOffers.docs.forEach(d => b.delete(d.ref));
+      await b.commit();
+    }
+
     await db.collection('doctors').doc('doc-f16-101').set({
       id: 'doc-f16-101',
       doctorId: 'doc-f16-101',

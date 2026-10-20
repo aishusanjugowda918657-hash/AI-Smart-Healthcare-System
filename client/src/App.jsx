@@ -75,6 +75,7 @@ export const App = () => {
       <AuthProvider>
         <NotificationProvider>
           <HealthBanner />
+          <PwaInstallPrompt />
           <Router>
             <Routes>
               {/* Public Entry Routes — OUTSIDE Dashboard Layout (No Sidebar, No Navbar with user info) */}

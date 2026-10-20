@@ -114,10 +114,13 @@ export async function leaveRescheduleJob() {
         options.push(option3);
 
         const expiresAt = new Date(now.getTime() + 2 * 60 * 60 * 1000).toISOString();
-        const autoBookDeadline = new Date(Math.min(
+        const apptTimestamp = new Date(`${leaveDate}T${appt.timeSlot || '09:00'}:00`).getTime();
+        const minDeadline = now.getTime() + 15 * 60 * 1000;
+        const targetDeadline = Math.min(
           now.getTime() + 6 * 60 * 60 * 1000,
-          new Date(`${leaveDate}T${appt.timeSlot || '09:00'}:00`).getTime() - 2 * 60 * 60 * 1000
-        )).toISOString();
+          apptTimestamp - 2 * 60 * 60 * 1000
+        );
+        const autoBookDeadline = new Date(Math.max(minDeadline, targetDeadline)).toISOString();
 
         // Create offers document
         const offerRef = db.collection('offers').doc();
