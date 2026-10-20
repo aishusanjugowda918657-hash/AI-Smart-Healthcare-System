@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: ai-healthcare-backend
+    runtime: node
+    rootDir: server
+    buildCommand: npm install --omit=dev
+    startCommand: node server.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: FLAG_AI
+        value: false
+      - key: FLAG_PUSH
+        value: false
+      - key: FLAG_SCHEDULER
+        value: false
+      # Firebase — paste from your serviceAccountKey.json in Render Dashboard > Environment
+      - key: VITE_FIREBASE_PROJECT_ID
+        value: ai-basedsmarthealthcaresystem
+      - key: FIREBASE_CLIENT_EMAIL
+        sync: false   # set in Render dashboard
+      - key: FIREBASE_PRIVATE_KEY
+        sync: false   # set in Render dashboard (the full -----BEGIN PRIVATE KEY----- block)
+      - key: FIREBASE_STORAGE_BUCKET
+        value: ai-basedsmarthealthcaresystem.firebasestorage.app
+      # CORS — add your Render frontend URL and Firebase Hosting URL
+      - key: CLIENT_ORIGIN
+        value: https://ai-basedsmarthealthcaresystem.web.app,https://ai-basedsmarthealthcaresystem.firebaseapp.com
+      # Secrets — generate your own strong random strings
+      - key: INTERNAL_TICK_SECRET
+        sync: false   # set in Render dashboard
+      - key: ACTION_TOKEN_SECRET
+        sync: false   # set in Render dashboard
+      # Gemini (optional — leave empty to disable AI features)
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-3.8-flash

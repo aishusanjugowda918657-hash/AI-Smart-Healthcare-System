@@ -1,0 +1,34 @@
+# Never include secrets or local config in the image
+server/config/serviceAccountKey.json
+server/.env
+server/.env.*
+
+# Dev artifacts
+node_modules
+**/node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Client — only the server runs in the container
+client/
+
+# Firebase emulator data / cache
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+
+# Git
+.git
+.gitignore
+*.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Tests
+**/tests/
+**/*.test.js
+**/*.spec.js
