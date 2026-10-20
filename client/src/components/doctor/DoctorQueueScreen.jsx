@@ -22,7 +22,7 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
   const { currentUser, userRole, loading: authLoading } = useAuth();
 
   // Canonical authenticated doctor identifier (never default blindly to DOC-001)
-  const doctorId = propDoctorId || currentUser?.doctorId || null;
+  const doctorId = propDoctorId || currentUser?.doctorId || currentUser?.uid || null;
   const doctorName = propDoctorName || currentUser?.fullName || currentUser?.name || currentUser?.displayName || 'Doctor';
 
   const todayStr = new Date().toISOString().split('T')[0];

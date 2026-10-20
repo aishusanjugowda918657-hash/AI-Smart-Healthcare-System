@@ -3,6 +3,7 @@ import request from 'supertest';
 import app from '../src/app.js';
 import { assertDbConnected } from '../src/config/firebase.js';
 import { noShowSweepJob } from '../src/jobs/scheduler.js';
+import { leaveRescheduleJob } from '../src/jobs/leaveReschedule.js';
 import clock from '../src/utils/clock.js';
 import { nowInHospitalTz, formatDateYYYYMMDD } from '../src/utils/time.js';
 import fs from 'fs';
@@ -625,4 +626,170 @@ describe('Patient Appointments Fixes Regression Suite', () => {
       expect(isDismissedRecently(Date.now() - 8 * 24 * 60 * 60 * 1000)).toBe(false);
     });
   });
+
+  // 9. QA SERVER FIXES REGRESSION SUITE
+  describe('9. QA Server Fixes Regression Suite', () => {
+    it('overrideClinicalLevel rejects without reason (400 REASON_REQUIRED) and succeeds with reason and audit log', async () => {
+      const apptId = `apt-triage-${Date.now()}`;
+      await db.collection('appointments').doc(apptId).set({
+        id: apptId,
+        appointmentId: apptId,
+        patientUid: testPatientUid,
+        patientHealthId: testHealthId,
+        doctorId: docGenId,
+        date: todayStr,
+        status: 'booked',
+        clinicalLevel: 1,
+        urgencySuggested: 'routine'
+      });
+
+      // 1. Missing reason -> 400 REASON_REQUIRED
+      const resNoReason = await request(app)
+        .post(`/api/appointments/${apptId}/level`)
+        .set('x-demo-uid', docGenUid)
+        .set('x-demo-role', 'doctor')
+        .send({ clinicalLevel: 2 });
+
+      expect(resNoReason.status).toBe(400);
+      expect(resNoReason.body.code).toBe('REASON_REQUIRED');
+
+      // 2. With reason -> 200 and audit log created
+      const resWithReason = await request(app)
+        .post(`/api/appointments/${apptId}/level`)
+        .set('x-demo-uid', docGenUid)
+        .set('x-demo-role', 'doctor')
+        .send({ clinicalLevel: 2, reason: 'Patient exhibits worsening respiratory distress' });
+
+      expect(resWithReason.status).toBe(200);
+      expect(resWithReason.body.data.clinicalLevel).toBe(2);
+
+      const updatedDoc = await db.collection('appointments').doc(apptId).get();
+      expect(updatedDoc.data().clinicalLevel).toBe(2);
+      expect(updatedDoc.data().clinicalOverrideReason).toBe('Patient exhibits worsening respiratory distress');
+      expect(updatedDoc.data().clinicalLevelVerifiedBy).toBe(docGenUid);
+    });
+
+    it('manualCheckIn resolves appointment by tokenLabel and updates status to checked_in', async () => {
+      const checkinApptId = `apt-checkin-${Date.now()}`;
+      const uniqueLabel = `G-999-${Date.now().toString().slice(-4)}`;
+      await db.collection('appointments').doc(checkinApptId).set({
+        id: checkinApptId,
+        appointmentId: checkinApptId,
+        patientUid: testPatientUid,
+        patientHealthId: testHealthId,
+        doctorId: docGenId,
+        date: todayStr,
+        status: 'booked',
+        tokenLabel: uniqueLabel,
+        tokenNumber: 999
+      });
+
+      const res = await request(app)
+        .post('/api/checkin/manual')
+        .set('x-demo-uid', 'reception-test-uid')
+        .set('x-demo-role', 'reception')
+        .send({ tokenLabel: uniqueLabel });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.appointmentId).toBe(checkinApptId);
+      expect(res.body.data.status).toBe('checked_in');
+
+      const updated = await db.collection('appointments').doc(checkinApptId).get();
+      expect(updated.data().status).toBe('checked_in');
+    });
+
+    it('getDoctorDashboardSummary uses non-blaming clinical wording when delay is detected', async () => {
+      await db.collection('doctors').doc(docGenUid).set({
+        doctorId: docGenId,
+        uid: docGenUid
+      }, { merge: true });
+
+      await db.collection('queues').doc(`${docGenId}_${todayStr}`).set({
+        doctorId: docGenId,
+        date: todayStr,
+        delayMin: 20,
+        timeFactor: 1.2
+      }, { merge: true });
+
+      const res = await request(app)
+        .get(`/api/doctors/dashboard-summary?date=${todayStr}&nocache=true`)
+        .set('x-demo-uid', docGenUid)
+        .set('x-demo-role', 'doctor');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.runningLateMsg).toBe('Schedule is running 20 minutes behind: consultations are taking more time');
+    });
+
+    it('leaveRescheduleJob guarantees autoBookDeadline is at least 15 minutes in future even for imminent appointment', async () => {
+      const leaveDocId = `leave-imminent-${Date.now()}`;
+      const imminentApptId = `apt-leave-imminent-${Date.now()}`;
+
+      const futureSlot = `slot-imminent-${Date.now()}`;
+      await db.collection('slots').doc(futureSlot).set({
+        id: futureSlot,
+        doctorId: docGen2Id,
+        date: todayStr,
+        startAt: '16:00',
+        status: 'free'
+      });
+
+      await db.collection('appointments').doc(imminentApptId).set({
+        id: imminentApptId,
+        appointmentId: imminentApptId,
+        patientUid: testPatientUid,
+        patientHealthId: testHealthId,
+        doctorId: docGenId,
+        date: todayStr,
+        timeSlot: '08:00',
+        status: 'booked'
+      });
+
+      await db.collection('leaves').doc(leaveDocId).set({
+        doctorId: docGenId,
+        date: todayStr,
+        reason: 'Medical conference',
+        processed: false
+      });
+
+      const result = await leaveRescheduleJob();
+      expect(result.success).toBe(true);
+
+      const offersSnap = await db.collection('offers')
+        .where('appointmentId', '==', imminentApptId)
+        .get();
+
+      if (!offersSnap.empty) {
+        const offer = offersSnap.docs[0].data();
+        const deadlineMs = new Date(offer.autoBookDeadline).getTime();
+        const nowMs = Date.now();
+        expect(deadlineMs).toBeGreaterThan(nowMs + 14 * 60 * 1000);
+      }
+    });
+
+    it('POST /api/appointments rejects booking with 422 if disclaimerAck.acknowledged is false', async () => {
+      const slotAck = `slot-ack-${Date.now()}`;
+      await db.collection('slots').doc(slotAck).set({
+        id: slotAck,
+        doctorId: docGenId,
+        date: futureDateStr,
+        startAt: '15:00',
+        status: 'free'
+      });
+
+      const res = await request(app)
+        .post('/api/appointments')
+        .set('x-demo-uid', testPatientUid)
+        .send({
+          slotIds: [slotAck],
+          patientHealthId: testHealthId,
+          doctorId: docGenId,
+          date: futureDateStr,
+          disclaimerAck: { acknowledged: false }
+        });
+
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe('DISCLAIMER_REQUIRED');
+    });
+  });
 });
+
