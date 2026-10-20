@@ -114,14 +114,15 @@ export const HealthIdCard = ({ patient: propPatient }) => {
     setQrError(false);
 
     import('qrcode')
-      .then((QRCode) =>
-        QRCode.default.toDataURL(healthId, {
+      .then((QRCodeModule) => {
+        const qrLib = QRCodeModule.default || QRCodeModule;
+        return qrLib.toDataURL(healthId, {
           width: 160,
           margin: 1,
           color: { dark: '#0f172a', light: '#ffffff' },
           errorCorrectionLevel: 'M'
-        })
-      )
+        });
+      })
       .then((url) => {
         if (!cancelled) {
           setQrDataUrl(url);

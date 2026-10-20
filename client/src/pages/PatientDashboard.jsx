@@ -3,10 +3,12 @@ import { useAuth } from '../context/AuthContext';
 import { StatCard } from '../components/common/StatCard';
 import { PatientWelcomeOverlay } from '../components/patient/PatientWelcomeOverlay';
 import FamilyMembersManager from '../components/patient/FamilyMembersManager';
+import { HealthIdCard } from '../components/patient/HealthIdCard';
 import API from '../services/api';
 import { Calendar, Clock, Pill, FileText, User, Phone, Heart, Shield, Bot, AlertCircle, CheckCircle2, XCircle, Hourglass, Stethoscope } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import QRCode from 'qrcode';
+import { getTodayInHospitalTz } from '../utils/formatters';
 
 export const PatientDashboard = () => {
   const { currentUser, patientProfile, welcomeAnimation, dismissWelcome } = useAuth();
@@ -34,14 +36,62 @@ export const PatientDashboard = () => {
       ]);
 
       if (apptsRes.status === 'fulfilled' && apptsRes.value.data?.data) {
-        const appts = apptsRes.value.data.data;
+        const rawAppts = apptsRes.value.data.data;
+        const todayStr = getTodayInHospitalTz();
+
+        const CANCELLED_STATUSES = ['cancelled', 'cancelled_by_patient', 'cancelled_by_doctor', 'cancelled_by_clinic'];
+        const COMPLETED_STATUSES = ['completed', 'no_show'];
+        const ACTIVE_STATUSES = ['booked', 'confirmed', 'checked_in', 'waiting', 'called', 'in_room', 'on_the_way', 'nearby', 'rejoined'];
+
+        const normalized = rawAppts.map((a) => {
+          const statusLower = (a.status || '').toLowerCase();
+          const isPast = (a.date || '') < todayStr;
+          const isCancelled = CANCELLED_STATUSES.includes(statusLower);
+          const isCompleted = COMPLETED_STATUSES.includes(statusLower);
+
+          let tab = 'past';
+          let displayStatus = a.displayStatus || a.status;
+          let isMissed = false;
+
+          if (isCancelled) {
+            tab = 'cancelled';
+            displayStatus = 'Cancelled';
+          } else if (isPast) {
+            tab = 'past';
+            if (['booked', 'confirmed', 'not_arrived'].includes(statusLower)) {
+              displayStatus = 'Missed';
+              isMissed = true;
+            }
+          } else if (isCompleted) {
+            tab = 'past';
+            displayStatus = a.status;
+          } else if (ACTIVE_STATUSES.includes(statusLower)) {
+            tab = 'upcoming';
+            displayStatus = a.status;
+          }
+
+          return {
+            ...a,
+            tab,
+            isPast,
+            displayStatus,
+            isMissed,
+            canCancel: tab === 'upcoming' && !isPast && ['booked', 'confirmed'].includes(statusLower),
+            canRebook: tab === 'past' || isPast || isMissed
+          };
+        });
+
         // Sort by date desc
-        const sorted = [...appts].sort((a, b) => new Date(b.date) - new Date(a.date));
+        const sorted = [...normalized].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
         setAppointments(sorted);
-        setAppointmentsCount(sorted.filter(a => ['booked', 'confirmed'].includes(a.status)).length);
-        
-        // Find next active appointment
-        const next = sorted.find(a => ['booked', 'confirmed', 'checked_in', 'waiting', 'called', 'in_room'].includes(a.status));
+
+        // Upcoming count strictly from today or future active appointments
+        const upcomingList = sorted.filter((a) => a.tab === 'upcoming' && !a.isPast);
+        setAppointmentsCount(upcomingList.length);
+
+        // Next appointment strictly from upcoming list sorted by date asc
+        const sortedAsc = [...upcomingList].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+        const next = sortedAsc.find((a) => ['booked', 'confirmed', 'checked_in', 'waiting', 'called', 'in_room'].includes((a.status || '').toLowerCase()));
         setNextAppointment(next || null);
       }
 
@@ -103,7 +153,7 @@ export const PatientDashboard = () => {
   };
 
   const name = patientProfile?.fullName || currentUser?.displayName || currentUser?.email?.split('@')[0] || 'Patient';
-  const healthId = patientProfile?.patientHealthId || currentUser?.patientHealthId || 'HID-2026-00001';
+  const healthId = patientProfile?.healthId || patientProfile?.patientHealthId || currentUser?.healthId || currentUser?.patientHealthId || '';
   const ageStr = patientProfile?.age || (patientProfile?.dob ? `${new Date().getFullYear() - new Date(patientProfile.dob).getFullYear()} years` : 'Not specified');
   const genderStr = patientProfile?.gender ? (patientProfile.gender.charAt(0).toUpperCase() + patientProfile.gender.slice(1)) : 'Not specified';
   const bloodGroup = patientProfile?.bloodGroup || 'Not specified';
@@ -113,15 +163,15 @@ export const PatientDashboard = () => {
 
   const activeStatuses = ['booked', 'confirmed', 'checked_in', 'waiting', 'called', 'in_room'];
 
-  const displayedAppointments = appointments.filter(a => {
+  const displayedAppointments = appointments.filter((a) => {
     if (activeTab === 'upcoming') {
-      return a.tab === 'upcoming' || (!a.tab && activeStatuses.includes(a.status));
+      return a.tab === 'upcoming' && !a.isPast;
     }
     if (activeTab === 'past') {
-      return a.tab === 'past' || (!a.tab && (a.status === 'completed' || a.status === 'no_show'));
+      return a.tab === 'past' || a.isPast;
     }
     if (activeTab === 'cancelled') {
-      return a.tab === 'cancelled' || (!a.tab && a.status === 'cancelled');
+      return a.tab === 'cancelled';
     }
     return false;
   });
@@ -162,6 +212,9 @@ export const PatientDashboard = () => {
           <span>Book Appointment</span>
         </Link>
       </div>
+
+      {/* Digital Health ID Card with PHI and QR */}
+      <HealthIdCard />
 
       {/* Authentic Patient Profile Details Card */}
       <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-4">

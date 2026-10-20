@@ -12,18 +12,19 @@ export const Login = () => {
   const [infoMessage, setInfoMessage] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const { currentUser, userRole, loginSynced, login, noRoleError, clearStaleSession } = useAuth();
+  const { currentUser, userRole, loginSynced, login, noRoleError, clearStaleSession, loading: authLoading } = useAuth();
   const navigate = useNavigate();
 
-  // On /login, if a valid session exists, redirect to role home; if not, clear stale data
+  // On /login, if a valid session exists, redirect to role home; if not authenticated, clear stale data
   useEffect(() => {
-    if (currentUser && userRole && loginSynced && ROLE_ROUTES[userRole]) {
+    if (authLoading) return;
+    if (currentUser && userRole && ROLE_ROUTES[userRole]) {
       const homeRoute = ROLE_ROUTES[userRole];
       navigate(homeRoute, { replace: true });
-    } else {
+    } else if (!currentUser) {
       clearStaleSession();
     }
-  }, [currentUser, userRole, loginSynced, navigate]);
+  }, [currentUser, userRole, authLoading, navigate]);
 
   const handleLogin = async (e) => {
     e.preventDefault();

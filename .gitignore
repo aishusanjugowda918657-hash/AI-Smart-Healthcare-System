@@ -41,4 +41,7 @@ Thumbs.db
 
 # Test State
 .realtest-state.json
+server/.local/
+docs/qa-screens/
+
 

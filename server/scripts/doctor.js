@@ -1,13 +1,4 @@
-import admin from 'firebase-admin';
-
-// Initialize Firebase Admin
-if (!admin.apps.length) {
-  admin.initializeApp({
-    projectId: process.env.GCLOUD_PROJECT || 'demo-project'
-  });
-}
-
-const db = admin.firestore();
+import { db } from '../src/config/firebase.js';
 
 async function runDoctor() {
   console.log('Running Doctor checks...');

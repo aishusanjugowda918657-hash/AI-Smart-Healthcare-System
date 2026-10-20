@@ -253,6 +253,10 @@ export const AuthProvider = ({ children }) => {
     clearStaleSession();
   };
 
+  useEffect(() => {
+    window.__smartcare_logout = logout;
+  }, []);
+
   const dismissWelcome = () => {
     setWelcomeAnimation({ show: false, isNew: false, name: '' });
   };
