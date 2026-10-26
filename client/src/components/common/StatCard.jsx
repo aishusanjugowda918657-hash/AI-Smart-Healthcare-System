@@ -10,16 +10,16 @@ export const StatCard = ({ title, value, subtitle, icon: Icon, color = 'blue' })
   };
 
   return (
-    <div className="bg-white rounded-xl p-5 border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">{title}</p>
-          <h3 className="text-2xl font-bold text-slate-800 mt-1">{value}</h3>
-          {subtitle && <p className="text-xs text-slate-500 mt-1">{subtitle}</p>}
+    <div className="bg-white rounded-xl p-4 sm:p-5 border border-slate-200 shadow-sm hover:shadow-md transition-shadow min-w-0">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-[11px] sm:text-xs font-semibold uppercase tracking-wider text-slate-500 truncate">{title}</p>
+          <h3 className="text-xl sm:text-2xl font-bold text-slate-800 mt-1 truncate">{value}</h3>
+          {subtitle && <p className="text-xs text-slate-500 mt-1 line-clamp-2 break-words">{subtitle}</p>}
         </div>
         {Icon && (
-          <div className={`p-3 rounded-lg border ${colorMap[color] || colorMap.blue}`}>
-            <Icon className="w-6 h-6" />
+          <div className={`p-2.5 sm:p-3 rounded-lg border shrink-0 ${colorMap[color] || colorMap.blue}`}>
+            <Icon className="w-5 h-5 sm:w-6 sm:h-6" />
           </div>
         )}
       </div>

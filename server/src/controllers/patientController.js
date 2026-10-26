@@ -172,6 +172,13 @@ export const getMyPatientProfile = async (req, res, next) => {
       return res.status(404).json(formatErrorResponse('NOT_FOUND', 'Patient profile not found. Please complete profile registration.'));
     }
 
+    if (data.migratedTo) {
+      const migratedSnap = await db.collection('patients').doc(data.migratedTo).get();
+      if (migratedSnap.exists) {
+        data = migratedSnap.data();
+      }
+    }
+
     const computedYears = calculateAge(data.dob);
     data.age = computedYears !== null ? `${computedYears} years` : '';
 
@@ -191,9 +198,14 @@ export const getPatientByHealthId = async (req, res, next) => {
 
     let snapshot = await db.collection('patients').doc(healthId).get();
     if (!snapshot.exists) {
-      const qSnap = await db.collection('patients').where('patientHealthId', '==', healthId).limit(1).get();
+      const qSnap = await db.collection('patients').where('healthId', '==', healthId).limit(1).get();
       if (!qSnap.empty) {
         snapshot = qSnap.docs[0];
+      } else {
+        const qSnap2 = await db.collection('patients').where('patientHealthId', '==', healthId).limit(1).get();
+        if (!qSnap2.empty) {
+          snapshot = qSnap2.docs[0];
+        }
       }
     }
 
@@ -201,7 +213,14 @@ export const getPatientByHealthId = async (req, res, next) => {
       return res.status(404).json(formatErrorResponse('NOT_FOUND', `Patient with Health ID '${healthId}' not found.`));
     }
 
-    const patientData = snapshot.data();
+    let patientData = snapshot.data();
+    if (patientData.migratedTo) {
+      const migratedDoc = await db.collection('patients').doc(patientData.migratedTo).get();
+      if (migratedDoc.exists) {
+        patientData = migratedDoc.data();
+      }
+    }
+
     const computedYears = calculateAge(patientData.dob);
     patientData.age = computedYears !== null ? `${computedYears} years` : '';
 
@@ -886,3 +905,65 @@ export const getPatientActivityHistory = async (req, res, next) => {
     next(error);
   }
 };
+
+/**
+ * Public Instant E-Records Endpoint
+ * Unauthenticated, safe view accessible when scanning QR code on SmartCare AI Patient ID Card
+ */
+export const getPublicInstantRecords = async (req, res, next) => {
+  try {
+    const { healthId } = req.params;
+    if (!healthId) {
+      return res.status(400).json(formatErrorResponse('VALIDATION_ERROR', 'Health ID is required.'));
+    }
+
+    const db = assertDbConnected();
+    let patientDoc = await db.collection('patients').doc(healthId).get();
+    if (!patientDoc.exists) {
+      const qSnap = await db.collection('patients')
+        .where('healthId', '==', healthId)
+        .limit(1)
+        .get();
+      if (!qSnap.empty) {
+        patientDoc = qSnap.docs[0];
+      } else {
+        const qSnap2 = await db.collection('patients')
+          .where('patientHealthId', '==', healthId)
+          .limit(1)
+          .get();
+        if (!qSnap2.empty) patientDoc = qSnap2.docs[0];
+      }
+    }
+
+    if (!patientDoc || !patientDoc.exists) {
+      return res.status(404).json(formatErrorResponse('NOT_FOUND', 'Patient record not found for this Health ID.'));
+    }
+
+    let data = patientDoc.data();
+    if (data.migratedTo) {
+      const migratedDoc = await db.collection('patients').doc(data.migratedTo).get();
+      if (migratedDoc.exists) {
+        data = migratedDoc.data();
+      }
+    }
+
+    const computedYears = calculateAge(data.dob);
+
+    return res.status(200).json(formatSuccessResponse({
+      healthId: data.healthId || data.patientHealthId || healthId,
+      name: data.name || data.fullName || 'Verified Patient',
+      dob: data.dob || '',
+      age: computedYears !== null ? `${computedYears} years` : '',
+      gender: data.gender || 'Not specified',
+      bloodGroup: data.bloodGroup || 'Not specified',
+      phone: data.phone || data.mobileNumber || '',
+      emergencyContact: data.emergencyContact || null,
+      allergies: data.allergies || [],
+      conditions: data.conditions || [],
+      verified: true
+    }));
+  } catch (error) {
+    next(error);
+  }
+};
+

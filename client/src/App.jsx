@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate, Outlet } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { NotificationProvider } from './context/NotificationContext';
 import { LanguageProvider } from './context/LanguageContext';
@@ -48,6 +48,7 @@ import { PharmacyDashboard } from './pages/Placeholders';
 import { ReceptionDashboard } from './pages/ReceptionDashboard';
 import { NurseDashboard } from './pages/NurseDashboard';
 import DisplayBoardPage from './pages/DisplayBoardPage';
+import InstantERecordsPage from './pages/InstantERecordsPage';
 
 import ManageDoctors from './components/admin/ManageDoctors';
 import ManageDepartments from './components/admin/ManageDepartments';
@@ -57,12 +58,20 @@ import SystemAnalyticsCharts from './components/admin/SystemAnalyticsCharts';
 
 // Dashboard layout wrapper used ONLY for role pages
 const DashboardLayout = () => {
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const location = useLocation();
+
+  // Close mobile drawer when route changes
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [location.pathname]);
+
   return (
     <div className="min-h-screen flex flex-col bg-slate-50">
-      <Navbar />
-      <div className="flex-1 max-w-7xl w-full mx-auto flex">
-        <Sidebar />
-        <main className="flex-1 p-6 overflow-x-hidden">
+      <Navbar onToggleMobileMenu={() => setMobileMenuOpen((prev) => !prev)} mobileMenuOpen={mobileMenuOpen} />
+      <div className="flex-1 max-w-7xl w-full mx-auto flex min-w-0">
+        <Sidebar mobileOpen={mobileMenuOpen} onClose={() => setMobileMenuOpen(false)} />
+        <main className="flex-1 p-3.5 sm:p-6 overflow-x-hidden min-w-0 w-full">
           <Outlet />
         </main>
       </div>
@@ -89,6 +98,8 @@ export const App = () => {
               <Route path="/display/:department" element={<DisplayBoardPage />} />
               <Route path="/display/:departmentId" element={<DisplayBoardPage />} />
               <Route path="/display" element={<DisplayBoardPage />} />
+              <Route path="/e-records/:healthId" element={<InstantERecordsPage />} />
+              <Route path="/records/:healthId" element={<InstantERecordsPage />} />
 
               {/* Redirects for legacy entry & role selection routes */}
               <Route path="/role-selection" element={<Navigate to="/login" replace />} />

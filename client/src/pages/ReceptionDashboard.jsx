@@ -21,7 +21,8 @@ export const ReceptionDashboard = () => {
   const [walkinError, setWalkinError] = useState('');
 
   // Queue lists
-  const [queueItems, setQueueItems] = useState([]);
+  const [notArrivedList, setNotArrivedList] = useState([]);
+  const [lateOrMissedList, setLateOrMissedList] = useState([]);
   const [recentlyCancelled, setRecentlyCancelled] = useState([]);
   const [loadingList, setLoadingList] = useState(false);
   const [actionError, setActionError] = useState('');
@@ -31,11 +32,18 @@ export const ReceptionDashboard = () => {
     setLoadingList(true);
     setActionError('');
     try {
-      // 1. Fetch today's doctor appointments/queue items
-      const today = new Date().toISOString().split('T')[0];
-      const qRes = await API.get('/appointments/recently-cancelled');
-      if (qRes.data?.data) {
-        setRecentlyCancelled(qRes.data.data);
+      const [overviewRes, cancelledRes] = await Promise.allSettled([
+        API.get('/queue/reception-overview'),
+        API.get('/appointments/recently-cancelled')
+      ]);
+
+      if (overviewRes.status === 'fulfilled' && overviewRes.value.data?.data) {
+        setNotArrivedList(overviewRes.value.data.data.notArrived || []);
+        setLateOrMissedList(overviewRes.value.data.data.lateOrMissed || []);
+      }
+
+      if (cancelledRes.status === 'fulfilled' && cancelledRes.value.data?.data) {
+        setRecentlyCancelled(cancelledRes.value.data.data);
       }
     } catch (err) {
       console.warn('Error loading reception data:', err.message);
@@ -78,6 +86,18 @@ export const ReceptionDashboard = () => {
     }
   };
 
+  const handleCheckinPatient = async (apptId) => {
+    setActionError('');
+    setActionSuccess('');
+    try {
+      await API.post('/tokens/checkin', { appointmentId: apptId, staffVerified: true });
+      setActionSuccess('Patient checked in and queued successfully.');
+      fetchReceptionData();
+    } catch (err) {
+      setActionError(err.response?.data?.error?.message || err.response?.data?.message || 'Failed to check in patient.');
+    }
+  };
+
   const handleRestoreAppointment = async (apptId) => {
     setActionError('');
     setActionSuccess('');
@@ -102,12 +122,28 @@ export const ReceptionDashboard = () => {
     }
   };
 
+  const handleMarkNoShow = async (apptId) => {
+    if (!window.confirm('Mark this appointment as No-Show?')) return;
+    setActionError('');
+    setActionSuccess('');
+    try {
+      await API.patch(`/appointments/${apptId}/status`, {
+        status: 'NO_SHOW',
+        reason: 'Marked no-show by reception'
+      });
+      setActionSuccess('Appointment marked as No-Show.');
+      fetchReceptionData();
+    } catch (err) {
+      setActionError(err.response?.data?.error?.message || err.response?.data?.message || 'Failed to mark No-Show.');
+    }
+  };
+
   const handleRejoinQueue = async (apptId) => {
     setActionError('');
     setActionSuccess('');
     try {
       await API.post(`/appointments/${apptId}/rejoin`);
-      setActionSuccess('Patient rejoined queue.');
+      setActionSuccess('Patient successfully rejoined the queue after waiting patients.');
       fetchReceptionData();
     } catch (err) {
       setActionError(err.response?.data?.error?.message || err.response?.data?.message || 'Failed to rejoin queue.');
@@ -171,9 +207,9 @@ export const ReceptionDashboard = () => {
         <div className="flex items-center justify-between border-b border-slate-800 pb-4">
           <div className="flex items-center gap-2">
             {[
-              { id: 'not-arrived', label: 'Not arrived' },
-              { id: 'late', label: 'Late' },
-              { id: 'recently-cancelled', label: 'Recently cancelled' }
+              { id: 'not-arrived', label: `Not arrived (${notArrivedList.length})` },
+              { id: 'late', label: `Late / Missed (${lateOrMissedList.length})` },
+              { id: 'recently-cancelled', label: `Recently cancelled (${recentlyCancelled.length})` }
             ].map((t) => (
               <button
                 key={t.id}
@@ -191,9 +227,10 @@ export const ReceptionDashboard = () => {
 
           <button
             onClick={fetchReceptionData}
-            className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs flex items-center gap-1.5 transition-colors"
+            disabled={loadingList}
+            className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs flex items-center gap-1.5 transition-colors disabled:opacity-50"
           >
-            <RotateCcw className="w-3.5 h-3.5" />
+            <RotateCcw className={`w-3.5 h-3.5 ${loadingList ? 'animate-spin' : ''}`} />
             Refresh
           </button>
         </div>
@@ -202,51 +239,95 @@ export const ReceptionDashboard = () => {
         {activeTab === 'not-arrived' && (
           <div className="space-y-3">
             <p className="text-xs text-slate-400">Patients booked for today who have not yet checked in at the hospital desk.</p>
-            <div className="bg-slate-950/50 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-              <div>
-                <p className="font-bold text-slate-200 text-sm">Token C-001 • zz-qa-Patient One</p>
-                <p className="text-xs text-slate-400 mt-0.5">Scheduled: 12:00 • Cardiology • Dr. Arun B S</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => handleHoldToken('4PJiq2HJyU8ihe3NXirR')}
-                  className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition-colors"
-                >
-                  <PauseCircle className="w-3.5 h-3.5" /> Hold Token
-                </button>
-                <button
-                  onClick={() => handleRestoreAppointment('4PJiq2HJyU8ihe3NXirR')}
-                  className="px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition-colors"
-                >
-                  <UserCheck className="w-3.5 h-3.5" /> Mark Arrived
-                </button>
-                <button
-                  onClick={() => alert('Marked No-Show by reception.')}
-                  className="px-3 py-1.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition-colors"
-                >
-                  <XCircle className="w-3.5 h-3.5" /> Mark No-Show
-                </button>
-              </div>
-            </div>
+            {loadingList ? (
+              <div className="text-center py-8 text-xs text-slate-500">Loading arrivals...</div>
+            ) : notArrivedList.length === 0 ? (
+              <div className="text-center py-8 text-xs text-slate-500">All scheduled patients have checked in.</div>
+            ) : (
+              notArrivedList.map((pt) => {
+                const tokenText = pt.tokenLabel || (pt.tokenNumber ? `Token #${pt.tokenNumber}` : (pt.displayId || `Appt #${pt.id.substring(0, 6)}`));
+                const patientName = pt.patientName || pt.patientHealthId || 'Patient';
+                const scheduledTime = pt.timeSlot || pt.bookedStartAt || 'Scheduled';
+                return (
+                  <div key={pt.id} className="bg-slate-950/50 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <p className="font-bold text-slate-200 text-sm">{tokenText} • {patientName}</p>
+                        <span className="px-2 py-0.5 bg-slate-800 text-slate-400 text-[10px] font-bold rounded-full">
+                          NOT ARRIVED
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Scheduled: {scheduledTime} • Dr. {pt.doctorName || pt.doctorId || 'Assigned'}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleHoldToken(pt.id)}
+                        className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition-colors"
+                      >
+                        <PauseCircle className="w-3.5 h-3.5" /> Hold Token
+                      </button>
+                      <button
+                        onClick={() => handleCheckinPatient(pt.id)}
+                        className="px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition-colors"
+                      >
+                        <UserCheck className="w-3.5 h-3.5" /> Mark Arrived
+                      </button>
+                      <button
+                        onClick={() => handleMarkNoShow(pt.id)}
+                        className="px-3 py-1.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition-colors"
+                      >
+                        <XCircle className="w-3.5 h-3.5" /> Mark No-Show
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
           </div>
         )}
 
-        {/* Tab 2: Late */}
+        {/* Tab 2: Late / Missed */}
         {activeTab === 'late' && (
           <div className="space-y-3">
-            <p className="text-xs text-slate-400">Patients who arrived late or were bumped due to delay. Rejoining places them into next turn.</p>
-            <div className="bg-slate-950/50 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-              <div>
-                <p className="font-bold text-slate-200 text-sm">Token G-002 • Late Patient</p>
-                <p className="text-xs text-slate-400 mt-0.5">Checked in 35 mins after slot time • General Medicine</p>
-              </div>
-              <button
-                onClick={() => handleRejoinQueue('appt_late_sample')}
-                className="px-4 py-2 bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold text-xs rounded-xl flex items-center gap-1.5 shadow transition-all"
-              >
-                <RotateCcw className="w-3.5 h-3.5" /> Rejoin Queue
-              </button>
-            </div>
+            <p className="text-xs text-slate-400">Patients who reported late or missed their turn. Authorized staff can rejoin them after the next 2-3 waiting patients.</p>
+            {loadingList ? (
+              <div className="text-center py-8 text-xs text-slate-500">Loading late/missed list...</div>
+            ) : lateOrMissedList.length === 0 ? (
+              <div className="text-center py-8 text-xs text-slate-500">No late or missed patients currently.</div>
+            ) : (
+              lateOrMissedList.map((pt) => {
+                const tokenText = pt.tokenLabel || (pt.tokenNumber ? `Token #${pt.tokenNumber}` : (pt.displayId || `Appt #${pt.id.substring(0, 6)}`));
+                const patientName = pt.patientName || pt.patientHealthId || 'Patient';
+                const isMissed = pt.status === 'missed' || pt.isMissed;
+                return (
+                  <div key={pt.id} className="bg-slate-950/50 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <p className="font-bold text-slate-200 text-sm">{tokenText} • {patientName}</p>
+                        <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
+                          isMissed ? 'bg-rose-950 text-rose-300 border border-rose-800' : 'bg-amber-950 text-amber-300 border border-amber-800'
+                        }`}>
+                          {isMissed ? 'MISSED TURN' : 'REPORTED LATE'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        {pt.lateReason ? `Reason: ${pt.lateReason} • ` : ''}Scheduled: {pt.timeSlot || pt.bookedStartAt || 'Today'} • Dr. {pt.doctorName || pt.doctorId || 'Assigned'}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleRejoinQueue(pt.id)}
+                        className="px-4 py-2 bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold text-xs rounded-xl flex items-center gap-1.5 shadow transition-all"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" /> Rejoin Queue
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
           </div>
         )}
 

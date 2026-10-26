@@ -16,6 +16,7 @@ export const AppointmentStatuses = Object.freeze({
   COMPLETED: 'completed',
   NOT_ARRIVED: 'not_arrived',
   LATE: 'late',
+  MISSED: 'missed',
   REJOINED: 'rejoined',
   CANCELLED: 'cancelled',
   NO_SHOW: 'no_show',
@@ -33,6 +34,7 @@ export function normalizeStatus(status) {
   if (!status || typeof status !== 'string') return '';
   const s = status.trim().toLowerCase();
   if (s === 'in_consultation') return 'in_room';
+  if (s === 'missed_turn') return 'missed';
   return s;
 }
 
@@ -49,6 +51,7 @@ export const ALLOWED_TRANSITIONS = Object.freeze({
     'cancelled',
     'rescheduled',
     'not_arrived',
+    'missed',
     'no_show'
   ],
   confirmed: [
@@ -59,6 +62,7 @@ export const ALLOWED_TRANSITIONS = Object.freeze({
     'cancelled',
     'rescheduled',
     'not_arrived',
+    'missed',
     'no_show'
   ],
   on_the_way: [
@@ -67,6 +71,7 @@ export const ALLOWED_TRANSITIONS = Object.freeze({
     'waiting',
     'cancelled',
     'not_arrived',
+    'missed',
     'no_show'
   ],
   nearby: [
@@ -74,18 +79,21 @@ export const ALLOWED_TRANSITIONS = Object.freeze({
     'waiting',
     'cancelled',
     'not_arrived',
+    'missed',
     'no_show'
   ],
   checked_in: [
     'waiting',
     'called',
     'cancelled',
-    'late'
+    'late',
+    'missed'
   ],
   waiting: [
     'called',
     'cancelled',
-    'late'
+    'late',
+    'missed'
   ],
   called: [
     'in_room',
@@ -93,6 +101,7 @@ export const ALLOWED_TRANSITIONS = Object.freeze({
     'not_arrived',
     'late',
     'waiting',
+    'missed',
     'no_show'
   ],
   in_room: [
@@ -102,6 +111,8 @@ export const ALLOWED_TRANSITIONS = Object.freeze({
     'checked_in',
     'waiting',
     'late',
+    'missed',
+    'called',
     'rejoined',
     'no_show',
     'cancelled'
@@ -110,6 +121,14 @@ export const ALLOWED_TRANSITIONS = Object.freeze({
     'rejoined',
     'checked_in',
     'waiting',
+    'missed',
+    'no_show',
+    'cancelled'
+  ],
+  missed: [
+    'rejoined',
+    'waiting',
+    'checked_in',
     'no_show',
     'cancelled'
   ],
@@ -117,6 +136,9 @@ export const ALLOWED_TRANSITIONS = Object.freeze({
     'waiting',
     'called',
     'checked_in',
+    'late',
+    'missed',
+    'no_show',
     'cancelled'
   ],
   cancelled: [

@@ -18,6 +18,7 @@
  */
 
 import { assertDbConnected } from '../src/config/firebase.js';
+import { assignBatchDoctorDisplayIds } from '../src/services/doctorDisplayIdService.js';
 
 const DEPARTMENTS = [
   { id: 'dept-card',  name: 'Cardiology',      code: 'CARD',  letter: 'C', description: 'Heart care, ECG, and cardiovascular consultations.' },
@@ -51,20 +52,23 @@ async function seed() {
   }
 
   console.log('\n👨‍⚕️  Step 2: doctors collection  (doc id = doctorId)');
-  for (const doc of DEMO_DOCTORS) {
+  const doctorsWithDisplayId = assignBatchDoctorDisplayIds(DEMO_DOCTORS);
+  for (const doc of doctorsWithDisplayId) {
     const ref = db.collection('doctors').doc(doc.doctorId);
     await ref.set(
       {
         ...doc,
-        uid:       doc.doctorId,
-        doctorUid: doc.doctorId,
-        fullName:  doc.name,
-        createdAt: new Date(),
-        updatedAt: new Date()
+        uid:             doc.doctorId,
+        doctorUid:       doc.doctorId,
+        displayId:       doc.displayId,
+        doctorDisplayId: doc.displayId,
+        fullName:        doc.name,
+        createdAt:       new Date(),
+        updatedAt:       new Date()
       },
       { merge: true }
     );
-    console.log(`   ✓ ${doc.doctorId}  ${doc.name.padEnd(22)} dept=${doc.departmentId}`);
+    console.log(`   ✓ ${doc.doctorId} -> ${doc.displayId}  ${doc.name.padEnd(22)} dept=${doc.departmentId}`);
   }
 
   console.log('\n✅  Seed complete — 5 departments, 6 doctors written.\n');

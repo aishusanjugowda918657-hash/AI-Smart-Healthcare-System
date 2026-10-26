@@ -206,8 +206,8 @@ describe('PRD F5: Feature Acceptance Criteria - Appointment Lifecycle, QR Check-
     await db.collection('slots').doc(newSlotId).set({
       id: newSlotId,
       doctorId: 'DOC-001',
-      date: '2026-10-15',
-      startAt: '14:00',
+      date: todayStr,
+      startAt: '23:30',
       status: 'free'
     });
 
@@ -215,7 +215,7 @@ describe('PRD F5: Feature Acceptance Criteria - Appointment Lifecycle, QR Check-
       .post(`/api/appointments/${testApptId}/reschedule`)
       .set('x-demo-uid', 'patient-uid-f5')
       .set('x-demo-role', 'patient')
-      .send({ newSlotId, newDate: '2026-10-15', newTime: '14:00' });
+      .send({ newSlotId, newDate: todayStr, newTime: '23:30' });
 
     expect(res.status).toBe(200);
     expect(res.body.data.slotId).toBe(newSlotId);

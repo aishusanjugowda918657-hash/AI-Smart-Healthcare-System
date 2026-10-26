@@ -1,35 +1,47 @@
 import { assertDbConnected } from '../config/firebase.js';
-import { generateHealthIdCandidate, isValidHealthId } from '../domain/healthId.js';
+import { formatScaiPatientHealthId, isValidHealthId } from '../domain/healthId.js';
 
 /**
  * Atomically generates a guaranteed unique Patient Health ID using Firestore transactions.
- * Format: PHI-YYYY-XXXXXX-C
- * Defined as per PRD Section 5.4
+ * Format: SCAI-YYYY-NNNNNN-P (e.g. SCAI-2026-000001-P)
+ * - YYYY: registration year
+ * - NNNNNN: unique 6-digit zero-padded sequence
+ * - P: identifies a patient
+ * Guaranteed unique across concurrent registrations via transactional sequence allocation.
  */
 export const generateAtomicPatientHealthId = async (year = new Date().getFullYear()) => {
   const db = assertDbConnected();
-  const MAX_ATTEMPTS = 10;
+  const counterRef = db.collection('counters').doc(`healthId_${year}`);
 
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    const candidateId = generateHealthIdCandidate(year);
-    const docRef = db.collection('patients').doc(candidateId);
-
-    try {
-      const isUnique = await db.runTransaction(async (tx) => {
-        const snap = await tx.get(docRef);
-        if (snap.exists) return false;
-        return true;
-      });
-
-      if (isUnique) {
-        return candidateId;
-      }
-    } catch (err) {
-      console.warn(`Health ID generation attempt ${attempt} collision/retry:`, err.message);
+  const candidateId = await db.runTransaction(async (tx) => {
+    const counterSnap = await tx.get(counterRef);
+    let nextVal = 1;
+    if (counterSnap.exists) {
+      const data = counterSnap.data();
+      nextVal = (data.currentValue || data.lastSequence || 0) + 1;
     }
-  }
 
-  throw new Error(`Failed to generate a unique Health ID after ${MAX_ATTEMPTS} attempts.`);
+    let generated = formatScaiPatientHealthId(year, nextVal);
+
+    // Verify against existing patient record to prevent collision
+    let patientSnap = await tx.get(db.collection('patients').doc(generated));
+    while (patientSnap.exists) {
+      nextVal += 1;
+      generated = formatScaiPatientHealthId(year, nextVal);
+      patientSnap = await tx.get(db.collection('patients').doc(generated));
+    }
+
+    tx.set(counterRef, {
+      currentValue: nextVal,
+      lastSequence: nextVal,
+      year,
+      updatedAt: new Date()
+    }, { merge: true });
+
+    return generated;
+  });
+
+  return candidateId;
 };
 
 export const isValidHealthIdFormat = (healthId) => {

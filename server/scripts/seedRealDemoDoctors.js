@@ -1,5 +1,6 @@
 import admin from 'firebase-admin';
 import { generateSlotsJob } from '../src/jobs/scheduler.js';
+import { assignBatchDoctorDisplayIds } from '../src/services/doctorDisplayIdService.js';
 import dotenv from 'dotenv';
 import path from 'path';
 
@@ -236,7 +237,8 @@ export const seedRealDemoDoctors = async () => {
 
   // 2. Doctors
   console.log('\n👨‍⚕️ Step 2: Provisioning 24 Demo Doctor Accounts...');
-  for (const doc of DOCTORS) {
+  const doctorsWithDisplayId = assignBatchDoctorDisplayIds(DOCTORS);
+  for (const doc of doctorsWithDisplayId) {
     let uid;
     let authCreated = false;
 
@@ -270,6 +272,8 @@ export const seedRealDemoDoctors = async () => {
       email: doc.email,
       role: 'doctor',
       fullName: doc.name,
+      displayId: doc.displayId,
+      doctorDisplayId: doc.displayId,
       status: 'ACTIVE',
       isDemo: true, // Mark as demo/academic data
       notes: 'DEMO / ACADEMIC DATA',
@@ -282,6 +286,8 @@ export const seedRealDemoDoctors = async () => {
     
     const doctorProfile = {
       doctorId: doc.doctorId,
+      displayId: doc.displayId,
+      doctorDisplayId: doc.displayId,
       uid: uid,
       doctorUid: uid,
       name: doc.name,

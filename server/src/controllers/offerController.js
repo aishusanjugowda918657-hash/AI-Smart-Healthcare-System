@@ -6,6 +6,7 @@
 import { assertDbConnected } from '../config/firebase.js';
 import { clock } from '../utils/clock.js';
 import { verifyRecordAccess } from './medicalController.js';
+import { getAppointmentDateCompact, formatAppointmentDisplayId } from '../services/appointmentIdService.js';
 
 /**
  * POST /api/offers/:id/accept { optionIndex }
@@ -153,9 +154,16 @@ export const acceptOffer = async (req, res, next) => {
           throw { statusCode: 400, message: 'Invalid waitlist offer slot details.' };
         }
 
-        // READ slot doc before writes
+        // READ slot doc and appointment display counter before writes
         const slotRef = db.collection('slots').doc(slotDetails.slotId);
-        const slotDoc = await transaction.get(slotRef);
+        const apptDateStr = slotDetails.date || nowIso.split('T')[0];
+        const dateCompact = getAppointmentDateCompact(apptDateStr);
+        const apptDisplayCounterRef = db.collection('counters').doc(`apptDisplay_${dateCompact}`);
+
+        const [slotDoc, apptDisplaySnap] = await Promise.all([
+          transaction.get(slotRef),
+          transaction.get(apptDisplayCounterRef)
+        ]);
 
         if (!slotDoc.exists) {
           throw { statusCode: 409, message: 'Freed slot no longer exists.' };
@@ -166,6 +174,9 @@ export const acceptOffer = async (req, res, next) => {
           throw { statusCode: 409, message: 'This slot was already accepted by another candidate.' };
         }
 
+        const apptSeq = (apptDisplaySnap.exists ? apptDisplaySnap.data().value || 0 : 0) + 1;
+        const displayId = formatAppointmentDisplayId(dateCompact, apptSeq);
+
         // READ phase finished. NOW EXECUTE ALL WRITES:
         transaction.set(slotRef, {
           available: false,
@@ -173,15 +184,23 @@ export const acceptOffer = async (req, res, next) => {
           bookedBy: userId
         }, { merge: true });
 
+        transaction.set(apptDisplayCounterRef, {
+          value: apptSeq,
+          dateCompact,
+          updatedAt: new Date()
+        }, { merge: true });
+
         const apptRef = db.collection('appointments').doc();
         const apptData = {
           id: apptRef.id,
+          appointmentId: apptRef.id,
+          displayId,
           userId,
           patientHealthId: offer.patientHealthId || userId,
           patientName: offer.patientName || 'Patient',
           doctorId: slotDetails.doctorId || 'doc-1',
           doctorName: slotDetails.doctorName || 'Doctor',
-          date: slotDetails.date || nowIso.split('T')[0],
+          date: apptDateStr,
           timeSlot: slotDetails.timeSlot || '10:00',
           slotId: slotDetails.slotId,
           status: 'booked',

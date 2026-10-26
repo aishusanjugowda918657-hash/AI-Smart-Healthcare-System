@@ -8,12 +8,13 @@ export const AdminAnalyticsCharts = () => {
   const [metrics, setMetrics] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [timeframe, setTimeframe] = useState('all'); // 'today' | 'week' | 'all'
 
-  const fetchAdminAnalytics = async () => {
+  const fetchAdminAnalytics = async (tf = timeframe) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await API.get('/admin/analytics/overview');
+      const res = await API.get(`/admin/analytics/overview?timeframe=${tf}`);
       if (res.data?.data) {
         setMetrics(res.data.data);
       }
@@ -24,8 +25,13 @@ export const AdminAnalyticsCharts = () => {
     }
   };
 
+  const handleTimeframeChange = (tf) => {
+    setTimeframe(tf);
+    fetchAdminAnalytics(tf);
+  };
+
   useEffect(() => {
-    fetchAdminAnalytics();
+    fetchAdminAnalytics('all');
   }, []);
 
   if (loading && !metrics) {
@@ -94,20 +100,63 @@ export const AdminAnalyticsCharts = () => {
   return (
     <div className="space-y-6" id="admin-analytics-container">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h2 className="font-bold text-xl text-slate-800">System Accuracy & Operational Analytics</h2>
-          <p className="text-xs text-slate-500">PRD F17 aggregated metrics, MAE prediction error, slot utilization & safety stats</p>
+          <div className="flex items-center gap-2">
+            <h2 className="font-bold text-xl text-slate-800">System Accuracy & Operational Analytics</h2>
+            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+              Hospital-Wide
+            </span>
+          </div>
+          <p className="text-xs text-slate-500 mt-0.5">
+            PRD F17 aggregated metrics, MAE prediction error, slot utilization & safety stats across all patients
+          </p>
         </div>
 
-        <button
-          onClick={fetchAdminAnalytics}
-          disabled={loading}
-          className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-all flex items-center space-x-1.5"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-brand-600' : ''}`} />
-          <span>Refresh Metrics</span>
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Timeframe Selector */}
+          <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs font-semibold">
+            <button
+              onClick={() => handleTimeframeChange('today')}
+              className={`px-3 py-1.5 rounded-lg transition-all ${
+                timeframe === 'today'
+                  ? 'bg-white text-brand-700 shadow-sm font-bold'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Today
+            </button>
+            <button
+              onClick={() => handleTimeframeChange('week')}
+              className={`px-3 py-1.5 rounded-lg transition-all ${
+                timeframe === 'week'
+                  ? 'bg-white text-brand-700 shadow-sm font-bold'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              This Week
+            </button>
+            <button
+              onClick={() => handleTimeframeChange('all')}
+              className={`px-3 py-1.5 rounded-lg transition-all ${
+                timeframe === 'all'
+                  ? 'bg-white text-brand-700 shadow-sm font-bold'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              All Time
+            </button>
+          </div>
+
+          <button
+            onClick={() => fetchAdminAnalytics(timeframe)}
+            disabled={loading}
+            className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-all flex items-center space-x-1.5"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-brand-600' : ''}`} />
+            <span>Refresh</span>
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -157,8 +206,15 @@ export const AdminAnalyticsCharts = () => {
         {/* Appointment Status Breakdown */}
         <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xl space-y-4">
           <div className="flex items-center justify-between">
-            <h3 className="font-bold text-slate-800 text-sm">Lifecycle Status Breakdown</h3>
-            <Badge variant="info">DISTRIBUTION</Badge>
+            <div>
+              <h3 className="font-bold text-slate-800 text-sm">Lifecycle Status Breakdown</h3>
+              <p className="text-[10px] text-slate-400">
+                {timeframe === 'today' ? "Today's hospital volume" : timeframe === 'week' ? 'Past 7 days hospital volume' : 'All-time hospital records'}
+              </p>
+            </div>
+            <Badge variant="info">
+              {timeframe === 'today' ? 'TODAY' : timeframe === 'week' ? 'THIS WEEK' : 'ALL-TIME'}
+            </Badge>
           </div>
 
           <div className="grid grid-cols-2 gap-3 text-xs">

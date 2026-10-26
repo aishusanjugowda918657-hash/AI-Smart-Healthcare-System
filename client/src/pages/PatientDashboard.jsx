@@ -189,17 +189,17 @@ export const PatientDashboard = () => {
       )}
 
       {/* Welcome Banner */}
-      <div className="bg-gradient-to-r from-indigo-700 via-indigo-800 to-teal-700 text-white rounded-3xl p-6 sm:p-8 shadow-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div>
+      <div className="bg-gradient-to-r from-indigo-700 via-indigo-800 to-teal-700 text-white rounded-3xl p-5 sm:p-8 shadow-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 min-w-0">
+        <div className="min-w-0 flex-1">
           <span className="inline-block px-3 py-1 bg-white/20 backdrop-blur-md rounded-full text-xs font-bold text-teal-100 mb-2">
             Patient Workspace
           </span>
-          <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
+          <h1 className="text-xl sm:text-2xl md:text-3xl font-extrabold tracking-tight truncate">
             Welcome, {name} 👋
           </h1>
-          <p className="text-xs text-teal-100 mt-1 flex items-center gap-2">
+          <p className="text-xs text-teal-100 mt-1 flex flex-wrap items-center gap-2">
             <span>Health ID:</span>
-            <span className="font-mono font-bold bg-black/25 px-2.5 py-0.5 rounded text-white tracking-wide border border-white/10">
+            <span className="font-mono font-bold bg-black/25 px-2.5 py-0.5 rounded text-white tracking-wide border border-white/10 break-all">
               {healthId}
             </span>
           </p>
@@ -207,7 +207,7 @@ export const PatientDashboard = () => {
 
         <Link
           to="/book-appointment"
-          className="px-5 py-3 bg-white hover:bg-slate-100 text-indigo-900 font-bold text-xs rounded-2xl shadow-md transition-all flex items-center space-x-2 shrink-0"
+          className="w-full sm:w-auto justify-center px-5 py-3 bg-white hover:bg-slate-100 text-indigo-900 font-bold text-xs rounded-2xl shadow-md transition-all flex items-center space-x-2 shrink-0"
         >
           <Calendar className="w-4 h-4 text-indigo-600" />
           <span>Book Appointment</span>
@@ -218,51 +218,51 @@ export const PatientDashboard = () => {
       <HealthIdCard />
 
       {/* Authentic Patient Profile Details Card */}
-      <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-4">
-        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-          <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-            <User className="w-5 h-5 text-indigo-600" />
+      <div className="bg-white rounded-3xl border border-slate-200 p-4 sm:p-6 shadow-sm space-y-4 min-w-0">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+          <h2 className="text-sm sm:text-base font-bold text-slate-900 flex items-center gap-2">
+            <User className="w-5 h-5 text-indigo-600 shrink-0" />
             <span>Authenticated Patient Information</span>
           </h2>
-          <span className="text-xs font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 px-3 py-1 rounded-full">
+          <span className="text-[10px] sm:text-xs font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 px-2.5 sm:px-3 py-1 rounded-full">
             Firestore Verified Profile
           </span>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
-          <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-100">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 text-xs">
+          <div className="p-3 sm:p-3.5 bg-slate-50 rounded-2xl border border-slate-100 min-w-0">
             <p className="text-slate-400 font-semibold uppercase tracking-wider text-[10px]">Patient Name</p>
-            <p className="text-slate-900 font-bold text-sm mt-0.5">{name}</p>
+            <p className="text-slate-900 font-bold text-sm mt-0.5 truncate">{name}</p>
           </div>
 
-          <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-100">
+          <div className="p-3 sm:p-3.5 bg-slate-50 rounded-2xl border border-slate-100 min-w-0">
             <p className="text-slate-400 font-semibold uppercase tracking-wider text-[10px]">Health ID (UHID)</p>
-            <p className="text-indigo-600 font-mono font-bold text-sm mt-0.5">{healthId}</p>
+            <p className="text-indigo-600 font-mono font-bold text-sm mt-0.5 break-all">{healthId}</p>
           </div>
 
-          <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-100">
+          <div className="p-3 sm:p-3.5 bg-slate-50 rounded-2xl border border-slate-100 min-w-0">
             <p className="text-slate-400 font-semibold uppercase tracking-wider text-[10px]">Age</p>
             <p className="text-slate-900 font-semibold text-sm mt-0.5">{ageStr}</p>
           </div>
 
-          <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-100">
+          <div className="p-3 sm:p-3.5 bg-slate-50 rounded-2xl border border-slate-100 min-w-0">
             <p className="text-slate-400 font-semibold uppercase tracking-wider text-[10px]">Gender</p>
             <p className="text-slate-900 font-semibold text-sm mt-0.5">{genderStr}</p>
           </div>
 
-          <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-100">
+          <div className="p-3 sm:p-3.5 bg-slate-50 rounded-2xl border border-slate-100 min-w-0">
             <p className="text-slate-400 font-semibold uppercase tracking-wider text-[10px]">Blood Group</p>
             <p className="text-rose-600 font-bold text-sm mt-0.5">{bloodGroup}</p>
           </div>
 
-          <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-100">
+          <div className="p-3 sm:p-3.5 bg-slate-50 rounded-2xl border border-slate-100 min-w-0">
             <p className="text-slate-400 font-semibold uppercase tracking-wider text-[10px]">Mobile Phone</p>
-            <p className="text-slate-900 font-semibold text-sm mt-0.5">{patientProfile?.phone || 'Not recorded'}</p>
+            <p className="text-slate-900 font-semibold text-sm mt-0.5 truncate">{patientProfile?.phone || 'Not recorded'}</p>
           </div>
 
-          <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-100 sm:col-span-2">
+          <div className="p-3 sm:p-3.5 bg-slate-50 rounded-2xl border border-slate-100 sm:col-span-2 min-w-0">
             <p className="text-slate-400 font-semibold uppercase tracking-wider text-[10px]">Emergency Contact</p>
-            <p className="text-slate-900 font-semibold text-sm mt-0.5">{emergencyContact}</p>
+            <p className="text-slate-900 font-semibold text-sm mt-0.5 break-words">{emergencyContact}</p>
           </div>
         </div>
       </div>
@@ -343,35 +343,35 @@ export const PatientDashboard = () => {
 
       {/* My Appointments Section with Tabs */}
       <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden flex flex-col min-h-[400px]">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+        <div className="flex flex-wrap items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-slate-100 bg-slate-50/50 gap-2">
           <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-            <Calendar className="w-5 h-5 text-indigo-600" />
+            <Calendar className="w-5 h-5 text-indigo-600 shrink-0" />
             My Appointments
           </h2>
           <Link
             to="/book-appointment"
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-colors shadow-sm"
+            className="px-3.5 py-1.5 sm:px-4 sm:py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-colors shadow-sm"
           >
             + Book New
           </Link>
         </div>
 
-        <div className="flex border-b border-slate-100 px-6 gap-2">
+        <div className="flex border-b border-slate-100 px-4 sm:px-6 gap-1 sm:gap-2 overflow-x-auto">
           <button
             onClick={() => setActiveTab('upcoming')}
-            className={`px-4 py-3 text-sm font-bold border-b-2 transition-colors ${activeTab === 'upcoming' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            className={`px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm font-bold border-b-2 transition-colors cursor-pointer ${activeTab === 'upcoming' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
           >
             Upcoming
           </button>
           <button
             onClick={() => setActiveTab('past')}
-            className={`px-4 py-3 text-sm font-bold border-b-2 transition-colors ${activeTab === 'past' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            className={`px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm font-bold border-b-2 transition-colors cursor-pointer ${activeTab === 'past' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
           >
             Past
           </button>
           <button
             onClick={() => setActiveTab('cancelled')}
-            className={`px-4 py-3 text-sm font-bold border-b-2 transition-colors ${activeTab === 'cancelled' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            className={`px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm font-bold border-b-2 transition-colors cursor-pointer ${activeTab === 'cancelled' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
           >
             Cancelled
           </button>
@@ -381,7 +381,7 @@ export const PatientDashboard = () => {
           {loadingStats ? (
             <div className="absolute inset-0 flex items-center justify-center text-slate-400 text-sm">Loading appointments...</div>
           ) : displayedAppointments.length === 0 ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 text-sm">
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 text-sm p-6 text-center">
               <Calendar className="w-10 h-10 mb-3 text-slate-200" />
               <p>No {activeTab} appointments found.</p>
               {activeTab === 'upcoming' && (
@@ -420,14 +420,14 @@ export const PatientDashboard = () => {
                 const canRebook = appt.tab === 'past' || isMissed;
 
                 return (
-                  <div key={appt.id || appt.appointmentId} className="flex flex-col sm:flex-row sm:items-center justify-between px-6 py-5 hover:bg-slate-50 transition-colors gap-4">
-                    <div className="flex items-start gap-4 min-w-0">
-                      <div className="p-3 bg-indigo-50 rounded-2xl shrink-0 border border-indigo-100 shadow-sm">
+                  <div key={appt.id || appt.appointmentId} className="flex flex-col sm:flex-row sm:items-center justify-between px-4 sm:px-6 py-4 sm:py-5 hover:bg-slate-50 transition-colors gap-3 sm:gap-4">
+                    <div className="flex items-start gap-3 sm:gap-4 min-w-0">
+                      <div className="p-2.5 sm:p-3 bg-indigo-50 rounded-2xl shrink-0 border border-indigo-100 shadow-sm">
                         <Stethoscope className="w-5 h-5 text-indigo-600" />
                       </div>
                       <div className="min-w-0 space-y-1">
-                        <p className="font-bold text-slate-900 text-base truncate">{appt.doctorName || 'Doctor'}</p>
-                        <p className="text-xs font-medium text-slate-500">
+                        <p className="font-bold text-slate-900 text-sm sm:text-base truncate">{appt.doctorName || 'Doctor'}</p>
+                        <p className="text-xs font-medium text-slate-500 truncate">
                           {appt.departmentId ? appt.departmentId.replace('dept-', '').replace(/-/g,' ').toUpperCase() : 'General Medicine'}
                         </p>
                         <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500 font-mono">
@@ -437,35 +437,35 @@ export const PatientDashboard = () => {
                           )}
                         </div>
                         {appt.patientName && appt.patientName !== (patientProfile?.name || currentUser?.displayName) && (
-                          <p className="text-[11px] text-indigo-600 font-bold bg-indigo-50 px-2 py-0.5 rounded-md inline-block border border-indigo-100 mt-1">
+                          <p className="text-[11px] text-indigo-600 font-bold bg-indigo-50 px-2 py-0.5 rounded-md inline-block border border-indigo-100 mt-1 truncate">
                             For: {appt.patientName}
                           </p>
                         )}
                       </div>
                     </div>
                     
-                    <div className="flex flex-row sm:flex-col items-center sm:items-end justify-between sm:justify-center gap-3 shrink-0 mt-2 sm:mt-0 pt-3 sm:pt-0 border-t sm:border-0 border-slate-100">
-                      <div className="flex items-center gap-2">
-                        <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold border capitalize ${statusColor}`}>
+                    <div className="flex flex-col sm:flex-col items-start sm:items-end justify-between sm:justify-center gap-2.5 shrink-0 mt-2 sm:mt-0 pt-3 sm:pt-0 border-t sm:border-0 border-slate-100 w-full sm:w-auto">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`inline-flex items-center gap-1 px-2.5 sm:px-3 py-1 rounded-full text-xs font-bold border capitalize ${statusColor}`}>
                           {statusIcon} {statusLabel}
                         </span>
                         {(appt.tokenLabel || appt.tokenNumber) && (
-                          <span className="text-xs font-mono font-bold text-teal-700 bg-teal-50 border border-teal-200 px-3 py-1 rounded-full">
+                          <span className="text-xs font-mono font-bold text-teal-700 bg-teal-50 border border-teal-200 px-2.5 sm:px-3 py-1 rounded-full">
                             Token {appt.tokenLabel || `#${appt.tokenNumber}`}
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <button
                           onClick={() => setSelectedAppt(appt)}
-                          className="px-4 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition-colors border border-slate-200"
+                          className="px-3 sm:px-4 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition-colors border border-slate-200 cursor-pointer"
                         >
                           View Details
                         </button>
                         {canRebook && (
                           <Link
                             to="/book-appointment"
-                            className="px-4 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-lg transition-colors border border-indigo-200"
+                            className="px-3 sm:px-4 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-lg transition-colors border border-indigo-200"
                           >
                             Rebook
                           </Link>
@@ -473,7 +473,7 @@ export const PatientDashboard = () => {
                         {canCancel && (
                           <button
                             onClick={() => setCancelAppt(appt)}
-                            className="px-4 py-1.5 bg-white hover:bg-rose-50 text-rose-600 text-xs font-bold rounded-lg transition-colors border border-rose-200"
+                            className="px-3 sm:px-4 py-1.5 bg-white hover:bg-rose-50 text-rose-600 text-xs font-bold rounded-lg transition-colors border border-rose-200 cursor-pointer"
                           >
                             Cancel
                           </button>
@@ -521,7 +521,7 @@ export const PatientDashboard = () => {
               <div className="grid grid-cols-2 gap-y-4 gap-x-6 text-sm">
                 <div>
                   <p className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Appointment ID</p>
-                  <p className="font-mono text-xs font-semibold text-slate-800 mt-1">{selectedAppt.id || selectedAppt.appointmentId}</p>
+                  <p className="font-mono text-xs font-semibold text-slate-800 mt-1">{selectedAppt.displayId || selectedAppt.appointmentId || selectedAppt.id}</p>
                 </div>
                 <div>
                   <p className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Status</p>

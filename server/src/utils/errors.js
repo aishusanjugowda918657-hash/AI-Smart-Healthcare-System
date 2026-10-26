@@ -31,10 +31,12 @@ export const formatErrorResponse = (code, message, details = {}) => ({
   success: false,
   code: code || ErrorCodes.INTERNAL_ERROR,
   message: message || 'An error occurred',
+  ...details,
   error: {
     code: code || ErrorCodes.INTERNAL_ERROR,
     message: message || 'An unexpected error occurred',
-    details
+    details,
+    ...details
   }
 });
 

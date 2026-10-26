@@ -12,7 +12,6 @@ import { doc, onSnapshot } from 'firebase/firestore';
  */
 export default function PatientLiveQueueCard({ appointmentId, onOpenFindShorterWait }) {
   const [appointment, setAppointment] = useState(null);
-  const [travelMinutes, setTravelMinutes] = useState(15);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [notifyEnabled, setNotifyEnabled] = useState(false);
@@ -69,23 +68,6 @@ export default function PatientLiveQueueCard({ appointmentId, onOpenFindShorterW
   const showFeedback = (msg) => {
     setActionFeedback(msg);
     setTimeout(() => setActionFeedback(''), 4000);
-  };
-
-  const handleUpdateTravelMinutes = async () => {
-    try {
-      const res = await fetch(`/api/queue/appointments/${appointmentId}/leave-home`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ travelMinutes: parseInt(travelMinutes, 10) })
-      });
-      const json = await res.json();
-      if (json.success) {
-        showFeedback('Travel time updated! Leave home estimate recalculated.');
-        fetchAppointment();
-      }
-    } catch (err) {
-      setError(err.message);
-    }
   };
 
   const handleToggleEarlyOptIn = async () => {
@@ -249,44 +231,8 @@ export default function PatientLiveQueueCard({ appointmentId, onOpenFindShorterW
         </div>
       )}
 
-      {/* Leave Home Now Widget */}
-      {appointment.leaveHome?.leaveAt && (
-        <div className="p-4 bg-emerald-50/80 border border-emerald-200 rounded-xl space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-emerald-900 uppercase tracking-wide">LEAVE HOME NOW ESTIMATE</span>
-            <span className="text-sm font-black text-emerald-700">
-              {new Date(appointment.leaveHome.leaveAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-            </span>
-          </div>
-          <p className="text-xs text-emerald-800">
-            Based on your travel duration ({appointment.leaveHome.travelMinutes || 15} mins) + 10 min check-in buffer.
-          </p>
-        </div>
-      )}
-
-      {/* Travel Duration Controls */}
-      <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs gap-3">
-        <span className="text-slate-600 font-medium">Travel Time (min):</span>
-        <div className="flex items-center gap-2">
-          <input
-            type="number"
-            min="1"
-            max="120"
-            value={travelMinutes}
-            onChange={(e) => setTravelMinutes(e.target.value)}
-            className="w-16 px-2 py-1 border border-slate-300 rounded text-center font-bold"
-          />
-          <button
-            onClick={handleUpdateTravelMinutes}
-            className="px-2.5 py-1 bg-slate-800 text-white font-semibold rounded hover:bg-slate-900"
-          >
-            Update
-          </button>
-        </div>
-      </div>
-
       {/* Early Opt-In Toggle */}
-      <div className="flex items-center justify-between text-xs pt-1">
+      <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-100">
         <span className="text-slate-600">Available earlier if doctor finishes ahead?</span>
         <button
           onClick={handleToggleEarlyOptIn}

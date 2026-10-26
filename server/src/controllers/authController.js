@@ -1,6 +1,7 @@
 import { assertDbConnected, auth } from '../config/firebase.js';
 import { generateAtomicPatientHealthId } from '../services/healthIdGenerator.js';
 import { formatSuccessResponse, formatErrorResponse } from '../utils/errors.js';
+import { assignDoctorDisplayId } from '../services/doctorDisplayIdService.js';
 
 const ALLOWED_ROLES = ['patient', 'doctor', 'nurse', 'reception', 'pharmacy', 'admin'];
 
@@ -176,11 +177,25 @@ export const getMe = async (req, res, next) => {
       .limit(1)
       .get();
 
-    const selfPatient = !patientSnap.empty ? patientSnap.docs[0].data() : null;
+    let doctorDisplayId = userData.displayId || userData.doctorDisplayId || null;
+    if (userData.role === 'doctor' || userData.doctorId) {
+      const docLookupId = userData.doctorId || uid;
+      let dSnap = await db.collection('doctors').doc(docLookupId).get();
+      if (!dSnap.exists) {
+        const qSnap = await db.collection('doctors').where('doctorId', '==', docLookupId).limit(1).get();
+        if (!qSnap.empty) dSnap = qSnap.docs[0];
+      }
+      if (dSnap && dSnap.exists) {
+        const dData = dSnap.data();
+        doctorDisplayId = dData.displayId || dData.doctorDisplayId || assignDoctorDisplayId(dData);
+      }
+    }
 
     return res.status(200).json(formatSuccessResponse({
       uid,
       ...userData,
+      displayId: doctorDisplayId,
+      doctorDisplayId: doctorDisplayId,
       patient: selfPatient
     }));
   } catch (error) {
@@ -328,7 +343,28 @@ export const loginSync = async (req, res, next) => {
     const { uid, email, role: claimedRole } = req.user;
     const db = assertDbConnected();
 
-    let userDocSnap = await db.collection('users').doc(uid).get();
+    let userDocSnap;
+    try {
+      userDocSnap = await db.collection('users').doc(uid).get();
+    } catch (readErr) {
+      if (readErr.code === 8 || readErr.message?.includes('RESOURCE_EXHAUSTED') || readErr.message?.includes('Quota exceeded')) {
+        console.warn('⚠️ Firestore quota exceeded while reading users doc in loginSync, falling back to authenticated token claims');
+        const fallbackRole = req.user.role || 'patient';
+        const fallbackName = (req.user.name || email?.split('@')[0] || 'User').trim();
+        return res.status(200).json(formatSuccessResponse({
+          uid,
+          email: email || '',
+          role: fallbackRole,
+          displayName: fallbackName,
+          doctorId: req.user?.doctorId || null,
+          displayId: null,
+          doctorDisplayId: null,
+          mustChangePassword: false,
+          quotaExceededFallback: true
+        }));
+      }
+      throw readErr;
+    }
 
     if (!userDocSnap.exists) {
       const PRIVILEGED_ROLES = ['doctor', 'nurse', 'reception', 'pharmacy', 'admin'];
@@ -356,8 +392,26 @@ export const loginSync = async (req, res, next) => {
         createdAt: new Date(),
         updatedAt: new Date()
       };
-      await db.collection('users').doc(uid).set(newDoc);
-      userDocSnap = await db.collection('users').doc(uid).get();
+      try {
+        await db.collection('users').doc(uid).set(newDoc);
+        userDocSnap = await db.collection('users').doc(uid).get();
+      } catch (writeErr) {
+        if (writeErr.code === 8 || writeErr.message?.includes('RESOURCE_EXHAUSTED') || writeErr.message?.includes('Quota exceeded')) {
+          console.warn('⚠️ Firestore quota exceeded while auto-creating user doc in loginSync, proceeding with memory profile');
+          return res.status(200).json(formatSuccessResponse({
+            uid,
+            email: email || '',
+            role: 'patient',
+            displayName: nameToUse,
+            doctorId: null,
+            displayId: null,
+            doctorDisplayId: null,
+            mustChangePassword: false,
+            quotaExceededFallback: true
+          }));
+        }
+        throw writeErr;
+      }
     }
 
     const userData = userDocSnap.data();
@@ -370,46 +424,76 @@ export const loginSync = async (req, res, next) => {
 
     // Check & repair missing self patient profile for patient accounts
     if (userData.role === 'patient') {
-      const patientSnap = await db.collection('patients')
-        .where('ownerUid', '==', uid)
-        .where('relation', '==', 'self')
-        .limit(1)
-        .get();
+      try {
+        const patientSnap = await db.collection('patients')
+          .where('ownerUid', '==', uid)
+          .where('relation', '==', 'self')
+          .limit(1)
+          .get();
 
-      if (patientSnap.empty) {
-        const directDoc = await db.collection('patients').doc(uid).get();
-        if (directDoc.exists) {
-          const directData = directDoc.data();
-          await directDoc.ref.set({
-            ownerUid: uid,
-            relation: 'self',
-            name: directData.name || directData.fullName || userData.displayName || 'Patient',
-            healthId: directData.healthId || directData.patientHealthId
-          }, { merge: true });
+        if (patientSnap.empty) {
+          const directDoc = await db.collection('patients').doc(uid).get();
+          if (directDoc.exists) {
+            const directData = directDoc.data();
+            await directDoc.ref.set({
+              ownerUid: uid,
+              relation: 'self',
+              name: directData.name || directData.fullName || userData.displayName || 'Patient',
+              healthId: directData.healthId || directData.patientHealthId
+            }, { merge: true });
+          } else {
+            const healthId = await generateAtomicPatientHealthId();
+            const nameToUse = userData.displayName || 'Patient';
+            const patientDoc = {
+              healthId,
+              patientHealthId: healthId,
+              ownerUid: uid,
+              relation: 'self',
+              isTemporary: false,
+              name: nameToUse,
+              searchName: nameToUse.toLowerCase(),
+              dob: '1990-01-01',
+              gender: 'other',
+              bloodGroup: '',
+              allergies: [],
+              conditions: [],
+              flags: { pregnant: false, disability: false },
+              emergencyContact: null,
+              accessList: {},
+              emergencyQrEnabled: false,
+              createdAt: new Date(),
+              updatedAt: new Date()
+            };
+            await db.collection('patients').doc(healthId).set(patientDoc);
+          }
+        }
+      } catch (patErr) {
+        if (patErr.code === 8 || patErr.message?.includes('RESOURCE_EXHAUSTED') || patErr.message?.includes('Quota exceeded')) {
+          console.warn('⚠️ Firestore quota exceeded while syncing patient profile in loginSync');
         } else {
-          const healthId = await generateAtomicPatientHealthId();
-        const nameToUse = userData.displayName || 'Patient';
-        const patientDoc = {
-          healthId,
-          patientHealthId: healthId,
-          ownerUid: uid,
-          relation: 'self',
-          isTemporary: false,
-          name: nameToUse,
-          searchName: nameToUse.toLowerCase(),
-          dob: '1990-01-01',
-          gender: 'other',
-          bloodGroup: '',
-          allergies: [],
-          conditions: [],
-          flags: { pregnant: false, disability: false },
-          emergencyContact: null,
-          accessList: {},
-          emergencyQrEnabled: false,
-          createdAt: new Date(),
-          updatedAt: new Date()
-        };
-        await db.collection('patients').doc(healthId).set(patientDoc);
+          throw patErr;
+        }
+      }
+    }
+
+    let doctorDisplayId = userData.displayId || userData.doctorDisplayId || null;
+    if (userData.role === 'doctor' || userData.doctorId) {
+      try {
+        const docLookupId = userData.doctorId || uid;
+        let dSnap = await db.collection('doctors').doc(docLookupId).get();
+        if (!dSnap.exists) {
+          const qSnap = await db.collection('doctors').where('doctorId', '==', docLookupId).limit(1).get();
+          if (!qSnap.empty) dSnap = qSnap.docs[0];
+        }
+        if (dSnap && dSnap.exists) {
+          const dData = dSnap.data();
+          doctorDisplayId = dData.displayId || dData.doctorDisplayId || assignDoctorDisplayId(dData);
+        }
+      } catch (docErr) {
+        if (docErr.code === 8 || docErr.message?.includes('RESOURCE_EXHAUSTED') || docErr.message?.includes('Quota exceeded')) {
+          console.warn('⚠️ Firestore quota exceeded while looking up doctor in loginSync');
+        } else {
+          throw docErr;
         }
       }
     }
@@ -420,9 +504,28 @@ export const loginSync = async (req, res, next) => {
       role: userData.role,
       displayName: userData.displayName || '',
       doctorId: userData.doctorId || req.user?.doctorId || null,
+      displayId: doctorDisplayId,
+      doctorDisplayId: doctorDisplayId,
       mustChangePassword: userData.mustChangePassword || false
     }));
   } catch (error) {
+    if (error.code === 8 || error.message?.includes('RESOURCE_EXHAUSTED') || error.message?.includes('Quota exceeded')) {
+      console.warn('⚠️ Firestore quota exceeded in loginSync catch handler, falling back to safe user profile');
+      const { uid, email } = req.user || {};
+      const fallbackRole = req.user?.role || 'patient';
+      const fallbackName = (req.user?.name || email?.split('@')[0] || 'User').trim();
+      return res.status(200).json(formatSuccessResponse({
+        uid: uid || 'user',
+        email: email || '',
+        role: fallbackRole,
+        displayName: fallbackName,
+        doctorId: req.user?.doctorId || null,
+        displayId: null,
+        doctorDisplayId: null,
+        mustChangePassword: false,
+        quotaExceededFallback: true
+      }));
+    }
     next(error);
   }
 };

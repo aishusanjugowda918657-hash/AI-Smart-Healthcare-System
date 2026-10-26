@@ -4,7 +4,6 @@ import {
   calculateTimeFactor,
   calculateRemainingCurrentTime,
   calculateWaitForPatient,
-  calculateLeaveAt,
   selectReasonText,
   roundTo5
 } from '../src/domain/waitTime.js';
@@ -253,34 +252,7 @@ describe('Wait-Time Prediction Engine — Full Coverage', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // 9. Leave Home Now moves with wait changes
-  // ═══════════════════════════════════════════════════════════════════════════
-  describe('Leave Home Now calculation', () => {
-    it('leaveAt moves later when predictedCallAt moves later', () => {
-      const earlyCall = '2026-10-06T10:30:00Z';
-      const lateCall = '2026-10-06T10:50:00Z';
-
-      const leaveEarly = calculateLeaveAt({ predictedCallAt: earlyCall, travelMinutes: 15 });
-      const leaveLate = calculateLeaveAt({ predictedCallAt: lateCall, travelMinutes: 15 });
-
-      const diffMs = new Date(leaveLate).getTime() - new Date(leaveEarly).getTime();
-      expect(diffMs).toBe(20 * 60 * 1000);
-    });
-
-    it('leaveAt accounts for travel time + 10 min buffer', () => {
-      const callAt = '2026-10-06T11:00:00Z';
-      const leaveAt = calculateLeaveAt({ predictedCallAt: callAt, travelMinutes: 20 });
-
-      // PRD: leaveAt = predictedCallAt - 10 min checkinBuffer - 20 travelMinutes - 5 safetyBuffer = 35 min
-      const leaveDate = new Date(leaveAt);
-      const callDate = new Date(callAt);
-      const diffMin = (callDate.getTime() - leaveDate.getTime()) / (60 * 1000);
-      expect(diffMin).toBe(35); // 20 travel + 10 buffer + 5 safety buffer
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // 10. Reason text reflects queue events
+  // 9. Reason text reflects queue events
   // ═══════════════════════════════════════════════════════════════════════════
   describe('Reason text selection', () => {
     it('emergency flag returns emergency reason', () => {

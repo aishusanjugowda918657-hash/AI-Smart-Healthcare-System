@@ -26,7 +26,7 @@ const QrScannerModal = ({ isOpen, onClose, onPatientFound }) => {
   const scannerRef = useRef(null);
   const scannerInstanceRef = useRef(null);
 
-  const HEALTH_ID_REGEX = /^HID-\d{4}-\d{5}$/;
+  const HEALTH_ID_REGEX = /^(SCAI|PHI|HID)-[A-Z0-9-]+$/i;
 
   // Start scanner when modal opens
   useEffect(() => {
@@ -86,13 +86,18 @@ const QrScannerModal = ({ isOpen, onClose, onPatientFound }) => {
     stopScanner(scannerInstanceRef.current);
     scannerInstanceRef.current = null;
 
-    const trimmed = decodedText.trim().toUpperCase();
-    setScannedId(trimmed);
+    let cleanId = (decodedText || '').trim();
+    const urlMatch = cleanId.match(/\/(?:e-records|records|patients)\/([^/?#]+)/i);
+    if (urlMatch) {
+      cleanId = urlMatch[1];
+    }
+    cleanId = cleanId.toUpperCase();
+    setScannedId(cleanId);
 
     // Client-side format validation
-    if (!HEALTH_ID_REGEX.test(trimmed)) {
+    if (!HEALTH_ID_REGEX.test(cleanId)) {
       setScanState('error');
-      setErrorMsg(`Invalid QR code. Expected format: HID-YYYY-XXXXX. Scanned: "${trimmed}"`);
+      setErrorMsg(`Invalid QR code format. Expected SmartCare Health ID or e-records link. Scanned: "${cleanId}"`);
       return;
     }
 
@@ -100,7 +105,7 @@ const QrScannerModal = ({ isOpen, onClose, onPatientFound }) => {
     setScanState('validating');
 
     try {
-      const res = await API.get(`/patients/by-health-id/${trimmed}`);
+      const res = await API.get(`/patients/by-health-id/${cleanId}`);
       const patientData = res.data?.data || res.data || {};
 
       setPatient(patientData);

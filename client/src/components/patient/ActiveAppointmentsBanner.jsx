@@ -182,7 +182,7 @@ export const ActiveAppointmentsBanner = () => {
               <div className="grid grid-cols-2 gap-y-4 gap-x-6 text-sm">
                 <div>
                   <p className="text-[10px] uppercase font-bold tracking-wider text-slate-500">Appointment ID</p>
-                  <p className="font-mono text-xs font-semibold text-slate-200 mt-1">{selectedAppt.id || selectedAppt.appointmentId}</p>
+                  <p className="font-mono text-xs font-semibold text-slate-200 mt-1">{selectedAppt.displayId || selectedAppt.appointmentId || selectedAppt.id}</p>
                 </div>
                 <div>
                   <p className="text-[10px] uppercase font-bold tracking-wider text-slate-500">Status</p>

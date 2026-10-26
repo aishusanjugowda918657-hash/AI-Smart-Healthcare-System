@@ -4,6 +4,7 @@ import { generateSlotsForDoctorDate } from '../domain/slots.js';
 import { notify } from '../services/notify.js';
 import { clock } from '../utils/clock.js';
 import { writeAuditLog } from '../utils/audit.js';
+import { assignBatchDoctorDisplayIds, assignDoctorDisplayId } from '../services/doctorDisplayIdService.js';
 
 // 60-second in-memory cache for doctor dashboard totals
 export const dashboardSummaryCache = new Map();
@@ -26,12 +27,49 @@ function calculateAge(dob) {
 export const getDepartments = async (req, res, next) => {
   try {
     const db = assertDbConnected();
-    const snapshot = await db.collection('departments').get();
+    const [deptSnapshot, docSnapshot] = await Promise.all([
+      db.collection('departments').get(),
+      db.collection('doctors').get()
+    ]);
 
-    const departments = snapshot.docs.map((doc) => ({
-      id: doc.id,
-      ...doc.data()
-    }));
+    // Count active doctors per department
+    const activeCounts = {};
+    docSnapshot.docs.forEach((doc) => {
+      const data = doc.data();
+      const status = String(data.status || 'ACTIVE').toUpperCase();
+      const isActive = status !== 'INACTIVE' && status !== 'DISABLED';
+      if (isActive) {
+        const deptId = data.departmentId || data.deptId;
+        if (deptId) {
+          activeCounts[deptId] = (activeCounts[deptId] || 0) + 1;
+        }
+      }
+    });
+
+    const WING_MAPPING = {
+      'dept-gen': { room: 'Room 101-104', wing: 'North Wing' },
+      'dept-card': { room: 'Room 201-205', wing: 'East Wing' },
+      'dept-ortho': { room: 'Room 206-210', wing: 'East Wing' },
+      'dept-gastro': { room: 'Room 301-304', wing: 'West Wing' },
+      'dept-nephro': { room: 'Room 305-308', wing: 'West Wing' },
+      'dept-neuro': { room: 'Room 401-405', wing: 'South Wing' },
+      'dept-onco': { room: 'Room 406-410', wing: 'South Wing' },
+      'dept-obgyn': { room: 'Room 501-505', wing: 'North Wing' },
+      'dept-ped': { room: 'Room 301-303', wing: 'West Wing' },
+      'dept-derm': { room: 'Room 401-402', wing: 'South Wing' }
+    };
+
+    const departments = deptSnapshot.docs.map((doc) => {
+      const data = doc.data();
+      const defaultWing = WING_MAPPING[doc.id] || { room: 'Room 501', wing: 'Main Hospital Wing' };
+      return {
+        id: doc.id,
+        room: data.room || defaultWing.room,
+        wing: data.wing || defaultWing.wing,
+        ...data,
+        activeDoctors: activeCounts[doc.id] || 0
+      };
+    });
 
     res.status(200).json(formatSuccessResponse(departments));
   } catch (error) {
@@ -44,7 +82,7 @@ export const getDepartments = async (req, res, next) => {
  */
 export const createDepartment = async (req, res, next) => {
   try {
-    const { name, letter, code, description = '', defaultDurationsMin } = req.body;
+    const { name, letter, code, room, wing, description = '', defaultDurationsMin } = req.body;
     if (!name || (!letter && !code)) {
       throw new AppError('VALIDATION_ERROR', 'Department Name and Letter/Code are required.', 400);
     }
@@ -58,6 +96,8 @@ export const createDepartment = async (req, res, next) => {
       name,
       letter: deptLetter,
       code: (code || deptLetter).toUpperCase(),
+      room: room || 'Room 501',
+      wing: wing || 'North Wing',
       description,
       defaultDurationsMin: defaultDurationsMin || {
         new: { simple: 10, moderate: 20, complex: 30 },
@@ -93,10 +133,16 @@ export const getDoctors = async (req, res, next) => {
 
     const snapshot = await query.get();
 
-    const doctors = snapshot.docs.map((doc) => ({
-      id: doc.id,
-      ...doc.data()
-    }));
+    const rawDoctors = snapshot.docs.map((doc) => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        status: data.status || 'ACTIVE',
+        ...data
+      };
+    });
+
+    const doctors = assignBatchDoctorDisplayIds(rawDoctors);
 
     if (includeSlotStatus === 'true') {
       const todayStr = new Date().toISOString().split('T')[0];
@@ -142,6 +188,11 @@ export const getDoctorById = async (req, res, next) => {
       id: docSnap.id,
       ...docSnap.data()
     };
+
+    if (!doctorData.displayId && !doctorData.doctorDisplayId) {
+      doctorData.displayId = assignDoctorDisplayId(doctorData);
+      doctorData.doctorDisplayId = doctorData.displayId;
+    }
 
     if (doctorData.departmentId) {
       const deptSnap = await db.collection('departments').doc(doctorData.departmentId).get();

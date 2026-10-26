@@ -17,13 +17,28 @@ import { useAuth } from '../../context/AuthContext';
  *   Extend (+5/+10/+15 min) with Undo, Start/End Break, Mark Procedure
  * - Quota safe: 1 live listener on queues/{doctorId_date}, NO polling
  */
-export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: propDoctorName }) {
+export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: propDoctorName, doctorDisplayId: propDoctorDisplayId }) {
   const navigate = useNavigate();
   const { currentUser, userRole, loading: authLoading } = useAuth();
 
   // Canonical authenticated doctor identifier (never default blindly to DOC-001)
   const doctorId = propDoctorId || currentUser?.doctorId || currentUser?.uid || null;
   const doctorName = propDoctorName || currentUser?.fullName || currentUser?.name || currentUser?.displayName || 'Doctor';
+  const [profileDisplayId, setProfileDisplayId] = useState(null);
+
+  useEffect(() => {
+    if (doctorId && !currentUser?.displayId && !propDoctorDisplayId) {
+      API.get(`/doctors/${doctorId}`)
+        .then((res) => {
+          if (res.data?.data?.displayId) {
+            setProfileDisplayId(res.data.data.displayId);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [doctorId, currentUser?.displayId, propDoctorDisplayId]);
+
+  const displayId = propDoctorDisplayId || currentUser?.displayId || currentUser?.doctorDisplayId || profileDisplayId || doctorId;
 
   const todayStr = new Date().toISOString().split('T')[0];
   const [selectedDate, setSelectedDate] = useState(todayStr);
@@ -122,6 +137,33 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
         fetchQueue();
       } else {
         setError(res.data?.error?.message || 'Failed to complete consultation');
+      }
+    } catch (err) {
+      setError(err.response?.data?.message || err.message);
+    }
+  };
+
+  const handleStartConsultation = async (appointmentId) => {
+    try {
+      setActionMessage('');
+      const res = await API.post('/queue/start-consultation', { appointmentId });
+      if (res.data?.success) {
+        setActionMessage('Patient arrived in room. Consultation started.');
+        fetchQueue();
+      }
+    } catch (err) {
+      setError(err.response?.data?.message || err.message);
+    }
+  };
+
+  const handleEndSession = async () => {
+    if (!window.confirm("End today's consultation session? Remaining un-serviced tokens will be finalized as No-Show without losing history.")) return;
+    try {
+      setActionMessage('');
+      const res = await API.post(`/queue/doctor/${doctorId}/end-session`, { date: selectedDate });
+      if (res.data?.success) {
+        setActionMessage('OPD session completed for today.');
+        fetchQueue();
       }
     } catch (err) {
       setError(err.response?.data?.message || err.message);
@@ -309,7 +351,7 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
         <div>
           <h1 className="text-2xl font-bold text-slate-900">{doctorName} Queue Control Center</h1>
           <div className="flex items-center gap-3 mt-1 text-sm text-slate-500">
-            <p>Doctor ID: <span className="font-mono font-bold text-slate-800">{doctorId}</span></p>
+            <p>Doctor ID: <span className="font-mono font-bold text-slate-800">{displayId}</span></p>
             <span>|</span>
             <label className="flex items-center gap-1.5 font-medium text-xs">
               <span>Date:</span>
@@ -391,7 +433,16 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
         <div className="lg:col-span-1 space-y-6">
           {/* Active Consultation Box */}
           <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
-            <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">NOW SERVING IN ROOM</h2>
+            <h2 className="text-xs font-semibold uppercase tracking-wider mb-3 flex items-center justify-between">
+              <span className={currentConsultation?.status === 'called' ? 'text-amber-600 font-bold' : 'text-slate-400'}>
+                {currentConsultation?.status === 'called' ? 'WAITING FOR ARRIVAL (CALLED)' : 'NOW SERVING IN ROOM'}
+              </span>
+              {currentConsultation?.status === 'called' && (
+                <span className="px-2 py-0.5 bg-amber-100 text-amber-800 text-[10px] font-bold rounded-full">
+                  5m Grace Active
+                </span>
+              )}
+            </h2>
             {currentConsultation ? (
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
@@ -427,27 +478,61 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
                 )}
 
                 <div className="pt-3 border-t border-slate-100 flex flex-col gap-2">
-                  <button
-                    onClick={() => navigate(`/doctor/consultation/${currentConsultation.id}`, { state: { ...currentConsultation } })}
-                    className="w-full py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs rounded-lg border border-indigo-200 transition text-center"
-                  >
-                    Open Clinical Workspace & Prescribe
-                  </button>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={handleFinish}
-                      className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-lg shadow transition"
-                    >
-                      Finish Consultation
-                    </button>
-                    <button
-                      onClick={() => handleNoShow(currentConsultation.id)}
-                      className="px-3 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-semibold text-xs rounded-lg transition"
-                      title="Mark patient as No-Show if they failed to arrive"
-                    >
-                      No-Show
-                    </button>
-                  </div>
+                  {currentConsultation.status === 'called' ? (
+                    <div className="space-y-2">
+                      <button
+                        onClick={() => handleStartConsultation(currentConsultation.id)}
+                        className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg shadow transition text-center flex items-center justify-center gap-1.5"
+                      >
+                        <span>✓ Patient Arrived (Start Consultation)</span>
+                      </button>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={async () => {
+                            await handleHoldToken(currentConsultation.id, currentConsultation.tokenLabel);
+                            if (readyCandidates.length > 0) {
+                              handleCallNext();
+                            }
+                          }}
+                          className="flex-1 py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 font-semibold text-xs rounded-lg transition"
+                          title="Hold this patient and proceed with next ready patient"
+                        >
+                          Hold & Proceed Next
+                        </button>
+                        <button
+                          onClick={() => handleNoShow(currentConsultation.id)}
+                          className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-semibold text-xs rounded-lg transition"
+                          title="Mark patient as No-Show if they failed to arrive"
+                        >
+                          No-Show
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => navigate(`/doctor/consultation/${currentConsultation.id}`, { state: { ...currentConsultation } })}
+                        className="w-full py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs rounded-lg border border-indigo-200 transition text-center"
+                      >
+                        Open Clinical Workspace & Prescribe
+                      </button>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={handleFinish}
+                          className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-lg shadow transition"
+                        >
+                          Finish Consultation
+                        </button>
+                        <button
+                          onClick={() => handleNoShow(currentConsultation.id)}
+                          className="px-3 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-semibold text-xs rounded-lg transition"
+                          title="Mark patient as No-Show if they failed to arrive"
+                        >
+                          No-Show
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             ) : (
@@ -528,21 +613,34 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
             </div>
 
             {/* Delay / Late Start */}
-            <div className="pt-1 border-t border-slate-100">
-              <label className="text-xs font-medium text-slate-600 block mb-1.5">Doctor Late Start</label>
-              <button
-                onClick={async () => {
-                  try {
-                    await API.post('/queue/late-start', { doctorId, minutes: 15 });
-                    fetchQueue();
-                  } catch (err) {
-                    setError(err.response?.data?.message || err.message);
-                  }
-                }}
-                className="w-full py-2 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-semibold text-xs rounded"
-              >
-                Report +15m Late Start
-              </button>
+            <div className="pt-1 border-t border-slate-100 space-y-2">
+              <div>
+                <label className="text-xs font-medium text-slate-600 block mb-1.5">Doctor Late Start</label>
+                <button
+                  onClick={async () => {
+                    try {
+                      await API.post('/queue/late-start', { doctorId, minutes: 15 });
+                      fetchQueue();
+                    } catch (err) {
+                      setError(err.response?.data?.message || err.message);
+                    }
+                  }}
+                  className="w-full py-2 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-semibold text-xs rounded"
+                >
+                  Report +15m Late Start
+                </button>
+              </div>
+
+              {/* End Doctor Session */}
+              <div>
+                <button
+                  onClick={handleEndSession}
+                  className="w-full py-2 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-300 font-bold text-xs rounded transition flex items-center justify-center gap-1.5"
+                  title="Close today's consultation session"
+                >
+                  <span>⏹ End Today's Session</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>

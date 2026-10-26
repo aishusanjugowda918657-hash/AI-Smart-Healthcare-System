@@ -1,16 +1,42 @@
 import React, { useState, useEffect } from 'react';
-import { Clock, ShieldCheck, Activity, Users, AlertCircle } from 'lucide-react';
+import { Clock, ShieldCheck, Activity, Users, AlertCircle, RefreshCw } from 'lucide-react';
 import API from '../../services/api';
 import Badge from '../common/Badge';
 
 export const QueueMonitor = () => {
-  const [systemQueue] = useState([
-    { tokenNumber: 'CARD-T-014', department: 'Cardiology', patientHealthId: 'HID-2026-00001', priorityCategory: 'EMERGENCY', priorityScore: 300, status: 'serving', waitMin: 0 },
-    { tokenNumber: 'CARD-T-015', department: 'Cardiology', patientHealthId: 'HID-2026-00042', priorityCategory: 'SENIOR', priorityScore: 200, status: 'waiting', waitMin: 18 },
-    { tokenNumber: 'CARD-T-016', department: 'Cardiology', patientHealthId: 'HID-2026-00089', priorityCategory: 'STANDARD', priorityScore: 100, status: 'waiting', waitMin: 32 },
-    { tokenNumber: 'GEN-T-008', department: 'General Medicine', patientHealthId: 'HID-2026-00104', priorityCategory: 'STANDARD', priorityScore: 100, status: 'serving', waitMin: 0 },
-    { tokenNumber: 'PED-T-003', department: 'Pediatrics', patientHealthId: 'HID-2026-00215', priorityCategory: 'SENIOR', priorityScore: 200, status: 'waiting', waitMin: 12 }
-  ]);
+  const [systemQueue, setSystemQueue] = useState([]);
+  const [metrics, setMetrics] = useState({
+    currentlyServing: 0,
+    inWaitingLine: 0,
+    systemAvgWaitMinutes: 0
+  });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const fetchLiveQueue = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await API.get('/admin/live-queue');
+      if (res.data?.data) {
+        setSystemQueue(res.data.data.queue || []);
+        setMetrics({
+          currentlyServing: res.data.data.currentlyServing || 0,
+          inWaitingLine: res.data.data.inWaitingLine || 0,
+          systemAvgWaitMinutes: res.data.data.systemAvgWaitMinutes || 0
+        });
+      }
+    } catch (err) {
+      console.warn('Fetch live queue error:', err);
+      setError(err.message || 'Failed to fetch live queue data');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchLiveQueue();
+  }, []);
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
@@ -25,23 +51,45 @@ export const QueueMonitor = () => {
           </div>
         </div>
 
-        <Badge variant="warning">LIVE QUEUE MONITOR</Badge>
+        <div className="flex items-center gap-3">
+          <Badge variant="warning">LIVE QUEUE MONITOR</Badge>
+          <button
+            onClick={fetchLiveQueue}
+            disabled={loading}
+            className="p-2 hover:bg-slate-100 rounded-xl text-slate-600 transition-colors"
+            title="Refresh Live Queue"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-brand-600' : ''}`} />
+          </button>
+        </div>
       </div>
+
+      {error && (
+        <div className="p-4 bg-red-50 text-red-700 text-xs font-semibold rounded-2xl border border-red-200">
+          ⚠️ {error}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-md text-center">
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Currently Serving</span>
-          <span className="text-3xl font-extrabold text-teal-600 font-mono">2 Patients</span>
+          <span className="text-3xl font-extrabold text-teal-600 font-mono">
+            {metrics.currentlyServing} Patients
+          </span>
         </div>
 
         <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-md text-center">
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">In Waiting Line</span>
-          <span className="text-3xl font-extrabold text-amber-500 font-mono">3 Patients</span>
+          <span className="text-3xl font-extrabold text-amber-500 font-mono">
+            {metrics.inWaitingLine} Patients
+          </span>
         </div>
 
         <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-md text-center">
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">System Avg Wait</span>
-          <span className="text-3xl font-extrabold text-brand-600 font-mono">16.2 mins</span>
+          <span className="text-3xl font-extrabold text-brand-600 font-mono">
+            {metrics.systemAvgWaitMinutes > 0 ? `${metrics.systemAvgWaitMinutes} mins` : '0 mins'}
+          </span>
         </div>
       </div>
 
@@ -61,25 +109,40 @@ export const QueueMonitor = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-xs font-mono">
-              {systemQueue.map((item, idx) => (
-                <tr key={idx} className="hover:bg-slate-50">
-                  <td className="py-3 px-3 font-bold text-slate-800">{item.tokenNumber}</td>
-                  <td className="py-3 px-3 font-sans font-semibold text-slate-700">{item.department}</td>
-                  <td className="py-3 px-3 text-brand-700 font-bold">{item.patientHealthId}</td>
-                  <td className="py-3 px-3">
-                    <span className="font-sans text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border">
-                      {item.priorityCategory} ({item.priorityScore})
-                    </span>
-                  </td>
-                  <td className="py-3 px-3 font-sans text-slate-600">
-                    {item.waitMin > 0 ? `~${item.waitMin} mins` : 'In Consultation'}
-                  </td>
-                  <td className="py-3 px-3 font-sans capitalize">
-                    {item.status === 'serving' && <Badge variant="warning">In Room</Badge>}
-                    {item.status === 'waiting' && <Badge variant="info">Waiting</Badge>}
+              {loading && systemQueue.length === 0 ? (
+                <tr>
+                  <td colSpan="6" className="py-8 text-center text-slate-400 font-sans">
+                    <RefreshCw className="w-5 h-5 mx-auto animate-spin mb-2 text-brand-500" />
+                    Checking live hospital queue...
                   </td>
                 </tr>
-              ))}
+              ) : systemQueue.length > 0 ? (
+                systemQueue.map((item, idx) => (
+                  <tr key={item.id || idx} className="hover:bg-slate-50 transition-colors">
+                    <td className="py-3 px-3 font-bold text-slate-800">{item.tokenNumber}</td>
+                    <td className="py-3 px-3 font-sans font-semibold text-slate-700">{item.department}</td>
+                    <td className="py-3 px-3 text-brand-700 font-bold">{item.patientHealthId}</td>
+                    <td className="py-3 px-3">
+                      <span className="font-sans text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border">
+                        {item.priorityCategory} ({item.priorityScore})
+                      </span>
+                    </td>
+                    <td className="py-3 px-3 font-sans text-slate-600">
+                      {item.waitMin > 0 ? `~${item.waitMin} mins` : 'In Consultation'}
+                    </td>
+                    <td className="py-3 px-3 font-sans capitalize">
+                      {['serving', 'in_room', 'called'].includes(item.status) && <Badge variant="warning">In Room</Badge>}
+                      {item.status === 'waiting' && <Badge variant="info">Waiting</Badge>}
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan="6" className="py-8 text-center text-slate-400 font-sans italic">
+                    No active patients in queue right now. The waiting area is currently clear.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

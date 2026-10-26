@@ -13,13 +13,17 @@ export const formatDate = (dateString) => {
 };
 
 export const formatTime = (timeString) => {
-  if (!timeString) return 'N/A';
+  if (!timeString) return '';
   try {
-    const [hours, minutes] = timeString.split(':');
+    const clean = String(timeString).trim();
+    if (/am|pm/i.test(clean)) return clean;
+    const firstPart = clean.split('-')[0].trim();
+    const [hours, minutes] = firstPart.split(':');
     const h = parseInt(hours, 10);
+    if (isNaN(h)) return clean;
     const ampm = h >= 12 ? 'PM' : 'AM';
     const formattedHours = h % 12 || 12;
-    return `${formattedHours}:${minutes} ${ampm}`;
+    return `${String(formattedHours).padStart(2, '0')}:${minutes || '00'} ${ampm}`;
   } catch (err) {
     return timeString;
   }
@@ -46,19 +50,43 @@ export const calculateAge = (dobString) => {
   return age >= 0 ? age : 0;
 };
 
-export const getTodayInHospitalTz = () => {
+export const getTodayInHospitalTz = (customDate = new Date()) => {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Kolkata',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit'
-  }).format(new Date());
+  }).format(customDate);
 };
 
-export const isPastAppointment = (dateString) => {
+export const getCurrentTimeInHospitalTz = (customDate = new Date()) => {
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).format(customDate);
+};
+
+export const isPastAppointment = (dateString, customNow = new Date()) => {
   if (!dateString) return false;
-  const todayStr = getTodayInHospitalTz();
+  const todayStr = getTodayInHospitalTz(customNow);
   return String(dateString).trim() < todayStr;
 };
+
+export const isSlotExpired = (appointmentDate, startAt, customNow = new Date()) => {
+  if (!appointmentDate) return true;
+  const cleanDate = String(appointmentDate).trim();
+  const todayStr = getTodayInHospitalTz(customNow);
+
+  if (cleanDate < todayStr) return true;
+  if (cleanDate > todayStr) return false;
+
+  // On today's date: check if slot start time has already passed
+  if (!startAt) return true;
+  const currentTimeStr = getCurrentTimeInHospitalTz(customNow);
+  return String(startAt).trim() <= currentTimeStr;
+};
+
 
 

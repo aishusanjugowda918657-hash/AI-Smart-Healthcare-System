@@ -14,6 +14,7 @@ import {
   getNotifications,
   markRead,
   markAllRead,
+  markDisplayed
 } from '../controllers/notificationController.js';
 import { requireAuth } from '../middleware/authMiddleware.js';
 
@@ -22,6 +23,7 @@ const router = express.Router();
 // All notification endpoints require authentication
 router.get('/', requireAuth, getNotifications);
 router.patch('/:id/read', requireAuth, markRead);
+router.patch('/:id/displayed', requireAuth, markDisplayed);
 router.post('/read-all', requireAuth, markAllRead);
 
 // Legacy route: backward-compat (Phase 1–6 test expects [200, 503])

@@ -83,20 +83,37 @@ export const AuditLogViewer = () => {
           </thead>
           <tbody className="divide-y divide-slate-100 text-xs font-mono">
             {filteredLogs.length > 0 ? (
-              filteredLogs.map((log) => (
-                <tr key={log.id || log.timestamp} className="hover:bg-slate-50 transition-colors">
-                  <td className="py-3 px-3 text-slate-400 whitespace-nowrap">
-                    {log.timestamp ? new Date(log.timestamp).toLocaleString() : 'Just now'}
-                  </td>
-                  <td className="py-3 px-3">
-                    <span className="font-bold text-slate-800">{log.actorUid || log.actor || 'system'}</span>
-                    <Badge variant="secondary" className="ml-2 uppercase">{log.actorRole || log.userRole || 'admin'}</Badge>
-                  </td>
-                  <td className="py-3 px-3 font-bold text-indigo-600">{log.action}</td>
-                  <td className="py-3 px-3 text-slate-600">{log.targetId || log.resourceId || '-'}</td>
-                  <td className="py-3 px-3 text-slate-400 font-mono text-[10px]">{log.requestId || 'req-auto'}</td>
-                </tr>
-              ))
+              filteredLogs.map((log) => {
+                let displayTime = 'Just now';
+                if (log.timestamp) {
+                  try {
+                    const d = typeof log.timestamp === 'string' || typeof log.timestamp === 'number'
+                      ? new Date(log.timestamp)
+                      : log.timestamp._seconds
+                      ? new Date(log.timestamp._seconds * 1000)
+                      : log.timestamp.seconds
+                      ? new Date(log.timestamp.seconds * 1000)
+                      : null;
+                    if (d && !isNaN(d.getTime())) {
+                      displayTime = d.toLocaleString();
+                    }
+                  } catch (_) {}
+                }
+                return (
+                  <tr key={log.id || `${log.action}-${Math.random()}`} className="hover:bg-slate-50 transition-colors">
+                    <td className="py-3 px-3 text-slate-500 whitespace-nowrap font-sans text-xs">
+                      {displayTime}
+                    </td>
+                    <td className="py-3 px-3">
+                      <span className="font-bold text-slate-800">{log.actorUid || log.actor || 'system'}</span>
+                      <Badge variant="secondary" className="ml-2 uppercase">{log.actorRole || log.userRole || 'admin'}</Badge>
+                    </td>
+                    <td className="py-3 px-3 font-bold text-indigo-600">{log.action}</td>
+                    <td className="py-3 px-3 text-slate-600">{log.targetId || log.resourceId || (log.details && (log.details.patientHealthId || log.details.targetId)) || '-'}</td>
+                    <td className="py-3 px-3 text-slate-400 font-mono text-[10px]">{log.requestId || 'req-auto'}</td>
+                  </tr>
+                );
+              })
             ) : (
               <tr>
                 <td colSpan="5" className="py-8 text-center text-slate-400 italic">

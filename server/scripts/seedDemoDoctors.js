@@ -1,5 +1,6 @@
 import { assertDbConnected, auth } from '../src/config/firebase.js';
 import { generateSlotsJob } from '../src/jobs/scheduler.js';
+import { assignBatchDoctorDisplayIds } from '../src/services/doctorDisplayIdService.js';
 
 const DEMO_DOCTORS = [
   {
@@ -118,7 +119,8 @@ export const seedDemoDoctors = async ({ skipSlots = false, days = 14 } = {}) => 
 
   console.log('\n👨‍⚕️ Step 2: Provisioning 5 Demo Doctor Accounts...');
 
-  for (const doc of DEMO_DOCTORS) {
+  const doctorsWithDisplayId = assignBatchDoctorDisplayIds(DEMO_DOCTORS);
+  for (const doc of doctorsWithDisplayId) {
     let uid;
     let accountStatus = 'CREATED';
 
@@ -174,6 +176,8 @@ export const seedDemoDoctors = async ({ skipSlots = false, days = 14 } = {}) => 
     // Field structure satisfying both prompt requirements & existing project schema
     const doctorProfile = {
       doctorId: doc.doctorId,
+      displayId: doc.displayId,
+      doctorDisplayId: doc.displayId,
       uid: uid,
       doctorUid: uid,
       name: doc.name,

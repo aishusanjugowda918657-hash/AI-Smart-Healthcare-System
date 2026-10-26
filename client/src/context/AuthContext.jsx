@@ -75,9 +75,11 @@ export const AuthProvider = ({ children }) => {
       if (response.data && response.data.success) {
         const syncData = response.data.data;
         const { role, mustChangePassword: mustChange } = syncData;
+        const cleanRole = String(role || '').trim().toLowerCase();
+        const normalizedRole = cleanRole === 'receptionist' ? 'reception' : cleanRole;
 
         // Strict role validation: missing or unknown role -> show message and logout
-        if (!role || !ALLOWED_ROLES.includes(role)) {
+        if (!normalizedRole || !ALLOWED_ROLES.includes(normalizedRole)) {
           console.warn('⚠️ Unknown or unassigned role returned by loginSync:', role);
           setNoRoleError('Your account has no role assigned');
           await logout();
@@ -94,17 +96,20 @@ export const AuthProvider = ({ children }) => {
 
         const resolvedDoctorId = syncData.doctorId || tokenDoctorId || null;
 
-        setUserRole(role);
+        setUserRole(normalizedRole);
         setMustChangePassword(!!mustChange);
         setLoginSynced(true);
         setCurrentUser((prev) => ({
           ...(prev || {}),
           ...user,
           ...syncData,
-          doctorId: resolvedDoctorId
+          role: normalizedRole,
+          doctorId: resolvedDoctorId,
+          displayId: syncData.displayId || syncData.doctorDisplayId || (prev && (prev.displayId || prev.doctorDisplayId)) || null,
+          doctorDisplayId: syncData.displayId || syncData.doctorDisplayId || (prev && (prev.displayId || prev.doctorDisplayId)) || null
         }));
 
-        if (role === 'patient') {
+        if (normalizedRole === 'patient') {
           fetchPatientProfile();
         }
 
@@ -171,6 +176,8 @@ export const AuthProvider = ({ children }) => {
     if (!auth) {
       throw new Error('Firebase Auth unavailable.');
     }
+
+    clearStaleSession();
 
     const credential = await signInWithEmailAndPassword(auth, email, password);
     setCurrentUser(credential.user);

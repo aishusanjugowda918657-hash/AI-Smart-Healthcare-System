@@ -12,8 +12,13 @@ import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
 
 import { isTimeOverlapping } from '../utils/time.js';
+import clock from '../utils/clock.js';
+import { notify } from '../services/notify.js';
+import { parseSlotTimeToDate } from '../utils/timezoneDate.js';
+import { getAppointmentDateCompact, formatAppointmentDisplayId } from '../services/appointmentIdService.js';
 dayjs.extend(utc);
 dayjs.extend(timezone);
+
 
 /**
  * POST /api/booking/triage (PRD F4)
@@ -180,7 +185,7 @@ export const getDoctorOptions = async (req, res, next) => {
     const specialtyTags = deriveSpecialtyTags(reasonText);
 
     // Fetch slots and queues
-    const today = dayjs().tz('Asia/Kolkata');
+    const today = dayjs(clock.now()).tz('Asia/Kolkata');
     const todayStr = today.format('YYYY-MM-DD');
     const maxDateStr = today.add(14, 'day').format('YYYY-MM-DD');
     const currentTimeStr = today.format('HH:mm');
@@ -208,7 +213,7 @@ export const getDoctorOptions = async (req, res, next) => {
         allSlotsDocs.forEach(s => {
           const d = s.data();
           if (d.status !== SlotStatus.FREE && String(d.status).toLowerCase() !== 'free') return;
-          if (d.date === todayStr && d.startAt < currentTimeStr) return;
+          if (d.date === todayStr && d.startAt <= currentTimeStr) return;
 
           const did = d.doctorId;
           if (!nextSlotByDoctor[did] || (d.date < nextSlotByDoctor[did].date || (d.date === nextSlotByDoctor[did].date && d.startAt < nextSlotByDoctor[did].startAt))) {
@@ -417,7 +422,8 @@ export const getBookingSuggestions = async (req, res, next) => {
       slots,
       dateStr: date,
       travelMinutes: travelMin,
-      currentDoctorId: resolvedDoctorId
+      currentDoctorId: resolvedDoctorId,
+      nowMs: clock.now().getTime()
     });
 
     const hasFree = slots.some(s => s.status === SlotStatus.FREE);
@@ -677,9 +683,10 @@ export const createAppointment = async (req, res, next) => {
       const slotRefs = targetSlotIds.map((id) => db.collection('slots').doc(id));
       const slotSnaps = await Promise.all(slotRefs.map((r) => tx.get(r)));
 
-      const nowMs = Date.now();
-      const todayIST = dayjs().tz('Asia/Kolkata').format('YYYY-MM-DD');
-      const currentTimeIST = dayjs().tz('Asia/Kolkata').format('HH:mm');
+      const nowMs = clock.now().getTime();
+      const nowIST = dayjs(clock.now()).tz('Asia/Kolkata');
+      const todayIST = nowIST.format('YYYY-MM-DD');
+      const currentTimeIST = nowIST.format('HH:mm');
 
       for (const s of slotSnaps) {
         // 1. Verification: Selected slot exists
@@ -722,16 +729,30 @@ export const createAppointment = async (req, res, next) => {
         }
 
         // 7. Verification: Slot is not expired
-        if (data.date < todayIST || (!isDevOrTest && data.date === todayIST && data.startAt <= currentTimeIST)) {
+        const slotDate = data.date || date;
+        const isPastDate = slotDate < todayIST;
+        const isPastTimeToday = slotDate === todayIST && data.startAt <= currentTimeIST;
+        if (isPastDate || isPastTimeToday) {
           throw new AppError('SLOT_EXPIRED', `Slot '${s.id}' is in the past and has expired.`, 409);
         }
       }
 
-      // 2. Fetch and increment daily department counter
+      // 2. Fetch daily department counter & appointment display counter (All transaction reads before writes)
       const counterRef = db.collection('counters').doc(`token_${deptLetter}_${date}`);
-      const counterSnap = await tx.get(counterRef);
+      const dateCompact = getAppointmentDateCompact(date);
+      const apptDisplayCounterRef = db.collection('counters').doc(`apptDisplay_${dateCompact}`);
+
+      const [counterSnap, apptDisplaySnap] = await Promise.all([
+        tx.get(counterRef),
+        tx.get(apptDisplayCounterRef)
+      ]);
+
       const tokenNumber = (counterSnap.exists ? counterSnap.data().value || 0 : 0) + 1;
+      const apptSeq = (apptDisplaySnap.exists ? apptDisplaySnap.data().value || 0 : 0) + 1;
+      const displayId = formatAppointmentDisplayId(dateCompact, apptSeq);
+
       tx.set(counterRef, { value: tokenNumber }, { merge: true });
+      tx.set(apptDisplayCounterRef, { value: apptSeq, dateCompact, updatedAt: new Date() }, { merge: true });
 
       const tokenLabel = `${deptLetter}-${String(tokenNumber).padStart(3, '0')}`;
 
@@ -752,6 +773,7 @@ export const createAppointment = async (req, res, next) => {
       const apptDoc = {
         id: appointmentId,
         appointmentId,
+        displayId,
         patientHealthId,
         patientName,
         patientUid: userId,
@@ -770,6 +792,7 @@ export const createAppointment = async (req, res, next) => {
         slotIds: targetSlotIds,
         date,
         bookedStartAt,
+        timeSlot: bookedStartAt,
         durationMin,
         visitType,
         reasonText,
@@ -844,6 +867,7 @@ export const createAppointment = async (req, res, next) => {
         id: tokenId,
         tokenNumber: tokenLabel || String(tokenNumber),
         appointmentId,
+        displayId,
         patientUid: userId,
         patientHealthId,
         doctorUid: resolvedDoctorUid,
@@ -861,6 +885,7 @@ export const createAppointment = async (req, res, next) => {
         tx.update(r, {
           status: SlotStatus.BOOKED,
           appointmentId,
+          displayId,
           heldUntil: null,
           heldBy: null,
           updatedAt: new Date()
@@ -879,6 +904,94 @@ export const createAppointment = async (req, res, next) => {
       healthId: patientHealthId,
       requestId: req.requestId
     });
+
+    // PRD F8: Appointment Confirmation Notification
+    const finalStartAt = apptResult.bookedStartAt || '09:00';
+    try {
+      await notify({
+        uids: [userId],
+        title: `${patientName}: Appointment confirmed`,
+        body: `Your appointment (${apptResult.displayId || apptResult.id}) with ${resolvedDoctorName} on ${date} at ${finalStartAt} is confirmed. Token: ${apptResult.tokenLabel || apptResult.tokenNumber}.`,
+        privacyBody: `${patientName}: Appointment confirmed`,
+        type: 'APPOINTMENT_CONFIRMED',
+        data: {
+          appointmentId: apptResult.id,
+          displayId: apptResult.displayId,
+          tokenLabel: apptResult.tokenLabel || String(apptResult.tokenNumber),
+          date,
+          timeSlot: finalStartAt,
+          doctorId: resolvedDoctorId
+        }
+      });
+    } catch (notifErr) {
+      console.warn('Booking confirmation notification warning:', notifErr.message);
+    }
+
+    // PRD Rules B1 & B11: Deterministic Appointment Reminder Scheduling (24h and 2h before)
+    try {
+      const nowMs = clock.now().getTime();
+      const apptDateObj = parseSlotTimeToDate(date, finalStartAt);
+      if (apptDateObj) {
+        const apptMs = apptDateObj.getTime();
+        const remBatch = db.batch();
+        let hasReminders = false;
+        const receiverUids = [userId];
+
+        // 24h reminder (due 24h before appointment)
+        const due24h = new Date(apptMs - 24 * 60 * 60 * 1000);
+        if (nowMs < due24h.getTime()) {
+          const rem24Id = `rem_24h_${apptResult.id}`;
+          remBatch.set(db.collection('reminders').doc(rem24Id), {
+            id: rem24Id,
+            appointmentId: apptResult.id,
+            type: 'appointment_24h',
+            healthId: patientHealthId || null,
+            patientName,
+            receiverUids,
+            title: `${patientName}: Appointment Tomorrow`,
+            body: `Your consultation with ${resolvedDoctorName} is scheduled for tomorrow at ${finalStartAt}.`,
+            privacyBody: `${patientName}: Appointment reminder`,
+            actions: ['confirm', 'reschedule'],
+            status: 'pending',
+            dueAt: due24h,
+            attempts: 0,
+            createdAt: clock.now(),
+            updatedAt: clock.now()
+          }, { merge: true });
+          hasReminders = true;
+        }
+
+        // 2h reminder (due 2h before appointment)
+        const due2h = new Date(apptMs - 2 * 60 * 60 * 1000);
+        if (nowMs < due2h.getTime()) {
+          const rem2hId = `rem_2h_${apptResult.id}`;
+          remBatch.set(db.collection('reminders').doc(rem2hId), {
+            id: rem2hId,
+            appointmentId: apptResult.id,
+            type: 'appointment_2h',
+            healthId: patientHealthId || null,
+            patientName,
+            receiverUids,
+            title: `${patientName}: Appointment in 2 Hours`,
+            body: `Your appointment with ${resolvedDoctorName} starts at ${finalStartAt}. Please confirm you are coming.`,
+            privacyBody: `${patientName}: Appointment in 2 hours`,
+            actions: ['confirm', 'cancel', 'reschedule'],
+            status: 'pending',
+            dueAt: due2h,
+            attempts: 0,
+            createdAt: clock.now(),
+            updatedAt: clock.now()
+          }, { merge: true });
+          hasReminders = true;
+        }
+
+        if (hasReminders) {
+          await remBatch.commit();
+        }
+      }
+    } catch (remErr) {
+      console.warn('Reminder pre-scheduling warning:', remErr.message);
+    }
 
     res.status(201).json(formatSuccessResponse(apptResult));
   } catch (error) {
@@ -997,9 +1110,22 @@ export const registerWalkin = async (req, res, next) => {
     const deptLetter = (departmentId.split('-')[1] || 'G').toUpperCase().substring(0, 1);
 
     const counterRef = db.collection('counters').doc(`token_${deptLetter}_${todayStr}`);
-    const counterSnap = await counterRef.get();
+    const dateCompact = getAppointmentDateCompact(todayStr);
+    const apptDisplayCounterRef = db.collection('counters').doc(`apptDisplay_${dateCompact}`);
+
+    const [counterSnap, apptDisplaySnap] = await Promise.all([
+      counterRef.get(),
+      apptDisplayCounterRef.get()
+    ]);
+
     const tokenNumber = (counterSnap.exists ? counterSnap.data().value || 0 : 0) + 1;
-    await counterRef.set({ value: tokenNumber }, { merge: true });
+    const apptSeq = (apptDisplaySnap.exists ? apptDisplaySnap.data().value || 0 : 0) + 1;
+    const displayId = formatAppointmentDisplayId(dateCompact, apptSeq);
+
+    await Promise.all([
+      counterRef.set({ value: tokenNumber }, { merge: true }),
+      apptDisplayCounterRef.set({ value: apptSeq, dateCompact, updatedAt: new Date() }, { merge: true })
+    ]);
 
     const tokenLabel = `${deptLetter}-${String(tokenNumber).padStart(3, '0')}`;
     const rawCheckinCode = crypto.randomBytes(16).toString('hex');
@@ -1008,6 +1134,8 @@ export const registerWalkin = async (req, res, next) => {
     const apptRef = db.collection('appointments').doc();
     const apptDoc = {
       id: apptRef.id,
+      appointmentId: apptRef.id,
+      displayId,
       patientHealthId: patientHealthId || 'WALKIN-PATIENT',
       patientName: patientName || 'Walkin Patient',
       ownerUid: req.user.uid,

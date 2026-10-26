@@ -4,6 +4,13 @@
  */
 
 import { SlotStatus } from './constants.js';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc.js';
+import timezone from 'dayjs/plugin/timezone.js';
+import clock from '../utils/clock.js';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 /**
  * Format time integer minutes from midnight to "HH:mm" string
@@ -314,19 +321,21 @@ export function calculateDayFillLevel(slots = []) {
  */
 export function getSmartSlotSuggestions({
   slots = [],
-  dateStr = new Date().toISOString().split('T')[0],
+  dateStr = dayjs(clock.now ? clock.now() : Date.now()).tz('Asia/Kolkata').format('YYYY-MM-DD'),
   travelMinutes = null,
   previousDoctorId = null,
   currentDoctorId = null,
-  nowMs = Date.now()
+  nowMs = clock.now ? clock.now().getTime() : Date.now()
 }) {
-  // For today's date, exclude slots whose start time has already passed (with 5-min buffer)
-  const today = new Date(nowMs).toISOString().split('T')[0];
+  const nowIST = dayjs(nowMs).tz('Asia/Kolkata');
+  const today = nowIST.format('YYYY-MM-DD');
+  const isPastDate = dateStr < today;
   const isToday = dateStr === today;
-  const nowMinutes = new Date(nowMs).getHours() * 60 + new Date(nowMs).getMinutes();
+  const nowMinutes = HHmmToMinutes(nowIST.format('HH:mm'));
 
   const availableSlots = slots.filter((s) => {
     if (s.status !== SlotStatus.FREE && s.status !== SlotStatus.RESERVED) return false;
+    if (isPastDate) return false;
     if (isToday) {
       const slotStartMinutes = HHmmToMinutes(s.startAt);
       // Require at least 5 minutes before slot start
@@ -335,106 +344,103 @@ export function getSmartSlotSuggestions({
     return true;
   });
 
-  if (availableSlots.length === 0) {
-    return {
-      cards: [],
-      fullList: []
-    };
-  }
-
-  const scoredSlots = availableSlots.map((slot, index) => {
-    // 1. Earliness: earlier slots in the day score higher (norm 0..1)
-    const earliness = 1 - (index / Math.max(availableSlots.length - 1, 1));
-
-    // 2. Quietness: slots surrounding fewer booked slots score higher
-    const slotMin = HHmmToMinutes(slot.startAt);
-    const nearbyBooked = slots.filter((s) => {
-      if (s.status !== SlotStatus.BOOKED) return false;
-      const m = HHmmToMinutes(s.startAt);
-      return Math.abs(m - slotMin) <= 30;
-    }).length;
-    const quietness = 1 - Math.min(nearbyBooked / 6, 1);
-
-    // 3. Travel Fit: check if travel time allows reaching on time
-    let travelFit = 0.5;
-    if (typeof travelMinutes === 'number' && travelMinutes > 0) {
-      const checkinBuffer = 10;
-      const leaveAtMin = slotMin - checkinBuffer - travelMinutes - 5;
-      const currentMin = new Date(nowMs).getHours() * 60 + new Date(nowMs).getMinutes();
-      if (leaveAtMin >= currentMin + 5 && leaveAtMin >= 360 && leaveAtMin <= 1260) {
-        travelFit = 1.0;
-      } else {
-        travelFit = 0.1;
-      }
-    }
-
-    // 4. Continuity bonus if doctor matches previous doctor
-    const continuity = (previousDoctorId && currentDoctorId && previousDoctorId === currentDoctorId) ? 1.0 : 0.0;
-
-    const score = Number((0.35 * earliness + 0.35 * quietness + 0.20 * travelFit + 0.10 * continuity).toFixed(3));
-
-    return {
-      slot,
-      score,
-      earliness,
-      quietness,
-      travelFit,
-      continuity
-    };
-  });
-
-  // Sort by score descending
-  scoredSlots.sort((a, b) => b.score - a.score);
-
-  const earliestCandidate = availableSlots[0];
-  const quietestCandidate = [...scoredSlots].sort((a, b) => b.quietness - a.quietness)[0]?.slot || availableSlots[0];
-
   const cards = [];
 
-  if (earliestCandidate) {
-    cards.push({
-      type: 'earliest',
-      label: 'Earliest Available',
-      slotId: earliestCandidate.id,
-      startAt: earliestCandidate.startAt,
-      timeStr: earliestCandidate.startAt,
-      reason: 'Gets you seen as soon as possible today.'
-    });
-  }
+  if (availableSlots.length > 0) {
+    const scoredSlots = availableSlots.map((slot, index) => {
+      // 1. Earliness: earlier slots in the day score higher (norm 0..1)
+      const earliness = 1 - (index / Math.max(availableSlots.length - 1, 1));
 
-  if (quietestCandidate && quietestCandidate.id !== earliestCandidate?.id) {
-    cards.push({
-      type: 'quietest',
-      label: 'Shortest Expected Wait',
-      slotId: quietestCandidate.id,
-      startAt: quietestCandidate.startAt,
-      timeStr: quietestCandidate.startAt,
-      reason: 'Lowest expected clinic workload window.'
-    });
-  }
+      // 2. Quietness: slots surrounding fewer booked slots score higher
+      const slotMin = HHmmToMinutes(slot.startAt);
+      const nearbyBooked = slots.filter((s) => {
+        if (s.status !== SlotStatus.BOOKED) return false;
+        const m = HHmmToMinutes(s.startAt);
+        return Math.abs(m - slotMin) <= 30;
+      }).length;
+      const quietness = 1 - Math.min(nearbyBooked / 6, 1);
 
-  if (travelMinutes && travelMinutes > 0) {
-    const travelFitCandidate = [...scoredSlots].sort((a, b) => b.travelFit - a.travelFit)[0]?.slot;
-    if (travelFitCandidate && !cards.some((c) => c.slotId === travelFitCandidate.id)) {
+      // 3. Travel Fit: check if travel time allows reaching on time
+      let travelFit = 0.5;
+      if (typeof travelMinutes === 'number' && travelMinutes > 0) {
+        const checkinBuffer = 10;
+        const leaveAtMin = slotMin - checkinBuffer - travelMinutes - 5;
+        const currentMin = nowMinutes;
+        if (leaveAtMin >= currentMin + 5 && leaveAtMin >= 360 && leaveAtMin <= 1260) {
+          travelFit = 1.0;
+        } else {
+          travelFit = 0.1;
+        }
+      }
+
+      // 4. Continuity bonus if doctor matches previous doctor
+      const continuity = (previousDoctorId && currentDoctorId && previousDoctorId === currentDoctorId) ? 1.0 : 0.0;
+
+      const score = Number((0.35 * earliness + 0.35 * quietness + 0.20 * travelFit + 0.10 * continuity).toFixed(3));
+
+      return {
+        slot,
+        score,
+        earliness,
+        quietness,
+        travelFit,
+        continuity
+      };
+    });
+
+    // Sort by score descending
+    scoredSlots.sort((a, b) => b.score - a.score);
+
+    const earliestCandidate = availableSlots[0];
+    const quietestCandidate = [...scoredSlots].sort((a, b) => b.quietness - a.quietness)[0]?.slot || availableSlots[0];
+
+    if (earliestCandidate) {
       cards.push({
-        type: 'travelFit',
-        label: 'Best for Your Travel',
-        slotId: travelFitCandidate.id,
-        startAt: travelFitCandidate.startAt,
-        reason: `Ideal time for your ${travelMinutes}-minute commute.`
+        type: 'earliest',
+        label: 'Earliest Available',
+        slotId: earliestCandidate.id,
+        startAt: earliestCandidate.startAt,
+        timeStr: earliestCandidate.startAt,
+        reason: 'Gets you seen as soon as possible today.'
       });
+    }
+
+    if (quietestCandidate && quietestCandidate.id !== earliestCandidate?.id) {
+      cards.push({
+        type: 'quietest',
+        label: 'Shortest Expected Wait',
+        slotId: quietestCandidate.id,
+        startAt: quietestCandidate.startAt,
+        timeStr: quietestCandidate.startAt,
+        reason: 'Lowest expected clinic workload window.'
+      });
+    }
+
+    if (travelMinutes && travelMinutes > 0) {
+      const travelFitCandidate = [...scoredSlots].sort((a, b) => b.travelFit - a.travelFit)[0]?.slot;
+      if (travelFitCandidate && !cards.some((c) => c.slotId === travelFitCandidate.id)) {
+        cards.push({
+          type: 'travelFit',
+          label: 'Best for Your Travel',
+          slotId: travelFitCandidate.id,
+          startAt: travelFitCandidate.startAt,
+          reason: `Ideal time for your ${travelMinutes}-minute commute.`
+        });
+      }
     }
   }
 
   return {
     cards: cards.slice(0, 3),
-    fullList: slots.filter((s) => {
-      if (s.status !== SlotStatus.FREE && s.status !== SlotStatus.RESERVED) return true; // keep booked/blocked for display
-      if (isToday) {
-        const slotStartMinutes = HHmmToMinutes(s.startAt);
-        if (slotStartMinutes <= nowMinutes + 5) return false;
-      }
-      return true;
+    fullList: slots.map((s) => {
+      const sDate = s.date || dateStr;
+      const isSlotPastDate = sDate < today;
+      const isSlotPastTimeToday = sDate === today && HHmmToMinutes(s.startAt) <= nowMinutes;
+      const isExpired = isSlotPastDate || isSlotPastTimeToday;
+      return {
+        ...s,
+        isExpired
+      };
     })
   };
 }

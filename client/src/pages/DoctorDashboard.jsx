@@ -29,6 +29,22 @@ export const DoctorDashboard = () => {
   const departmentId = currentUser?.departmentId || 'dept-card';
   const specialization = currentUser?.specialization || 'General Medicine';
 
+  const [profileDisplayId, setProfileDisplayId] = useState(null);
+
+  useEffect(() => {
+    if (doctorId && !currentUser?.displayId && !currentUser?.doctorDisplayId) {
+      API.get(`/doctors/${doctorId}`)
+        .then((res) => {
+          if (res.data?.data?.displayId) {
+            setProfileDisplayId(res.data.data.displayId);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [doctorId, currentUser?.displayId, currentUser?.doctorDisplayId]);
+
+  const displayId = currentUser?.displayId || currentUser?.doctorDisplayId || profileDisplayId || doctorId;
+
   const deptMap = {
     'dept-card': 'Cardiology',
     'dept-gen': 'General Medicine',
@@ -205,7 +221,7 @@ export const DoctorDashboard = () => {
 
           <h1 className="text-2xl sm:text-3xl font-bold">{doctorName}</h1>
           <p className="text-xs text-teal-100">
-            Doctor ID: <span className="font-mono font-bold bg-black/20 px-2 py-0.5 rounded text-white">{doctorId}</span> | {deptName} Dept | {specialization}
+            Doctor ID: <span className="font-mono font-bold bg-black/20 px-2 py-0.5 rounded text-white">{displayId}</span> | {deptName} Dept | {specialization}
           </p>
         </div>
 

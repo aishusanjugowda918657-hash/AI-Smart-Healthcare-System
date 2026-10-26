@@ -5,12 +5,15 @@ import {
   getSystemSettings,
   updateSystemSettings,
   getAuditLogs,
-  getClinicalLists
+  getClinicalLists,
+  getAdminPatients,
+  getAdminLiveQueue
 } from '../controllers/adminController.js';
 import { adminMergePatients } from '../controllers/patientController.js';
 import { saveDoctorSchedule, getLeaves } from '../controllers/doctorController.js';
 import { adminGenerateSlots, adminCreateLeave, adminDeleteLeave } from '../controllers/slotController.js';
 import { getLeaveRescheduleProgress } from '../jobs/leaveReschedule.js';
+import { getNotificationDiagnostics, sendDiagnosticTestNotification } from '../controllers/notificationController.js';
 import { requireAuth } from '../middleware/authMiddleware.js';
 import { requireRole } from '../middleware/roleMiddleware.js';
 
@@ -21,6 +24,12 @@ router.get('/settings', requireAuth, requireRole('admin'), getSystemSettings);
 router.put('/settings', requireAuth, requireRole('admin'), updateSystemSettings);
 router.get('/audit-logs', requireAuth, requireRole('admin'), getAuditLogs);
 router.get('/clinical-lists', requireAuth, requireRole('admin'), getClinicalLists);
+router.get('/patients', requireAuth, requireRole('admin'), getAdminPatients);
+router.get('/live-queue', requireAuth, requireRole('admin'), getAdminLiveQueue);
+
+// Notification Pipeline Diagnostics & Safe Test-Send (PRD F8)
+router.get('/notifications/diagnostics', requireAuth, requireRole('admin'), getNotificationDiagnostics);
+router.post('/notifications/test-send', requireAuth, requireRole('admin'), sendDiagnosticTestNotification);
 
 router.post('/users/:uid/role', requireAuth, requireRole('admin'), setUserRole);
 router.post('/patients/merge', requireAuth, requireRole('admin'), adminMergePatients);

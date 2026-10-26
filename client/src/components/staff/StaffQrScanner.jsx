@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Html5QrcodeScanner } from 'html5-qrcode';
-import { QrCode, Search, AlertTriangle, CheckCircle2, RefreshCw, XCircle } from 'lucide-react';
+import { QrCode, Search, AlertTriangle, CheckCircle2, RefreshCw, XCircle, ShieldCheck } from 'lucide-react';
 import API from '../../services/api';
 
 export default function StaffQrScanner() {
@@ -64,7 +64,7 @@ export default function StaffQrScanner() {
     setScanResult(null);
 
     // PRD F5 Client Validation: Block Health ID lookups
-    if (/^PHI-/i.test(searchValue.trim())) {
+    if (/^(PHI|SCAI)-/i.test(searchValue.trim())) {
       setHealthIdWarning('Health ID search is disabled for manual check-in due to privacy regulations. Please search by Token Number, Appointment ID, or Phone Number.');
       return;
     }
@@ -125,7 +125,42 @@ export default function StaffQrScanner() {
       </div>
 
       {/* Success Result Modal / Banner */}
-      {scanResult && (
+      {scanResult && scanResult.status === 'verified_patient' ? (
+        <div className="bg-sky-950/80 border border-sky-500 p-6 rounded-2xl mb-6 text-center animate-fade-in">
+          <ShieldCheck className="w-16 h-16 text-sky-400 mx-auto mb-3" />
+          <h3 className="text-2xl font-bold text-sky-300">Verified Patient Card</h3>
+          <p className="text-sky-100 mt-1">Patient record verified in SmartCare AI Healthcare System.</p>
+
+          <div className="grid grid-cols-2 gap-4 max-w-md mx-auto my-5 bg-slate-950/60 p-4 rounded-xl text-left border border-sky-900/50">
+            <div className="col-span-2">
+              <p className="text-xs text-sky-400 uppercase font-bold">Patient Health ID</p>
+              <p className="text-xl font-mono font-bold text-teal-300 tracking-wider">{scanResult.healthId}</p>
+            </div>
+            <div>
+              <p className="text-xs text-sky-400 uppercase font-bold">Patient Name</p>
+              <p className="text-lg font-semibold text-white truncate">{scanResult.patientName}</p>
+            </div>
+            <div>
+              <p className="text-xs text-sky-400 uppercase font-bold">Blood Group</p>
+              <p className="text-lg font-semibold text-rose-400">{scanResult.patient?.bloodGroup || 'Not specified'}</p>
+            </div>
+            <div className="col-span-2 border-t border-sky-900/50 pt-2">
+              <p className="text-xs text-amber-300 font-semibold flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
+                No appointment scheduled for today.
+              </p>
+              <p className="text-xs text-slate-400 mt-1">Patient can be queued as a walk-in or booked at the reception desk.</p>
+            </div>
+          </div>
+
+          <button
+            onClick={resetScanner}
+            className="px-6 py-2.5 bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold rounded-xl shadow-lg transition-all flex items-center gap-2 mx-auto"
+          >
+            <RefreshCw className="w-4 h-4" /> Scan Next Patient
+          </button>
+        </div>
+      ) : scanResult ? (
         <div className="bg-emerald-950/80 border border-emerald-500 p-6 rounded-2xl mb-6 text-center animate-fade-in">
           <CheckCircle2 className="w-16 h-16 text-emerald-400 mx-auto mb-3" />
           <h3 className="text-2xl font-bold text-emerald-300">Check-In Successful!</h3>
@@ -155,7 +190,7 @@ export default function StaffQrScanner() {
             <RefreshCw className="w-4 h-4" /> Scan Next Patient
           </button>
         </div>
-      )}
+      ) : null}
 
       {/* Error Message */}
       {errorMsg && (
@@ -228,7 +263,7 @@ export default function StaffQrScanner() {
                 value={searchValue}
                 onChange={(e) => setSearchValue(e.target.value)}
                 placeholder={
-                  searchType === 'tokenLabel' ? 'OPT-2026-00001' : searchType === 'appointmentId' ? 'appt_12345' : '9876543210'
+                  searchType === 'tokenLabel' ? 'OPT-2026-00001' : searchType === 'appointmentId' ? 'APT-20261026-000001' : '9876543210'
                 }
                 required
                 className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-11 pr-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-teal-400 focus:ring-1 focus:ring-teal-400"

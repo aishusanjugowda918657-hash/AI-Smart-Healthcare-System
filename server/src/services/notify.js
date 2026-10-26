@@ -17,7 +17,7 @@ import flags from '../config/flags.js';
 import { clock } from '../utils/clock.js';
 
 // Types that ALWAYS send regardless of quiet hours
-const URGENT_TYPES = new Set(['medicine', 'emergency', 'triage', 'FAIRNESS_BUMP']);
+const URGENT_TYPES = new Set(['medicine', 'emergency', 'triage', 'FAIRNESS_BUMP', 'TURN_CALLED', 'QUEUE_UPCOMING_TURN', 'DIAGNOSTIC_TEST']);
 
 // In-memory grouping: groupKey → { lastSentMs }
 const groupingCache = new Map();
@@ -52,21 +52,31 @@ function sleep(ms) {
 }
 
 /**
+ * Sanitizes an error message so private keys, service account JSON, or tokens are never logged.
+ */
+function sanitizeErrorMessage(msg) {
+  if (!msg) return null;
+  return String(msg)
+    .replace(/[A-Za-z0-9_-]{25,}/g, '[REDACTED]')
+    .replace(/"private_key":\s*"[^"]+"/g, '"private_key": "[REDACTED]"');
+}
+
+/**
  * Send one FCM multicast message with retry.
- * Returns { successCount, failureCount, invalidTokens: string[] }
+ * Returns { successCount, failureCount, invalidTokens: string[], lastError: string|null, attempts: number }
  */
 async function sendFcmWithRetry(tokens, payload, maxAttempts = 3) {
-  if (!tokens || tokens.length === 0) return { successCount: 0, failureCount: 0, invalidTokens: [] };
+  if (!tokens || tokens.length === 0) return { successCount: 0, failureCount: 0, invalidTokens: [], lastError: null, attempts: 0 };
 
   let attempt = 0;
-  let lastResult = { successCount: 0, failureCount: 0, invalidTokens: [] };
+  let lastResult = { successCount: 0, failureCount: 0, invalidTokens: [], lastError: null, attempts: 0 };
 
   while (attempt < maxAttempts) {
     attempt++;
     try {
       if (!admin.apps || admin.apps.length === 0) {
         console.warn('Firebase Admin app not initialized; skipping FCM multicast.');
-        return { successCount: 0, failureCount: tokens.length, invalidTokens: [] };
+        return { successCount: 0, failureCount: tokens.length, invalidTokens: [], lastError: 'Firebase Admin SDK not initialized', attempts: 1 };
       }
       const messaging = admin.messaging();
       const response = await messaging.sendEachForMulticast({
@@ -80,9 +90,11 @@ async function sendFcmWithRetry(tokens, payload, maxAttempts = 3) {
       });
 
       const invalidTokens = [];
+      let firstFailureCode = null;
       response.responses.forEach((r, idx) => {
         if (!r.success) {
           const code = r.error?.code || r.error?.errorInfo?.code || '';
+          if (!firstFailureCode) firstFailureCode = code || r.error?.message;
           if (
             code === 'messaging/registration-token-not-registered' ||
             code === 'messaging/invalid-registration-token'
@@ -101,6 +113,8 @@ async function sendFcmWithRetry(tokens, payload, maxAttempts = 3) {
         successCount: response.successCount,
         failureCount: response.failureCount,
         invalidTokens,
+        lastError: firstFailureCode ? sanitizeErrorMessage(firstFailureCode) : null,
+        attempts: attempt,
       };
 
       if (response.successCount > 0 || attempt === maxAttempts) break;
@@ -108,8 +122,14 @@ async function sendFcmWithRetry(tokens, payload, maxAttempts = 3) {
       // Exponential backoff: 250ms, 500ms, 1000ms
       await sleep(250 * Math.pow(2, attempt - 1));
     } catch (err) {
-      console.error(`FCM send attempt ${attempt} failed:`, err.message);
-      lastResult = { successCount: 0, failureCount: tokens.length, invalidTokens: [] };
+      console.error(`FCM send attempt ${attempt} failed:`, sanitizeErrorMessage(err.message));
+      lastResult = {
+        successCount: 0,
+        failureCount: tokens.length,
+        invalidTokens: [],
+        lastError: sanitizeErrorMessage(err.message),
+        attempts: attempt,
+      };
       if (attempt < maxAttempts) {
         await sleep(250 * Math.pow(2, attempt - 1));
       }
@@ -148,10 +168,10 @@ async function removeInvalidTokens(db, uid, invalidTokens) {
  * @param {object}   [opts.data]      - Extra key-value data attached to push
  * @param {string}   [opts.groupKey]  - Group key for 60-second batching
  * @param {boolean}  [opts.urgent]    - Override quiet hours / grouping
- * @returns {Promise<{ written: number, pushed: number, skipped: number }>}
+ * @returns {Promise<{ written: number, pushed: number, skipped: number, results: Array<object> }>}
  */
 export async function notify({ uids, title, body, privacyBody, type = 'system', data = {}, groupKey, urgent = false }) {
-  if (!uids || uids.length === 0) return { written: 0, pushed: 0, skipped: 0 };
+  if (!uids || uids.length === 0) return { written: 0, pushed: 0, skipped: 0, results: [] };
 
   const db = assertDbConnected();
   const now = clock.now();
@@ -161,7 +181,7 @@ export async function notify({ uids, title, body, privacyBody, type = 'system', 
   if (groupKey && !isUrgentType) {
     const last = groupingCache.get(groupKey);
     if (last && now.getTime() - last < GROUP_WINDOW_MS) {
-      return { written: 0, pushed: 0, skipped: uids.length };
+      return { written: 0, pushed: 0, skipped: uids.length, results: [] };
     }
     groupingCache.set(groupKey, now.getTime());
   }
@@ -169,8 +189,9 @@ export async function notify({ uids, title, body, privacyBody, type = 'system', 
   let written = 0;
   let pushed = 0;
   let skipped = 0;
+  const dispatchResults = [];
 
-  // Track notification refs per uid for pushStatus updates
+  // Track notification refs per uid for status updates
   const notifRefsByUid = {};
 
   // Batch in-app notification writes (max 500 per Firestore batch)
@@ -180,6 +201,7 @@ export async function notify({ uids, title, body, privacyBody, type = 'system', 
     const notifRef = db.collection('notifications').doc();
     notifRefsByUid[uid] = notifRef;
     const notifData = {
+      id: notifRef.id,
       uid,
       title,
       body,
@@ -187,7 +209,11 @@ export async function notify({ uids, title, body, privacyBody, type = 'system', 
       type,
       data,
       read: false,
+      status: 'in_app_only',
       pushStatus: 'none',
+      attempts: 0,
+      lastAttemptAt: null,
+      providerResponse: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -199,29 +225,50 @@ export async function notify({ uids, title, body, privacyBody, type = 'system', 
 
   // FCM push (only if flag is on)
   if (!flags.push) {
-    return { written, pushed: 0, skipped: 0 };
+    return {
+      written,
+      pushed: 0,
+      skipped: 0,
+      results: uids.map((uid) => ({
+        uid,
+        notifId: notifRefsByUid[uid]?.id,
+        status: 'in_app_only',
+        pushStatus: 'none'
+      }))
+    };
   }
 
   // Per-user FCM send
   for (const uid of uids) {
     try {
       const userSnap = await db.collection('users').doc(uid).get();
-      if (!userSnap.exists) continue;
+      if (!userSnap.exists) {
+        dispatchResults.push({ uid, status: 'in_app_only', reason: 'user_not_found' });
+        continue;
+      }
 
       const userPrefs = userSnap.data().prefs || {};
       const fcmTokenObjs = userSnap.data().fcmTokens || [];
       const tokens = fcmTokenObjs.map((t) => t.token).filter(Boolean);
 
-      if (tokens.length === 0) continue;
+      if (tokens.length === 0) {
+        dispatchResults.push({ uid, notifId: notifRefsByUid[uid]?.id, status: 'in_app_only', pushStatus: 'none', reason: 'no_registered_tokens' });
+        continue;
+      }
 
       // Quiet hours check (medicine, emergency, triage ignore quiet hours)
       if (!isUrgentType && inQuietHours(userPrefs.quietHours, now)) {
-        // Update the notification's pushStatus to 'skipped'
+        // Update the notification's status to 'skipped'
         const notifRef = notifRefsByUid[uid];
         if (notifRef) {
-          await notifRef.update({ pushStatus: 'skipped', updatedAt: clock.now() });
+          await notifRef.update({
+            status: 'skipped',
+            pushStatus: 'skipped',
+            updatedAt: clock.now()
+          });
         }
         skipped++;
+        dispatchResults.push({ uid, notifId: notifRef?.id, status: 'skipped', pushStatus: 'skipped', reason: 'quiet_hours' });
         continue;
       }
 
@@ -250,27 +297,54 @@ export async function notify({ uids, title, body, privacyBody, type = 'system', 
         },
       };
 
-      const { successCount, failureCount, invalidTokens } = await sendFcmWithRetry(tokens, payload, 3);
+      const { successCount, failureCount, invalidTokens, lastError, attempts } = await sendFcmWithRetry(tokens, payload, 3);
 
       // Remove invalid tokens
       if (invalidTokens.length > 0) {
         await removeInvalidTokens(db, uid, invalidTokens);
       }
 
-      // Update pushStatus on most recent notification for this uid
+      // Distinguish status
       const pushStatus = successCount > 0 ? 'sent' : failureCount > 0 ? 'failed' : 'none';
+      const status = successCount > 0 ? 'sent_to_provider' : failureCount > 0 ? 'failed' : 'in_app_only';
       const notifRef = notifRefsByUid[uid];
+
+      const providerResponse = {
+        provider: 'fcm',
+        successCount,
+        failureCount,
+        invalidTokensRemoved: invalidTokens.length,
+        lastError: lastError ? sanitizeErrorMessage(lastError) : null
+      };
+
       if (notifRef) {
-        await notifRef.update({ pushStatus, updatedAt: clock.now() });
+        await notifRef.update({
+          status,
+          pushStatus,
+          attempts,
+          lastAttemptAt: clock.now(),
+          providerResponse,
+          updatedAt: clock.now()
+        });
       }
 
       if (successCount > 0) pushed++;
+
+      dispatchResults.push({
+        uid,
+        notifId: notifRef?.id,
+        status,
+        pushStatus,
+        attempts,
+        providerResponse
+      });
     } catch (err) {
-      console.error(`notify: error processing uid ${uid}:`, err.message);
+      console.error(`notify: error processing uid ${uid}:`, sanitizeErrorMessage(err.message));
+      dispatchResults.push({ uid, status: 'failed', error: sanitizeErrorMessage(err.message) });
     }
   }
 
-  return { written, pushed, skipped };
+  return { written, pushed, skipped, results: dispatchResults };
 }
 
 /**

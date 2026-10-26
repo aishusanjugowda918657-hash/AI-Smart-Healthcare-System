@@ -147,19 +147,6 @@ export function calculateWaitForPatient({
 }
 
 /**
- * Leave Home Now calculation (PRD Section 5.2)
- */
-export function calculateLeaveAt({ predictedCallAt, travelMinutes = 0, checkinBufferMin = 10, safetyBufferMin = 5 }) {
-  if (!predictedCallAt) return null;
-
-  const callTimeMs = new Date(predictedCallAt).getTime();
-  const totalOffsetMin = (checkinBufferMin || 10) + (travelMinutes || 0) + (safetyBufferMin || 5);
-  const leaveTimeMs = callTimeMs - totalOffsetMin * 60 * 1000;
-
-  return new Date(leaveTimeMs).toISOString();
-}
-
-/**
  * Reason text selection logic (PRD Section 5.2)
  */
 export function selectReasonText(flags = {}) {

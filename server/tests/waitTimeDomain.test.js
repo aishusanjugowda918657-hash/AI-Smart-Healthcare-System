@@ -4,7 +4,6 @@ import {
   calculateTimeFactor,
   calculateRemainingCurrentTime,
   calculateWaitForPatient,
-  calculateLeaveAt,
   roundTo5
 } from '../src/domain/waitTime.js';
 
@@ -88,17 +87,6 @@ describe('PRD F7: Real-Time Waiting-Time Engine Domain Tests (domain/waitTime.js
     expect(res.waitMinLow % 5).toBe(0);
     expect(res.waitMinHigh % 5).toBe(0);
     expect(res.waitMinLow).toBeLessThan(res.waitMinHigh);
-  });
-
-  it('leaveAt moves later when delays grow and earlier when queue speeds up', () => {
-    const callEarly = '2026-10-02T10:30:00Z';
-    const callLate = '2026-10-02T10:50:00Z';
-
-    const leaveEarly = calculateLeaveAt({ predictedCallAt: callEarly, travelMinutes: 15 });
-    const leaveLate = calculateLeaveAt({ predictedCallAt: callLate, travelMinutes: 15 });
-
-    const diffMs = new Date(leaveLate).getTime() - new Date(leaveEarly).getTime();
-    expect(diffMs).toBe(20 * 60 * 1000); // 20 minutes shift
   });
 
   it('calculateRemainingCurrentTime auto-extends in 5 min steps when elapsed exceeds expected', () => {

@@ -3,10 +3,13 @@ import { useAuth } from '../../context/AuthContext';
 import API from '../../services/api';
 import {
   Calendar, Clock, User, ShieldCheck, AlertTriangle, ArrowRight, ArrowLeft,
-  CheckCircle, Stethoscope, Compass, RefreshCw
+  CheckCircle, Stethoscope, Compass, RefreshCw, Phone, MapPin, Copy, ExternalLink, Check
 } from 'lucide-react';
 import QRCode from 'qrcode';
 import { ActiveAppointmentsBanner } from './ActiveAppointmentsBanner';
+import {
+  getTodayInHospitalTz, getCurrentTimeInHospitalTz, isSlotExpired, isPastAppointment
+} from '../../utils/formatters';
 
 const DEPARTMENT_NAMES = {
   'dept-gen': 'General Medicine',
@@ -47,6 +50,15 @@ export const AppointmentBookingForm = () => {
   // Step 3 State: Triage Results
   const [triageLoading, setTriageLoading] = useState(false);
   const [triageData, setTriageData] = useState(null);
+  const [copiedKey, setCopiedKey] = useState(null);
+
+  const copyToClipboard = (text, key) => {
+    if (navigator?.clipboard?.writeText) {
+      navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey(null), 2500);
+    }
+  };
 
   // Step 4 State: Doctor Selection
   const [doctorOptions, setDoctorOptions] = useState([]);
@@ -55,11 +67,12 @@ export const AppointmentBookingForm = () => {
   const [doctorsError, setDoctorsError] = useState(null); // null | 'unavailable' | 'empty'
 
   // Step 5 State: Slot Selection
-  const [appointmentDate, setAppointmentDate] = useState(new Date().toISOString().split('T')[0]);
-  const [travelMinutes, setTravelMinutes] = useState('');
+  const [appointmentDate, setAppointmentDate] = useState(getTodayInHospitalTz());
+  const [currentClinicTime, setCurrentClinicTime] = useState(getCurrentTimeInHospitalTz());
   const [slotsData, setSlotsData] = useState({ cards: [], fullList: [] });
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [selectedSlotId, setSelectedSlotId] = useState('');
+
 
   // Step 6 State: Confirmation & Disclaimer
   const [disclaimerTicked, setDisclaimerTicked] = useState(false);
@@ -80,6 +93,35 @@ export const AppointmentBookingForm = () => {
   useEffect(() => {
     fetchFamilyMembers();
   }, []);
+
+  // Real-time clinic clock: keep time updated every 5 seconds so slot states stay live
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentClinicTime(getCurrentTimeInHospitalTz());
+    }, 5000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // When time passes or appointment date changes, auto-deselect if the selected slot expired
+  useEffect(() => {
+    if (selectedSlotId) {
+      const allSlots = [...(slotsData.cards || []), ...(slotsData.fullList || [])];
+      const slotObj = allSlots.find((s) => s.slotId === selectedSlotId || s.id === selectedSlotId);
+      const slotTime = slotObj?.startAt || slotObj?.timeStr;
+      if (slotTime && isSlotExpired(appointmentDate, slotTime)) {
+        setSelectedSlotId('');
+      }
+    }
+  }, [currentClinicTime, appointmentDate, selectedSlotId, slotsData]);
+
+  // Live availability refresh on Step 5 every 20 seconds to prevent stale slots
+  useEffect(() => {
+    if (currentStep !== 5 || !selectedDoctorId || !appointmentDate) return;
+    const refreshTimer = setInterval(() => {
+      fetchSlotsForDoctorDate(selectedDoctorId, appointmentDate);
+    }, 20000);
+    return () => clearInterval(refreshTimer);
+  }, [currentStep, selectedDoctorId, appointmentDate]);
 
   const fetchFamilyMembers = async () => {
     try {
@@ -185,8 +227,7 @@ export const AppointmentBookingForm = () => {
     setSlotsLoading(true);
     setSelectedSlotId(''); // Clear stale slot selection when fetching new doctor/date
     try {
-      const travelParam = travelMinutes ? `&travelMinutes=${travelMinutes}` : '';
-      const res = await API.get(`/booking/suggestions?doctorId=${docId}&date=${dateVal}${travelParam}`);
+      const res = await API.get(`/booking/suggestions?doctorId=${docId}&date=${dateVal}&_t=${Date.now()}`);
       const data = res.data?.data || { cards: [], fullList: [] };
       setSlotsData(data);
     } catch (err) {
@@ -202,6 +243,12 @@ export const AppointmentBookingForm = () => {
     if (!docIdToUse) return;
 
     let targetDate = overrideDate || appointmentDate;
+    const todayStr = getTodayInHospitalTz();
+    if (targetDate < todayStr) {
+      targetDate = todayStr;
+      setAppointmentDate(targetDate);
+    }
+
     const selectedDocObj = doctorOptions.find((d) => (d.doctorId || d.id) === docIdToUse);
     if (selectedDocObj && selectedDocObj.nextAvailable && selectedDocObj.nextAvailable.date) {
        if (targetDate < selectedDocObj.nextAvailable.date) {
@@ -217,6 +264,16 @@ export const AppointmentBookingForm = () => {
   // Step 6: Submit Booking Transaction
   const handleFinalBooking = async () => {
     if (!disclaimerTicked) return;
+
+    // Guard: Revalidate that the selected slot has not expired before submitting
+    const allSlots = [...(slotsData.cards || []), ...(slotsData.fullList || [])];
+    const selectedSlotObj = allSlots.find((s) => (s.slotId === selectedSlotId || s.id === selectedSlotId));
+    const slotTime = selectedSlotObj?.startAt || selectedSlotObj?.timeStr;
+    if (isSlotExpired(appointmentDate, slotTime)) {
+      setBookingError(`Slot '${selectedSlotId}' is in the past and has expired. Please return to Step 5 to select an available slot.`);
+      return;
+    }
+
     setBookingSubmitting(true);
     setBookingError(null);
 
@@ -252,8 +309,7 @@ export const AppointmentBookingForm = () => {
         clinicalLevel: triageData?.clinicalLevel || 1,
         urgencySuggested: triageData?.urgencySuggested || 'routine',
         disclaimerAck: { acknowledged: true },
-        sameDayAck: Boolean(sameDayAck),
-        travelMinutes: travelMinutes || null
+        sameDayAck: Boolean(sameDayAck)
       });
 
       const appt = res.data?.data || res.data;
@@ -532,12 +588,23 @@ export const AppointmentBookingForm = () => {
             </div>
           </div>
           {triageData.isSevereRightNowError && (
-            <a
-              href="tel:108"
-              className="block w-full text-center px-5 py-3 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow-lg"
-            >
-              🚨 Call Emergency (108)
-            </a>
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <a
+                href="tel:108"
+                className="flex-1 text-center px-4 py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow-lg flex items-center justify-center gap-2"
+              >
+                <Phone className="w-4 h-4" />
+                <span>🚨 Call Emergency (108)</span>
+              </a>
+              <button
+                type="button"
+                onClick={() => copyToClipboard('108', 'ambulance-err')}
+                className="px-3 py-2.5 bg-white/10 hover:bg-white/20 text-rose-200 text-xs rounded-xl flex items-center gap-1.5 transition-all"
+              >
+                {copiedKey === 'ambulance-err' ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                <span>{copiedKey === 'ambulance-err' ? 'Copied' : 'Copy 108'}</span>
+              </button>
+            </div>
           )}
           <div className="flex gap-3 pt-2">
             <button
@@ -550,36 +617,107 @@ export const AppointmentBookingForm = () => {
           </div>
         </div>
       ) : triageData?.redFlag ? (
-        <div className="bg-rose-950/40 border-2 border-rose-500/80 rounded-2xl p-6 space-y-4 shadow-xl">
-          <div className="flex items-start gap-3">
-            <AlertTriangle className="w-8 h-8 text-rose-400 shrink-0 mt-0.5 animate-bounce" />
-            <div>
-              <h4 className="text-base font-bold text-rose-300">EMERGENCY ALERT TRIGGERED</h4>
-              <p className="text-xs text-rose-200/90 mt-1 leading-relaxed">
+        <div className="bg-rose-950/60 border-2 border-rose-500 rounded-2xl p-6 space-y-4 shadow-2xl">
+          <div className="flex items-start gap-3.5">
+            <div className="p-2.5 bg-rose-500 text-white rounded-xl shrink-0 animate-pulse">
+              <AlertTriangle className="w-7 h-7" />
+            </div>
+            <div className="flex-1">
+              <div className="flex items-center gap-2">
+                <h4 className="text-base font-extrabold text-rose-300 tracking-wide uppercase">EMERGENCY ALERT TRIGGERED</h4>
+                <span className="text-[10px] px-2 py-0.5 bg-rose-500/30 text-rose-200 border border-rose-500/50 rounded-full font-bold uppercase">
+                  Immediate Care
+                </span>
+              </div>
+              <p className="text-xs text-rose-100/90 mt-1 leading-relaxed">
                 {triageData.emergencyMessage || 'Severe symptoms detected requiring urgent medical attention.'}
               </p>
             </div>
           </div>
 
-          <div className="flex flex-col sm:flex-row gap-3 pt-2">
+          {/* Quick Direct Contacts for Mobile Dialer & PC Copying */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-black/40 border border-rose-500/30 p-3.5 rounded-xl">
+            <div className="flex items-center justify-between bg-rose-900/40 border border-rose-500/40 p-3 rounded-lg">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-rose-600 text-white rounded-lg">
+                  <Phone className="w-4 h-4" />
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-rose-300">Ambulance (Toll Free)</p>
+                  <p className="text-sm font-black text-white font-mono">108</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => copyToClipboard('108', 'ambulance')}
+                  className="px-2.5 py-1.5 bg-white/10 hover:bg-white/20 text-rose-200 text-xs rounded-lg flex items-center gap-1 transition-all"
+                  title="Copy Number for Phone"
+                >
+                  {copiedKey === 'ambulance' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span className="text-[11px] font-semibold">{copiedKey === 'ambulance' ? 'Copied' : 'Copy'}</span>
+                </button>
+                <a
+                  href="tel:108"
+                  className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-lg shadow transition-all flex items-center gap-1"
+                >
+                  Call
+                </a>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between bg-rose-900/40 border border-rose-500/40 p-3 rounded-lg">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-rose-600 text-white rounded-lg">
+                  <Phone className="w-4 h-4" />
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-rose-300">Hospital Casualty Desk</p>
+                  <p className="text-xs font-bold text-white font-mono">+91 80 2345 6789</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => copyToClipboard('+918023456789', 'hospital')}
+                  className="px-2.5 py-1.5 bg-white/10 hover:bg-white/20 text-rose-200 text-xs rounded-lg flex items-center gap-1 transition-all"
+                  title="Copy Number for Phone"
+                >
+                  {copiedKey === 'hospital' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span className="text-[11px] font-semibold">{copiedKey === 'hospital' ? 'Copied' : 'Copy'}</span>
+                </button>
+                <a
+                  href="tel:+918023456789"
+                  className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-lg shadow transition-all flex items-center gap-1"
+                >
+                  Call
+                </a>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-3 pt-1">
             <a
               href="https://www.google.com/maps/search/emergency+hospital+near+me"
               target="_blank"
               rel="noopener noreferrer"
-              className="px-5 py-3 bg-rose-700 hover:bg-rose-600 text-white font-bold text-xs rounded-xl text-center shadow-lg"
+              className="flex-1 px-4 py-3 bg-rose-700 hover:bg-rose-600 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 shadow-lg transition-all"
             >
-              🏥 Go to Emergency
+              <MapPin className="w-4 h-4 shrink-0" />
+              <span>🏥 Go to Emergency (Google Maps GPS)</span>
+              <ExternalLink className="w-3.5 h-3.5 opacity-80 shrink-0" />
             </a>
             <a
               href="tel:108"
-              className="px-5 py-3 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl text-center shadow-lg"
+              className="px-4 py-3 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 shadow-lg transition-all"
             >
-              🚨 Call Emergency Desk
+              <Phone className="w-4 h-4 shrink-0" />
+              <span>🚨 Call Emergency Desk</span>
             </a>
             <button
               type="button"
               onClick={handleProceedToDoctors}
-              className="px-5 py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs rounded-xl text-center border border-slate-700"
+              className="px-4 py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs rounded-xl text-center border border-slate-700 transition-all shrink-0"
             >
               Continue booking anyway
             </button>
@@ -798,349 +936,395 @@ export const AppointmentBookingForm = () => {
   );
 
   // Render Step 5: Choose Slot
-  const renderStep5 = () => (
-    <div className="space-y-6">
-      <div>
-        <h3 className="text-xl font-bold text-slate-100">Step 5: Choose Slot</h3>
-        <p className="text-xs text-slate-400 mt-1">Smart suggestions and full slot list for {appointmentDate}.</p>
-      </div>
+  const renderStep5 = () => {
+    const isDateInPast = isPastAppointment(appointmentDate);
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+    return (
+      <div className="space-y-6">
         <div>
+          <h3 className="text-xl font-bold text-slate-100">Step 5: Choose Slot</h3>
+          <p className="text-xs text-slate-400 mt-1">Smart suggestions and full slot list for {appointmentDate}.</p>
+        </div>
+
+        <div className="max-w-xs">
           <label className="block text-xs font-semibold text-slate-300 mb-1">Appointment Date</label>
           <input
             type="date"
+            min={getTodayInHospitalTz()}
             value={appointmentDate}
             onChange={(e) => {
               const newDate = e.target.value;
               setAppointmentDate(newDate);
+              setSelectedSlotId('');
               fetchSlotsForDoctorDate(selectedDoctorId, newDate);
             }}
             className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 font-mono"
           />
         </div>
-        <div>
-          <label className="block text-xs font-semibold text-slate-300 mb-1">Travel Time (Minutes - Optional)</label>
-          <input
-            type="number"
-            placeholder="e.g. 20"
-            value={travelMinutes}
-            onChange={(e) => setTravelMinutes(e.target.value)}
-            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100"
-          />
-        </div>
-      </div>
 
-      {slotsLoading ? (
-        <div className="p-8 text-center text-slate-400 text-sm">Fetching smart slot options...</div>
-      ) : (
-        <div className="space-y-4">
-          {slotsData.cards && slotsData.cards.length > 0 && (
-            <div className="space-y-2">
-              <label className="block text-xs font-bold text-teal-400 uppercase tracking-wider">Smart Suggestions</label>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                {slotsData.cards.map((card, idx) => (
-                  <div
-                    key={idx}
-                    onClick={() => setSelectedSlotId(card.slotId)}
-                    className={`p-3 rounded-2xl border cursor-pointer transition-all ${
-                      selectedSlotId === card.slotId
-                        ? 'bg-teal-500/10 border-teal-500 text-slate-100 ring-2 ring-teal-500/30'
-                        : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:border-slate-600'
-                    }`}
-                  >
-                    <span className="inline-block px-2 py-0.5 bg-teal-500/20 text-teal-300 rounded-md text-[10px] font-bold mb-1">
-                      {card.label}
-                    </span>
-                    <h5 className="font-bold text-sm text-slate-100">{card.timeStr}</h5>
-                    <p className="text-[10px] text-slate-400 mt-0.5">{card.reason}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+        {isDateInPast && (
+          <div className="p-3 bg-amber-950/60 border border-amber-500/60 rounded-xl text-amber-200 text-xs flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>The selected appointment date ({appointmentDate}) is in the past. Slots on past dates cannot be booked.</span>
+          </div>
+        )}
 
-          <div className="space-y-3">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <label className="block text-xs font-bold text-slate-300">All Bookable Slots</label>
-              {/* Slot Status Legend */}
-              <div className="flex items-center gap-3 text-[11px] text-slate-400">
-                <span className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"></span> Available
-                </span>
-                <span className="flex items-center gap-1.5" title="Intentional hospital buffer for clinical pace control & emergencies">
-                  <span className="w-2.5 h-2.5 rounded-full bg-indigo-500 inline-block"></span> Buffer (Emergency/Pace)
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-slate-600 inline-block"></span> Booked
-                </span>
-              </div>
-            </div>
-
-            {slotsData.fullList && slotsData.fullList.length > 0 ? (
-              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-                {slotsData.fullList.map((slot) => {
-                  const isSelected = selectedSlotId === slot.id;
-                  const isFree = slot.status === 'free';
-                  const isBuffer = slot.status === 'reserved';
-                  const isBooked = slot.status === 'booked';
-                  const isBlocked = slot.status === 'blocked';
-
-                  let chipStyle = '';
-                  let statusTitle = 'Available slot';
-                  let subLabel = '';
-
-                  if (isFree) {
-                    chipStyle = isSelected
-                      ? 'bg-teal-500 text-slate-950 shadow-md shadow-teal-500/20 font-bold border-teal-400 ring-2 ring-teal-400/50'
-                      : 'bg-slate-800 text-slate-200 border border-slate-700 hover:border-teal-400 hover:bg-slate-700 cursor-pointer';
-                  } else if (isBuffer) {
-                    chipStyle = 'bg-indigo-950/40 text-indigo-300/80 border border-indigo-800/40 cursor-not-allowed opacity-80';
-                    statusTitle = 'Hospital Buffer / Emergency Reserve Slot (Intentional Clinical Pace Control)';
-                    subLabel = 'Buffer';
-                  } else if (isBooked) {
-                    chipStyle = 'bg-slate-900 text-slate-500 border border-slate-800/80 cursor-not-allowed line-through opacity-50';
-                    statusTitle = 'Slot already booked by another patient';
-                    subLabel = 'Booked';
-                  } else if (isBlocked) {
-                    chipStyle = 'bg-rose-950/20 text-rose-400/60 border border-rose-900/30 cursor-not-allowed line-through opacity-50';
-                    statusTitle = 'Doctor unavailable / on leave';
-                    subLabel = 'Leave';
-                  } else {
-                    chipStyle = 'bg-slate-900 text-slate-600 border border-slate-800 cursor-not-allowed opacity-50';
-                  }
-
-                  return (
-                    <button
-                      key={slot.id}
-                      type="button"
-                      disabled={!isFree}
-                      title={statusTitle}
-                      onClick={() => isFree && setSelectedSlotId(slot.id)}
-                      className={`p-2 rounded-xl text-xs font-mono font-bold transition-all flex flex-col items-center justify-center ${chipStyle}`}
-                    >
-                      <span>{slot.startAt}</span>
-                      {subLabel && (
-                        <span className="text-[9px] font-sans font-medium tracking-tight uppercase opacity-90 -mt-0.5">{subLabel}</span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <div className="p-4 bg-slate-800/50 rounded-xl text-slate-400 text-xs">No available slots found for this date.</div>
-                {slotsData.upcomingAvailableDates && slotsData.upcomingAvailableDates.length > 0 && (
-                  <div className="pt-2">
-                    <p className="text-xs text-slate-300 mb-2">Nearest dates with available slots:</p>
-                    <div className="flex flex-wrap gap-2">
-                      {slotsData.upcomingAvailableDates.map(d => (
-                        <button
-                          key={d}
-                          type="button"
-                          onClick={() => {
-                            setAppointmentDate(d);
-                            setTimeout(handleProceedToSlots, 0); // re-fetch slots for this new date
-                          }}
-                          className="px-3 py-1.5 bg-slate-700 hover:bg-teal-600 text-slate-200 text-xs font-bold rounded-lg transition-colors"
-                        >
-                          {d}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
+        {slotsLoading ? (
+          <div className="p-8 text-center text-slate-400 text-sm">Fetching smart slot options...</div>
+        ) : (
+          <div className="space-y-4">
+            {slotsData.cards && slotsData.cards.length > 0 && (
+              <div className="space-y-2">
+                <label className="block text-xs font-bold text-teal-400 uppercase tracking-wider">Smart Suggestions</label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {slotsData.cards.map((card, idx) => {
+                    const cardExpired = isSlotExpired(appointmentDate, card.startAt || card.timeStr);
+                    return (
+                      <div
+                        key={idx}
+                        onClick={() => !cardExpired && setSelectedSlotId(card.slotId)}
+                        className={`p-3 rounded-2xl border transition-all ${
+                          cardExpired
+                            ? 'bg-slate-900/60 border-slate-800 text-slate-500 opacity-50 cursor-not-allowed line-through'
+                            : selectedSlotId === card.slotId
+                            ? 'bg-teal-500/10 border-teal-500 text-slate-100 ring-2 ring-teal-500/30 cursor-pointer'
+                            : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:border-slate-600 cursor-pointer'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className={`inline-block px-2 py-0.5 rounded-md text-[10px] font-bold mb-1 ${
+                            cardExpired ? 'bg-slate-800 text-slate-500' : 'bg-teal-500/20 text-teal-300'
+                          }`}>
+                            {card.label}
+                          </span>
+                          {cardExpired && (
+                            <span className="text-[10px] text-rose-400/80 font-bold uppercase tracking-wider">Expired</span>
+                          )}
+                        </div>
+                        <h5 className="font-bold text-sm text-slate-100">{card.timeStr}</h5>
+                        <p className="text-[10px] text-slate-400 mt-0.5">{cardExpired ? 'This suggested slot has passed.' : card.reason}</p>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
+
+            <div className="space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <label className="block text-xs font-bold text-slate-300">All Bookable Slots</label>
+                {/* Slot Status Legend */}
+                <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400">
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"></span> Available
+                  </span>
+                  <span className="flex items-center gap-1.5" title="Intentional hospital buffer for clinical pace control & emergencies">
+                    <span className="w-2.5 h-2.5 rounded-full bg-indigo-500 inline-block"></span> Buffer (Emergency/Pace)
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-slate-600 inline-block"></span> Booked
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-slate-500 inline-block line-through"></span> Expired
+                  </span>
+                </div>
+              </div>
+
+              {slotsData.fullList && slotsData.fullList.length > 0 ? (
+                <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                  {slotsData.fullList.map((slot) => {
+                    const isSelected = selectedSlotId === slot.id;
+                    const expired = isSlotExpired(appointmentDate, slot.startAt);
+                    const isFree = slot.status === 'free' && !expired;
+                    const isBuffer = slot.status === 'reserved';
+                    const isBooked = slot.status === 'booked';
+                    const isBlocked = slot.status === 'blocked';
+
+                    let chipStyle = '';
+                    let statusTitle = 'Available slot';
+                    let subLabel = '';
+
+                    if (expired) {
+                      chipStyle = 'bg-slate-900/90 text-slate-500 border border-slate-800/80 cursor-not-allowed line-through opacity-40';
+                      statusTitle = 'This slot is in the past and has expired';
+                      subLabel = 'Expired';
+                    } else if (isFree) {
+                      chipStyle = isSelected
+                        ? 'bg-teal-500 text-slate-950 shadow-md shadow-teal-500/20 font-bold border-teal-400 ring-2 ring-teal-400/50'
+                        : 'bg-slate-800 text-slate-200 border border-slate-700 hover:border-teal-400 hover:bg-slate-700 cursor-pointer';
+                    } else if (isBuffer) {
+                      chipStyle = 'bg-indigo-950/40 text-indigo-300/80 border border-indigo-800/40 cursor-not-allowed opacity-80';
+                      statusTitle = 'Hospital Buffer / Emergency Reserve Slot (Intentional Clinical Pace Control)';
+                      subLabel = 'Buffer';
+                    } else if (isBooked) {
+                      chipStyle = 'bg-slate-900 text-slate-500 border border-slate-800/80 cursor-not-allowed line-through opacity-50';
+                      statusTitle = 'Slot already booked by another patient';
+                      subLabel = 'Booked';
+                    } else if (isBlocked) {
+                      chipStyle = 'bg-rose-950/20 text-rose-400/60 border border-rose-900/30 cursor-not-allowed line-through opacity-50';
+                      statusTitle = 'Doctor unavailable / on leave';
+                      subLabel = 'Leave';
+                    } else {
+                      chipStyle = 'bg-slate-900 text-slate-600 border border-slate-800 cursor-not-allowed opacity-50';
+                    }
+
+                    return (
+                      <button
+                        key={slot.id}
+                        type="button"
+                        disabled={!isFree}
+                        title={statusTitle}
+                        onClick={() => isFree && setSelectedSlotId(slot.id)}
+                        className={`p-2 rounded-xl text-xs font-mono font-bold transition-all flex flex-col items-center justify-center ${chipStyle}`}
+                      >
+                        <span>{slot.startAt}</span>
+                        {subLabel && (
+                          <span className="text-[9px] font-sans font-medium tracking-tight uppercase opacity-90 -mt-0.5">{subLabel}</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="p-4 bg-slate-800/50 rounded-xl text-slate-400 text-xs">No available slots found for this date.</div>
+                  {slotsData.upcomingAvailableDates && slotsData.upcomingAvailableDates.length > 0 && (
+                    <div className="pt-2">
+                      <p className="text-xs text-slate-300 mb-2">Nearest dates with available slots:</p>
+                      <div className="flex flex-wrap gap-2">
+                        {slotsData.upcomingAvailableDates.map(d => (
+                          <button
+                            key={d}
+                            type="button"
+                            onClick={() => {
+                              setAppointmentDate(d);
+                              setSelectedSlotId('');
+                              setTimeout(handleProceedToSlots, 0); // re-fetch slots for this new date
+                            }}
+                            className="px-3 py-1.5 bg-slate-700 hover:bg-teal-600 text-slate-200 text-xs font-bold rounded-lg transition-colors"
+                          >
+                            {d}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
+        )}
+
+        <div className="flex items-center justify-between pt-4 border-t border-slate-800">
+          <button
+            type="button"
+            onClick={() => setCurrentStep(4)}
+            className="flex items-center gap-1.5 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs rounded-xl"
+          >
+            <ArrowLeft className="w-4 h-4" /> Back
+          </button>
+
+          {(() => {
+            const allSlots = [...(slotsData.cards || []), ...(slotsData.fullList || [])];
+            const chosenSlotObj = allSlots.find((s) => s.slotId === selectedSlotId || s.id === selectedSlotId);
+            const chosenSlotTime = chosenSlotObj?.startAt || chosenSlotObj?.timeStr;
+            const isChosenExpired = !selectedSlotId || isSlotExpired(appointmentDate, chosenSlotTime);
+
+            return (
+              <button
+                type="button"
+                disabled={isChosenExpired}
+                onClick={async () => {
+                  if (isChosenExpired) {
+                    setSelectedSlotId('');
+                    return;
+                  }
+                  try {
+                    const res = await API.get('/appointments/my-appointments');
+                    const appts = res.data?.data || [];
+                    const activeOnDate = appts.filter(a => a.date === appointmentDate && ['booked', 'confirmed', 'checked_in', 'waiting'].includes(a.status));
+                    const conflictDept = activeOnDate.find(a => a.departmentId !== (triageData?.departmentId || 'dept-gen'));
+                    if (conflictDept) {
+                      const conflictTime = conflictDept.bookedStartAt && conflictDept.bookedStartAt !== 'NOW' ? conflictDept.bookedStartAt : '11:30';
+                      const conflictDeptName = formatDepartmentName(conflictDept.departmentId);
+                      setSameDayWarning(`You already have an appointment today at ${conflictTime} with ${conflictDeptName}. Continue?`);
+                    } else {
+                      setSameDayWarning(null);
+                    }
+                  } catch (e) {
+                    // ignore
+                  }
+                  setCurrentStep(6);
+                }}
+                className="flex items-center gap-2 px-6 py-3 bg-teal-500 hover:bg-teal-400 disabled:opacity-40 text-slate-950 font-bold text-sm rounded-xl transition-all shadow-lg shadow-teal-500/20"
+              >
+                <span>Review & Confirm</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            );
+          })()}
         </div>
-      )}
-
-      <div className="flex items-center justify-between pt-4 border-t border-slate-800">
-        <button
-          type="button"
-          onClick={() => setCurrentStep(4)}
-          className="flex items-center gap-1.5 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs rounded-xl"
-        >
-          <ArrowLeft className="w-4 h-4" /> Back
-        </button>
-
-        <button
-          type="button"
-          disabled={!selectedSlotId}
-          onClick={async () => {
-            try {
-              const res = await API.get('/appointments/my-appointments');
-              const appts = res.data?.data || [];
-              const activeOnDate = appts.filter(a => a.date === appointmentDate && ['booked', 'confirmed', 'checked_in', 'waiting'].includes(a.status));
-              const conflictDept = activeOnDate.find(a => a.departmentId !== (triageData?.departmentId || 'dept-gen'));
-              if (conflictDept) {
-                const conflictTime = conflictDept.bookedStartAt && conflictDept.bookedStartAt !== 'NOW' ? conflictDept.bookedStartAt : '11:30';
-                const conflictDeptName = formatDepartmentName(conflictDept.departmentId);
-                setSameDayWarning(`You already have an appointment today at ${conflictTime} with ${conflictDeptName}. Continue?`);
-              } else {
-                setSameDayWarning(null);
-              }
-            } catch (e) {
-              // ignore
-            }
-            setCurrentStep(6);
-          }}
-          className="flex items-center gap-2 px-6 py-3 bg-teal-500 hover:bg-teal-400 disabled:opacity-40 text-slate-950 font-bold text-sm rounded-xl transition-all shadow-lg shadow-teal-500/20"
-        >
-          <span>Review & Confirm</span>
-          <ArrowRight className="w-4 h-4" />
-        </button>
       </div>
-    </div>
-  );
+    );
+  };
 
   // Render Step 6: Confirmation & Disclaimer
-  const renderStep6 = () => (
-    <div className="space-y-6">
-      <div>
-        <h3 className="text-xl font-bold text-slate-100">Step 6: Confirm Appointment</h3>
-        <p className="text-xs text-slate-400 mt-1">Review your booking details and accept the clinical disclaimer.</p>
-      </div>
+  const renderStep6 = () => {
+    const selectedDocObj = doctorOptions.find((d) => (d.doctorId || d.id) === selectedDoctorId);
+    const allSlots = [...(slotsData.cards || []), ...(slotsData.fullList || [])];
+    const selectedSlotObj = allSlots.find((s) => (s.slotId === selectedSlotId || s.id === selectedSlotId));
+    const slotTime = selectedSlotObj?.startAt || 'Scheduled Slot';
+    const isSelectedSlotExpired = isSlotExpired(appointmentDate, slotTime);
 
-      {(() => {
-        const selectedDocObj = doctorOptions.find((d) => (d.doctorId || d.id) === selectedDoctorId);
-        const allSlots = [...(slotsData.cards || []), ...(slotsData.fullList || [])];
-        const selectedSlotObj = allSlots.find((s) => (s.slotId === selectedSlotId || s.id === selectedSlotId));
-        const slotTime = selectedSlotObj?.startAt || 'Scheduled Slot';
+    let checkInDeadline = '10 minutes before slot';
+    if (slotTime && slotTime.includes(':')) {
+      const [h, m] = slotTime.split(':').map(Number);
+      const totalM = h * 60 + m - 10;
+      if (totalM >= 0) {
+        const dh = String(Math.floor(totalM / 60)).padStart(2, '0');
+        const dm = String(totalM % 60).padStart(2, '0');
+        checkInDeadline = `${dh}:${dm} (10 minutes before slot)`;
+      }
+    }
 
-        let checkInDeadline = '10 minutes before slot';
-        if (slotTime && slotTime.includes(':')) {
-          const [h, m] = slotTime.split(':').map(Number);
-          const totalM = h * 60 + m - 10;
-          if (totalM >= 0) {
-            const dh = String(Math.floor(totalM / 60)).padStart(2, '0');
-            const dm = String(totalM % 60).padStart(2, '0');
-            checkInDeadline = `${dh}:${dm} (10 minutes before slot)`;
-          }
-        }
+    const patientName = patientType === 'family'
+      ? (familyMembers.find(m => (m.patientUid || m.id) === selectedFamilyId)?.fullName || 'Family Member')
+      : patientType === 'temp'
+      ? (tempPatient.name || 'Temporary Patient')
+      : (patientProfile?.fullName || currentUser?.displayName || 'Patient');
 
-        const patientName = patientType === 'family'
-          ? (familyMembers.find(m => (m.patientUid || m.id) === selectedFamilyId)?.fullName || 'Family Member')
-          : patientType === 'temp'
-          ? (tempPatient.name || 'Temporary Patient')
-          : (patientProfile?.fullName || currentUser?.displayName || 'Patient');
+    const patientAge = patientType === 'family'
+      ? (familyMembers.find(m => (m.patientUid || m.id) === selectedFamilyId)?.age || 'N/A')
+      : patientType === 'temp'
+      ? (tempPatient.age ? `${tempPatient.age} years` : 'N/A')
+      : (patientProfile?.age || (patientProfile?.dob ? `${new Date().getFullYear() - new Date(patientProfile.dob).getFullYear()} years` : 'N/A'));
 
-        const patientAge = patientType === 'family'
-          ? (familyMembers.find(m => (m.patientUid || m.id) === selectedFamilyId)?.age || 'N/A')
-          : patientType === 'temp'
-          ? (tempPatient.age ? `${tempPatient.age} years` : 'N/A')
-          : (patientProfile?.age || (patientProfile?.dob ? `${new Date().getFullYear() - new Date(patientProfile.dob).getFullYear()} years` : 'N/A'));
+    const patientHid = patientType === 'family'
+      ? (familyMembers.find(m => (m.patientUid || m.id) === selectedFamilyId)?.patientHealthId || familyMembers.find(m => (m.patientUid || m.id) === selectedFamilyId)?.healthId || 'N/A')
+      : (patientProfile?.patientHealthId || patientProfile?.healthId || currentUser?.patientHealthId || currentUser?.healthId || 'N/A');
 
-        const patientHid = patientType === 'family'
-          ? (familyMembers.find(m => (m.patientUid || m.id) === selectedFamilyId)?.patientHealthId || familyMembers.find(m => (m.patientUid || m.id) === selectedFamilyId)?.healthId || 'N/A')
-          : (patientProfile?.patientHealthId || patientProfile?.healthId || currentUser?.patientHealthId || currentUser?.healthId || 'N/A');
+    return (
+      <div className="space-y-6">
+        <div>
+          <h3 className="text-xl font-bold text-slate-100">Step 6: Confirm Appointment</h3>
+          <p className="text-xs text-slate-400 mt-1">Review your booking details and accept the clinical disclaimer.</p>
+        </div>
 
-        return (
-          <div className="bg-slate-800/80 p-5 rounded-2xl border border-slate-700 space-y-3 text-xs text-slate-300">
-            <div className="flex justify-between border-b border-slate-700 pb-2">
-              <span className="text-slate-400">Patient Name</span>
-              <span className="font-bold text-slate-100">{patientName}</span>
-            </div>
-            <div className="flex justify-between border-b border-slate-700 pb-2">
-              <span className="text-slate-400">Age</span>
-              <span className="font-bold text-slate-100">{patientAge}</span>
-            </div>
-            <div className="flex justify-between border-b border-slate-700 pb-2">
-              <span className="text-slate-400">Health ID (UHID)</span>
-              <span className="font-mono font-bold text-teal-400">{patientHid}</span>
-            </div>
-            <div className="flex justify-between border-b border-slate-700 pb-2">
-              <span className="text-slate-400">Doctor</span>
-              <span className="font-bold text-slate-100">{selectedDocObj?.name || 'Selected Doctor'}</span>
-            </div>
-            <div className="flex justify-between border-b border-slate-700 pb-2">
-              <span className="text-slate-400">Department</span>
-              <span className="font-bold text-slate-100 uppercase">{formatDepartmentName(triageData?.departmentId)}</span>
-            </div>
-            <div className="flex justify-between border-b border-slate-700 pb-2">
-              <span className="text-slate-400">Date &amp; Time</span>
-              <span className="font-bold text-slate-100">{appointmentDate} at {slotTime}</span>
-            </div>
-            <div className="flex justify-between border-b border-slate-700 pb-2">
-              <span className="text-amber-400 font-semibold">Check-in Deadline</span>
-              <span className="font-bold text-amber-300">{checkInDeadline}</span>
-            </div>
-            <div className="flex justify-between border-b border-slate-700 pb-2">
-              <span className="text-slate-400">Urgency Level</span>
-              <span className="font-bold text-teal-400 uppercase">{triageData?.urgencySuggested || 'ROUTINE'}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-400">Reason</span>
-              <span className="font-semibold text-slate-200">{reasonText || reasonChips.join(', ') || 'Routine Consultation'}</span>
+        {isSelectedSlotExpired && (
+          <div className="p-4 bg-rose-950/80 border border-rose-500 text-rose-200 rounded-2xl flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+            <div>
+              <h5 className="font-bold text-sm text-rose-100">Slot Expired</h5>
+              <p className="text-xs text-rose-300 mt-1">
+                Slot '{selectedSlotId}' ({appointmentDate} at {slotTime}) is in the past and has expired. You cannot confirm an expired slot. Please return to Step 5 to choose an available upcoming slot.
+              </p>
             </div>
           </div>
-        );
-      })()}
+        )}
 
-      {bookingError && (
-        <div className="p-3 bg-rose-950/60 border border-rose-500 text-rose-200 text-xs font-bold rounded-xl">
-          ⚠️ {bookingError}
+        <div className="bg-slate-800/80 p-5 rounded-2xl border border-slate-700 space-y-3 text-xs text-slate-300">
+          <div className="flex justify-between border-b border-slate-700 pb-2">
+            <span className="text-slate-400">Patient Name</span>
+            <span className="font-bold text-slate-100">{patientName}</span>
+          </div>
+          <div className="flex justify-between border-b border-slate-700 pb-2">
+            <span className="text-slate-400">Age</span>
+            <span className="font-bold text-slate-100">{patientAge}</span>
+          </div>
+          <div className="flex justify-between border-b border-slate-700 pb-2">
+            <span className="text-slate-400">Health ID (UHID)</span>
+            <span className="font-mono font-bold text-teal-400">{patientHid}</span>
+          </div>
+          <div className="flex justify-between border-b border-slate-700 pb-2">
+            <span className="text-slate-400">Doctor</span>
+            <span className="font-bold text-slate-100">{selectedDocObj?.name || 'Selected Doctor'}</span>
+          </div>
+          <div className="flex justify-between border-b border-slate-700 pb-2">
+            <span className="text-slate-400">Department</span>
+            <span className="font-bold text-slate-100 uppercase">{formatDepartmentName(triageData?.departmentId)}</span>
+          </div>
+          <div className="flex justify-between border-b border-slate-700 pb-2">
+            <span className="text-slate-400">Date &amp; Time</span>
+            <span className="font-bold text-slate-100">{appointmentDate} at {slotTime}</span>
+          </div>
+          <div className="flex justify-between border-b border-slate-700 pb-2">
+            <span className="text-amber-400 font-semibold">Check-in Deadline</span>
+            <span className="font-bold text-amber-300">{checkInDeadline}</span>
+          </div>
+          <div className="flex justify-between border-b border-slate-700 pb-2">
+            <span className="text-slate-400">Urgency Level</span>
+            <span className="font-bold text-teal-400 uppercase">{triageData?.urgencySuggested || 'ROUTINE'}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-400">Reason</span>
+            <span className="font-semibold text-slate-200">{reasonText || reasonChips.join(', ') || 'Routine Consultation'}</span>
+          </div>
         </div>
-      )}
 
-      {/* Same-Day Different Department Warning Notice */}
-      {sameDayWarning && (
-        <div className="bg-amber-950/40 border border-amber-500/60 p-4 rounded-2xl space-y-2">
-          <p className="text-xs text-amber-300 font-bold flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
-            <span>Same-Day Appointment Notice</span>
-          </p>
-          <label className="flex items-start gap-3 cursor-pointer mt-2">
+        {bookingError && (
+          <div className="p-3 bg-rose-950/60 border border-rose-500 text-rose-200 text-xs font-bold rounded-xl">
+            ⚠️ {bookingError}
+          </div>
+        )}
+
+        {/* Same-Day Different Department Warning Notice */}
+        {sameDayWarning && (
+          <div className="bg-amber-950/40 border border-amber-500/60 p-4 rounded-2xl space-y-2">
+            <p className="text-xs text-amber-300 font-bold flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>Same-Day Appointment Notice</span>
+            </p>
+            <label className="flex items-start gap-3 cursor-pointer mt-2">
+              <input
+                type="checkbox"
+                checked={sameDayAck}
+                onChange={(e) => setSameDayAck(e.target.checked)}
+                className="mt-0.5 w-4 h-4 rounded border-slate-700 text-teal-500 focus:ring-teal-500 bg-slate-900"
+              />
+              <span className="text-xs text-amber-200 leading-relaxed font-semibold">
+                {sameDayWarning}
+              </span>
+            </label>
+          </div>
+        )}
+
+        {/* Mandatory Disclaimer Tick Box */}
+        <div className="bg-amber-950/30 border border-amber-500/40 p-4 rounded-2xl space-y-2">
+          <label className="flex items-start gap-3 cursor-pointer">
             <input
               type="checkbox"
-              checked={sameDayAck}
-              onChange={(e) => setSameDayAck(e.target.checked)}
-              className="mt-0.5 w-4 h-4 rounded border-slate-700 text-teal-500 focus:ring-teal-500 bg-slate-900"
+              checked={disclaimerTicked}
+              onChange={(e) => setDisclaimerTicked(e.target.checked)}
+              className="mt-1 w-4 h-4 rounded border-slate-700 text-teal-500 focus:ring-teal-500 bg-slate-900"
             />
-            <span className="text-xs text-amber-200 leading-relaxed font-semibold">
-              {sameDayWarning}
+            <span className="text-xs text-amber-200/90 leading-relaxed font-medium">
+              I understand that waiting time estimates are dynamic estimates. If my condition worsens or if I experience an immediate medical emergency, I will seek urgent emergency care at the nearest hospital or call 108 immediately.
             </span>
           </label>
         </div>
-      )}
 
-      {/* Mandatory Disclaimer Tick Box */}
-      <div className="bg-amber-950/30 border border-amber-500/40 p-4 rounded-2xl space-y-2">
-        <label className="flex items-start gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={disclaimerTicked}
-            onChange={(e) => setDisclaimerTicked(e.target.checked)}
-            className="mt-1 w-4 h-4 rounded border-slate-700 text-teal-500 focus:ring-teal-500 bg-slate-900"
-          />
-          <span className="text-xs text-amber-200/90 leading-relaxed font-medium">
-            I understand that waiting time estimates are dynamic estimates. If my condition worsens or if I experience an immediate medical emergency, I will seek urgent emergency care at the nearest hospital or call 108 immediately.
-          </span>
-        </label>
+        <div className="flex items-center justify-between pt-4 border-t border-slate-800">
+          <button
+            type="button"
+            onClick={() => setCurrentStep(5)}
+            className="flex items-center gap-1.5 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs rounded-xl"
+          >
+            <ArrowLeft className="w-4 h-4" /> Back
+          </button>
+
+          <button
+            type="button"
+            disabled={!disclaimerTicked || (sameDayWarning && !sameDayAck) || bookingSubmitting || isSelectedSlotExpired}
+            onClick={handleFinalBooking}
+            className="flex items-center gap-2 px-6 py-3 bg-teal-500 hover:bg-teal-400 disabled:opacity-40 text-slate-950 font-bold text-sm rounded-xl transition-all shadow-lg shadow-teal-500/20"
+          >
+            {bookingSubmitting ? 'Confirming...' : 'Confirm Booking'}
+            <CheckCircle className="w-4 h-4" />
+          </button>
+        </div>
       </div>
-
-      <div className="flex items-center justify-between pt-4 border-t border-slate-800">
-        <button
-          type="button"
-          onClick={() => setCurrentStep(5)}
-          className="flex items-center gap-1.5 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs rounded-xl"
-        >
-          <ArrowLeft className="w-4 h-4" /> Back
-        </button>
-
-        <button
-          type="button"
-          disabled={!disclaimerTicked || (sameDayWarning && !sameDayAck) || bookingSubmitting}
-          onClick={handleFinalBooking}
-          className="flex items-center gap-2 px-6 py-3 bg-teal-500 hover:bg-teal-400 disabled:opacity-40 text-slate-950 font-bold text-sm rounded-xl transition-all shadow-lg shadow-teal-500/20"
-        >
-          {bookingSubmitting ? 'Confirming...' : 'Confirm Booking'}
-          <CheckCircle className="w-4 h-4" />
-        </button>
-      </div>
-    </div>
-  );
+    );
+  };
 
   // Render Step 7: Booking Confirmation & Token Card
   const renderStep7 = () => (
@@ -1181,7 +1365,7 @@ export const AppointmentBookingForm = () => {
           {/* Full Appointment Details */}
           <div className="text-xs space-y-1.5 border-t border-slate-700 pt-3">
             {[
-              ['Appointment ID', bookedAppointment.id],
+              ['Appointment ID', bookedAppointment.displayId || bookedAppointment.appointmentId || bookedAppointment.id],
               ['Patient', bookedAppointment.patientName],
               ['Health ID', bookedAppointment.patientHealthId],
               ['Doctor', bookedAppointment.doctorName || 'Doctor'],

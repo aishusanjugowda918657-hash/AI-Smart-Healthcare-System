@@ -40,15 +40,37 @@ export const generateHealthIdCandidate = (year = new Date().getFullYear()) => {
 };
 
 /**
- * Validates Health ID format and mod-31 checksum
+ * Formats a Patient Health ID according to the SmartCare AI specification.
+ * Format: SCAI-YYYY-NNNNNN-P (e.g., SCAI-2026-000001-P)
+ * - YYYY: registration year
+ * - NNNNNN: 6-digit zero-padded sequence
+ * - P: identifies a patient
+ */
+export const formatScaiPatientHealthId = (year = new Date().getFullYear(), sequence = 1) => {
+  const paddedSeq = String(sequence).padStart(6, '0');
+  return `SCAI-${year}-${paddedSeq}-P`;
+};
+
+/**
+ * Validates Health ID format:
+ * - SmartCare AI format: SCAI-YYYY-NNNNNN-P
+ * - Legacy format: PHI-YYYY-XXXXXX-C (with mod-31 checksum)
  */
 export const isValidHealthId = (healthId) => {
   if (!healthId || typeof healthId !== 'string') return false;
-  
-  const pattern = new RegExp(`^PHI-\\d{4}-[${HEALTH_ID_ALPHABET}]{6}-[${HEALTH_ID_ALPHABET}]$`);
-  if (!pattern.test(healthId)) return false;
+  const trimmed = healthId.trim();
 
-  const parts = healthId.split('-');
+  // SmartCare AI format: SCAI-YYYY-NNNNNN-P
+  const scaiPattern = /^SCAI-\d{4}-\d{6}-P$/i;
+  if (scaiPattern.test(trimmed)) {
+    return true;
+  }
+
+  // Legacy format: PHI-YYYY-XXXXXX-C
+  const legacyPattern = new RegExp(`^PHI-\\d{4}-[${HEALTH_ID_ALPHABET}]{6}-[${HEALTH_ID_ALPHABET}]$`);
+  if (!legacyPattern.test(trimmed)) return false;
+
+  const parts = trimmed.split('-');
   const year = parts[1];
   const randomPayload = parts[2];
   const checksumChar = parts[3];

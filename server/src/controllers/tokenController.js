@@ -1,6 +1,9 @@
 import { assertDbConnected } from '../config/firebase.js';
 import { calculatePriorityScore, sortQueueTokens } from '../services/tokenPriorityEngine.js';
 import { calculateWaitingTime, parseFirestoreDate } from '../services/waitingTimeCalculator.js';
+import { clock } from '../utils/clock.js';
+import { getHospitalTodayStr, parseSlotTimeToDate } from '../utils/timezoneDate.js';
+import { getGlobalSettings } from '../services/settingsService.js';
 
 /**
  * Check-in appointment & generate priority token
@@ -397,7 +400,10 @@ export const getMyQueueStatus = async (req, res, next) => {
   try {
     const { uid: patientUid } = req.user;
     const db = assertDbConnected();
-    const todayStr = new Date().toISOString().split('T')[0];
+    const now = clock.now();
+    const todayStr = getHospitalTodayStr(now);
+    const settings = await getGlobalSettings();
+    const graceMin = settings.graceMin || settings.graceMinutes || 5;
 
     // Get patient record to check patientHealthId for fallback lookups
     let patientHealthId = null;
@@ -466,6 +472,7 @@ export const getMyQueueStatus = async (req, res, next) => {
           .get();
       }
       if (!tokenSnap.empty) {
+        const apptsMap = new Map();
         for (const tDoc of tokenSnap.docs) {
           const tData = tDoc.data();
           if (tData.appointmentId) {
@@ -473,6 +480,7 @@ export const getMyQueueStatus = async (req, res, next) => {
             if (aDoc.exists) {
               const aId = aDoc.data().appointmentId || aDoc.id;
               if (!apptsMap.has(aId)) {
+                apptsMap.set(aId, true);
                 allAppts.push({ id: aDoc.id, appointmentId: aId, ...aDoc.data() });
               }
             }
@@ -490,20 +498,64 @@ export const getMyQueueStatus = async (req, res, next) => {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // ACTIVE APPOINTMENT SELECTION
+    // ACTIVE APPOINTMENT SELECTION & AUTHORITATIVE EXPIRY ENFORCEMENT
     // Terminal statuses that MUST NOT appear in the live queue:
     const INACTIVE_STATUSES = new Set([
       'CANCELLED', 'COMPLETED', 'NO_SHOW', 'RESCHEDULED', 'REJECTED', 'EXPIRED'
     ]);
 
-    const activeAppts = allAppts.filter(
-      (a) => a.status && !INACTIVE_STATUSES.has(a.status.toUpperCase())
-    );
+    const activeAppts = [];
+    for (const a of allAppts) {
+      if (!a.status || INACTIVE_STATUSES.has(a.status.toUpperCase())) {
+        continue;
+      }
+
+      // Check date boundaries in Asia/Kolkata
+      const apptDate = a.date || todayStr;
+      if (apptDate < todayStr) {
+        // Stale appointment from a past day: transition to terminal NO_SHOW
+        try {
+          await db.collection('appointments').doc(a.id).update({
+            status: 'no_show',
+            noShowAt: now,
+            updatedAt: now
+          });
+          const targetApptId = a.appointmentId || a.id;
+          const tokRef = db.collection('tokens').doc(`tok-${targetApptId}`);
+          await tokRef.set({ status: 'no_show', noShowAt: now, updatedAt: now }, { merge: true });
+        } catch (e) {
+          console.warn('Error transitioning past appointment to no-show:', e.message);
+        }
+        continue; // Discard from active appointments
+      }
+
+      if (apptDate === todayStr) {
+        const isAttending = a.checkedInAt || ['checked_in', 'waiting', 'in_consultation', 'called', 'rejoined', 'completed'].includes((a.status || '').toLowerCase());
+        if (!isAttending) {
+          const apptTime = parseSlotTimeToDate(a.date, a.bookedStartAt || a.timeSlot);
+          if (apptTime && now.getTime() >= apptTime.getTime() + graceMin * 60 * 1000) {
+            // Grace period expired without checkin! Transition to no_show
+            try {
+              await db.collection('appointments').doc(a.id).update({
+                status: 'no_show',
+                noShowAt: now,
+                updatedAt: now
+              });
+              const targetApptId = a.appointmentId || a.id;
+              const tokRef = db.collection('tokens').doc(`tok-${targetApptId}`);
+              await tokRef.set({ status: 'no_show', noShowAt: now, updatedAt: now }, { merge: true });
+            } catch (e) {
+              console.warn('Error transitioning expired same-day appointment to no-show:', e.message);
+            }
+            continue; // Discard from active appointments
+          }
+        }
+      }
+
+      activeAppts.push(a);
+    }
 
     // Sort active appointments newest-first by appointmentId descending.
-    // APT-2026-00026 > APT-2026-00018, so after cancellation + rebooking the
-    // new appointment always wins regardless of Firestore's return ordering.
-    // createdAt used as secondary tiebreaker.
     if (activeAppts.length > 1) {
       activeAppts.sort((a, b) => {
         const idA = a.appointmentId || a.id || '';
@@ -634,7 +686,12 @@ export const getMyQueueStatus = async (req, res, next) => {
 
     // 5. Build queue position & current room metrics
     const currentlyServingToken = apptDateTokens.find((t) => t.status === 'serving') || null;
-    const waitingTokens = sortQueueTokens(apptDateTokens.filter((t) => t.status === 'waiting'));
+    const waitingTokens = sortQueueTokens(
+      apptDateTokens.filter((t) =>
+        t.status === 'waiting' &&
+        !['cancelled', 'completed', 'no_show', 'expired'].includes(String(t.status).toLowerCase())
+      )
+    );
     const totalActiveQueue = waitingTokens.length + (currentlyServingToken ? 1 : 0);
 
     let myPositionNum = -1;
@@ -665,6 +722,17 @@ export const getMyQueueStatus = async (req, res, next) => {
 
     // 6. Calculate waiting time and estimated turn
     const nowDate = new Date();
+    const isFutureAppointment = apptDate > todayStr;
+    const rawSlotTime = activeAppt.timeSlot || activeAppt.bookedStartAt || activeAppt.time || '09:00';
+    let formattedSlotTime = rawSlotTime;
+    const cleanTime = String(rawSlotTime).replace(/(am|pm)/i, '').trim();
+    const [sH, sM] = cleanTime.split(':').map(Number);
+    if (!isNaN(sH)) {
+      const ampm = sH >= 12 ? 'PM' : 'AM';
+      const displayH = sH % 12 || 12;
+      formattedSlotTime = `${String(displayH).padStart(2, '0')}:${String(sM || 0).padStart(2, '0')} ${ampm}`;
+    }
+
     let waitResult = {
       estimatedWaitMinutes: null,
       estimatedTurnTime: 'Calculating...',
@@ -673,7 +741,16 @@ export const getMyQueueStatus = async (req, res, next) => {
       calculationBasis: 'Calculating...'
     };
 
-    if (!isCompleted && !isCancelled) {
+    if (isFutureAppointment) {
+      waitResult = {
+        estimatedWaitMinutes: null,
+        estimatedTurnTime: formattedSlotTime,
+        patientsAhead,
+        isEstimate: false,
+        isFutureAppointment: true,
+        calculationBasis: `Scheduled for ${apptDate} at ${formattedSlotTime}`
+      };
+    } else if (!isCompleted && !isCancelled) {
       if (currentlyServingToken && myToken && currentlyServingToken.id === myToken.id) {
         waitResult = {
           estimatedWaitMinutes: 0,
@@ -755,14 +832,18 @@ export const getMyQueueStatus = async (req, res, next) => {
       hasToken: !!tokenNumber,
       isCancelled,
       isCompleted,
+      isFutureAppointment: !!isFutureAppointment,
       appointment: {
+        id: activeAppt.id || activeAppt.appointmentId,
         appointmentId: activeAppt.appointmentId || activeAppt.id,
+        displayId: activeAppt.displayId || activeAppt.appointmentId || activeAppt.id,
         doctorUid,
         doctorName,
         departmentId: activeAppt.departmentId,
         departmentName,
         date: activeAppt.date,
-        timeSlot: activeAppt.timeSlot,
+        timeSlot: activeAppt.timeSlot || activeAppt.bookedStartAt || activeAppt.time || '',
+        bookedStartAt: activeAppt.bookedStartAt || activeAppt.timeSlot || activeAppt.time || '',
         priorityCategory: activeAppt.priorityCategory || 'STANDARD',
         patientHealthId: activeAppt.patientHealthId,
         reason: activeAppt.reason,
@@ -770,21 +851,30 @@ export const getMyQueueStatus = async (req, res, next) => {
       },
       token: {
         tokenNumber,
-        status: myToken?.status || (isCancelled ? 'cancelled' : isCompleted ? 'completed' : 'waiting'),
+        status: myToken?.status || (isCancelled ? 'cancelled' : isCompleted ? 'completed' : isFutureAppointment ? 'scheduled' : 'waiting'),
         priorityCategory: activeAppt.priorityCategory || 'STANDARD'
       },
       queueSummary: {
-        positionText: isCompleted ? 'CONSULTATION COMPLETED' : isCancelled ? 'APPOINTMENT CANCELLED' : (currentlyServingToken && myToken && currentlyServingToken.id === myToken.id) ? 'NOW SERVING' : `#${myPositionNum > 0 ? myPositionNum : 1} of ${totalActiveQueue}`,
+        positionText: isCompleted
+          ? 'CONSULTATION COMPLETED'
+          : isCancelled
+          ? 'APPOINTMENT CANCELLED'
+          : isFutureAppointment
+          ? 'SCHEDULED'
+          : (currentlyServingToken && myToken && currentlyServingToken.id === myToken.id)
+          ? 'NOW SERVING'
+          : `#${myPositionNum > 0 ? myPositionNum : 1} of ${totalActiveQueue}`,
         positionNumber: myPositionNum,
         patientsAhead,
         totalActiveQueue,
-        estimatedWaitMinutes: waitResult.estimatedWaitMinutes,
+        estimatedWaitMinutes: isFutureAppointment ? null : waitResult.estimatedWaitMinutes,
         estimatedTurnTime: waitResult.estimatedTurnTime,
         isEstimate: waitResult.isEstimate || false,
+        isFutureAppointment: !!isFutureAppointment,
         calculationBasis: waitResult.calculationBasis || 'Calculating...'
       },
       // Live wait-time engine range data (written by recalculateQueue)
-      liveWait: activeAppt.live ? {
+      liveWait: (activeAppt.live && !isFutureAppointment) ? {
         waitMinLow: activeAppt.live.waitMinLow,
         waitMinHigh: activeAppt.live.waitMinHigh,
         predictedCallAt: activeAppt.live.predictedCallAt,
@@ -796,7 +886,7 @@ export const getMyQueueStatus = async (req, res, next) => {
         lateStartDelayMin: activeAppt.live.lateStartDelayMin,
         updatedAt: activeAppt.live.updatedAt
       } : null,
-      leaveHome: activeAppt.leaveHome || null,
+      leaveHome: null,
       earlyOptIn: activeAppt.earlyOptIn || false,
       currentlyServing: currentlyServingData,
       queueTimeline: queueTimeline.slice(0, 7)

@@ -4,6 +4,7 @@ import { evaluateTriageRules } from '../domain/triage.js';
 import { calculatePriorityScore } from '../services/tokenPriorityEngine.js';
 import { AppError } from '../utils/errors.js';
 import { formatDateYYYYMMDD, isTimeOverlapping } from '../utils/time.js';
+import { getAppointmentDateCompact, formatAppointmentDisplayId } from '../services/appointmentIdService.js';
 
 /**
  * Atomically book an appointment with Firestore Transactional Double-Booking Lock
@@ -253,6 +254,8 @@ export const bookAppointment = async (req, res, next) => {
       const dupUidLockRef = db.collection('appointment_locks').doc(safeUidLockId);
       const counterRef = db.collection('counters').doc('appointmentId');
       const deptCounterRef = db.collection('counters').doc(`token_${deptLetter}_${date}`);
+      const dateCompact = getAppointmentDateCompact(date);
+      const apptDisplayCounterRef = db.collection('counters').doc(`apptDisplay_${dateCompact}`);
 
       let conflictQuery = db
         .collection('appointments')
@@ -266,12 +269,13 @@ export const bookAppointment = async (req, res, next) => {
         conflictQuery = conflictQuery.where('timeSlot', '==', timeSlot);
       }
 
-      const [dupLockSnap, dupUidLockSnap, conflictSnapshot, counterDoc, deptCounterDoc] = await Promise.all([
+      const [dupLockSnap, dupUidLockSnap, conflictSnapshot, counterDoc, deptCounterDoc, apptDisplaySnap] = await Promise.all([
         transaction.get(dupLockRef),
         transaction.get(dupUidLockRef),
         transaction.get(conflictQuery),
         transaction.get(counterRef),
-        transaction.get(deptCounterRef)
+        transaction.get(deptCounterRef),
+        transaction.get(apptDisplayCounterRef)
       ]);
 
       const activeLockSnap = dupLockSnap.exists ? dupLockSnap : (dupUidLockSnap.exists ? dupUidLockSnap : null);
@@ -304,11 +308,15 @@ export const bookAppointment = async (req, res, next) => {
       const tokenNumber = (deptCounterDoc.exists ? deptCounterDoc.data().value || 0 : 0) + 1;
       const tokenLabel = `${deptLetter}-${String(tokenNumber).padStart(3, '0')}`;
 
+      const apptSeq = (apptDisplaySnap.exists ? apptDisplaySnap.data().value || 0 : 0) + 1;
+      const displayId = formatAppointmentDisplayId(dateCompact, apptSeq);
+
       const newApptRef = db.collection('appointments').doc(appointmentId);
 
       appointmentData = {
         id: appointmentId,
         appointmentId,
+        displayId,
         ownerUid: targetPatientUid,
         bookedByUid: accountUid,
         patientUid: targetPatientUid,
@@ -337,11 +345,13 @@ export const bookAppointment = async (req, res, next) => {
       // ALL WRITES AFTER READS
       transaction.set(counterRef, { currentValue: seq }, { merge: true });
       transaction.set(deptCounterRef, { value: tokenNumber }, { merge: true });
+      transaction.set(apptDisplayCounterRef, { value: apptSeq, dateCompact, updatedAt: new Date() }, { merge: true });
       transaction.set(newApptRef, appointmentData);
 
       // Record duplicate reservation locks (Fix BIZ-Q1)
       const lockPayload = {
         appointmentId,
+        displayId,
         patientHealthId,
         patientUid: targetPatientUid,
         doctorId: resolvedDoctorId,
@@ -360,6 +370,7 @@ export const bookAppointment = async (req, res, next) => {
         id: tokenId,
         tokenNumber,
         appointmentId,
+        displayId,
         patientUid: targetPatientUid,
         patientHealthId,
         doctorUid: resolvedDoctorUid,

@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
-import { formatDate } from '../../utils/formatters';
+import { formatDate, formatTime } from '../../utils/formatters';
 import {
   Loader2,
   Clock,
@@ -19,8 +19,7 @@ import {
   Bell,
   Sparkles,
   Zap,
-  Navigation,
-  Car
+  Navigation
 } from 'lucide-react';
 
 import { db } from '../../config/firebase';
@@ -43,7 +42,6 @@ export const LiveQueueTracker = () => {
   const [queueData, setQueueData] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
 
-  const [travelMinutes, setTravelMinutes] = useState(20);
   const [notifyBeforeTurn, setNotifyBeforeTurn] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionFeedback, setActionFeedback] = useState(null);
@@ -79,7 +77,7 @@ export const LiveQueueTracker = () => {
 
   // Real-time Firestore onSnapshot listener on the active appointment document
   useEffect(() => {
-    const apptId = queueData?.appointment?.id;
+    const apptId = queueData?.appointment?.id || queueData?.appointment?.appointmentId;
     if (!apptId) return;
     try {
       const unsub = onSnapshot(doc(db, 'appointments', apptId), () => {
@@ -89,7 +87,7 @@ export const LiveQueueTracker = () => {
     } catch (e) {
       console.warn('Live snapshot listener error:', e.message);
     }
-  }, [queueData?.appointment?.id, fetchQueueStatus]);
+  }, [queueData?.appointment?.id, queueData?.appointment?.appointmentId, fetchQueueStatus]);
 
   const handleAction = async (endpoint, payload = {}) => {
     setActionLoading(true);
@@ -113,11 +111,65 @@ export const LiveQueueTracker = () => {
   const renderTurnAlert = () => {
     if (!queueData?.hasAppointment || queueData?.isCompleted || queueData?.isCancelled) return null;
 
-    const { queueSummary, token } = queueData;
+    const { queueSummary, token, appointment, isFutureAppointment } = queueData;
     if (!queueSummary) return null;
 
-    const isServing = token?.status === 'serving' || queueSummary.positionText === 'NOW SERVING';
+    if (isFutureAppointment || queueSummary.isFutureAppointment) {
+      const slotTimeDisplay = formatTime(appointment?.timeSlot || appointment?.bookedStartAt) || 'your scheduled slot';
+      return (
+        <div className="p-4 bg-indigo-50 border-2 border-indigo-500/30 rounded-2xl flex items-center space-x-3 text-indigo-950 shadow-sm">
+          <div className="p-2 bg-indigo-600 text-white rounded-xl shrink-0">
+            <Calendar className="w-6 h-6" />
+          </div>
+          <div>
+            <h4 className="font-extrabold text-sm uppercase tracking-wide text-indigo-900 flex items-center gap-2">
+              <span>APPOINTMENT SCHEDULED FOR {formatDate(appointment?.date)}</span>
+              <span className="text-[10px] px-2 py-0.5 bg-indigo-200 text-indigo-900 rounded-full font-bold">UPCOMING</span>
+            </h4>
+            <p className="text-xs font-medium text-indigo-800 mt-0.5">
+              Your appointment is confirmed for <strong>{slotTimeDisplay}</strong>. The live OPD queue and real-time turn tracking will activate on the morning of your appointment.
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    const isCalled = token?.status === 'called' || appointment?.status === 'called';
+    const isMissed = appointment?.status === 'missed' || appointment?.isMissed;
+    const isServing = token?.status === 'serving' || token?.status === 'in_consultation' || appointment?.status === 'in_consultation' || queueSummary.positionText === 'NOW SERVING';
     const isNext = queueSummary.patientsAhead === 0 || queueSummary.positionNumber === 1 || queueSummary.calculationBasis === 'Turn Soon';
+
+    if (isCalled) {
+      return (
+        <div className="p-4 bg-indigo-50 border-2 border-indigo-500/50 rounded-2xl flex items-center space-x-3 text-indigo-950 shadow-md animate-pulse">
+          <div className="p-2 bg-indigo-600 text-white rounded-xl shrink-0">
+            <Bell className="w-6 h-6 animate-bounce" />
+          </div>
+          <div>
+            <h4 className="font-extrabold text-sm uppercase tracking-wide text-indigo-900">YOUR TURN HAS BEEN CALLED!</h4>
+            <p className="text-xs font-semibold text-indigo-700">
+              Grace period is active (5 minutes). Please proceed directly inside the Consultation Room.
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    if (isMissed) {
+      return (
+        <div className="p-4 bg-rose-50 border-2 border-rose-500/40 rounded-2xl flex items-center space-x-3 text-rose-950 shadow-md">
+          <div className="p-2 bg-rose-600 text-white rounded-xl shrink-0">
+            <AlertTriangle className="w-6 h-6" />
+          </div>
+          <div className="flex-1">
+            <h4 className="font-extrabold text-sm uppercase tracking-wide text-rose-900">YOU MISSED YOUR TURN</h4>
+            <p className="text-xs font-semibold text-rose-700">
+              Grace period expired without check-in. If you have arrived, tap <strong>Rejoin Queue</strong> below to be placed after the next 2–3 waiting patients.
+            </p>
+          </div>
+        </div>
+      );
+    }
 
     if (isServing) {
       return (
@@ -126,8 +178,8 @@ export const LiveQueueTracker = () => {
             <Zap className="w-6 h-6" />
           </div>
           <div>
-            <h4 className="font-extrabold text-sm uppercase tracking-wide text-emerald-800">IT'S YOUR TURN NOW!</h4>
-            <p className="text-xs font-semibold text-emerald-700">Please proceed directly inside the Consultation Room.</p>
+            <h4 className="font-extrabold text-sm uppercase tracking-wide text-emerald-800">CONSULTATION IN PROGRESS</h4>
+            <p className="text-xs font-semibold text-emerald-700">You are currently in the Consultation Room with the doctor.</p>
           </div>
         </div>
       );
@@ -203,9 +255,10 @@ export const LiveQueueTracker = () => {
     isCancelled,
     isCompleted,
     liveWait,
-    leaveHome,
     earlyOptIn
   } = queueData;
+
+  const activeApptId = appointment?.id || appointment?.appointmentId;
 
   const priorityColorClass =
     appointment?.priorityCategory === 'EMERGENCY'
@@ -276,7 +329,9 @@ export const LiveQueueTracker = () => {
             <Calendar className="w-4 h-4 text-amber-400 shrink-0" />
             <div>
               <p className="text-[10px] text-slate-400 uppercase font-semibold">Slot & Date</p>
-              <p className="font-bold text-white">{formatDate(appointment?.date)} ({appointment?.timeSlot})</p>
+              <p className="font-bold text-white">
+                {formatDate(appointment?.date)} {appointment?.timeSlot || appointment?.bookedStartAt ? `(${formatTime(appointment?.timeSlot || appointment?.bookedStartAt)})` : ''}
+              </p>
             </div>
           </div>
         </div>
@@ -339,7 +394,7 @@ export const LiveQueueTracker = () => {
               {queueSummary?.patientsAhead ?? 0} {queueSummary?.patientsAhead === 1 ? 'Patient' : 'Patients'}
             </p>
             <p className="text-[10px] font-medium text-amber-600/80 mt-1">
-              Waiting in line before you
+              {queueData?.isFutureAppointment ? 'Ahead on scheduled date' : 'Waiting in line before you'}
             </p>
           </div>
 
@@ -349,14 +404,18 @@ export const LiveQueueTracker = () => {
               <span className="text-[11px] font-bold uppercase tracking-wider text-teal-800">Estimated Wait</span>
             </div>
             <p className="text-2xl font-extrabold text-teal-950">
-              {liveWait?.waitMinLow != null && liveWait?.waitMinHigh != null
+              {queueData?.isFutureAppointment
+                ? 'Opens on Visit'
+                : liveWait?.waitMinLow != null && liveWait?.waitMinHigh != null
                 ? `${liveWait.waitMinLow}–${liveWait.waitMinHigh} mins`
                 : queueSummary?.estimatedWaitMinutes !== null && queueSummary?.estimatedWaitMinutes !== undefined
                 ? `~${queueSummary.estimatedWaitMinutes} mins`
                 : 'Calculating...'}
             </p>
             <p className="text-[10px] font-medium text-teal-600/80 mt-1">
-              {liveWait?.timeFactor
+              {queueData?.isFutureAppointment
+                ? 'Queue opens on appointment day'
+                : liveWait?.timeFactor
                 ? `Pace Factor: ${Number(liveWait.timeFactor).toFixed(2)}x`
                 : queueSummary?.isEstimate ? '★ Dynamic Rolling Average' : 'Live Pace Estimate'}
             </p>
@@ -368,10 +427,10 @@ export const LiveQueueTracker = () => {
               <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700">Estimated Turn</span>
             </div>
             <p className="text-2xl font-extrabold text-slate-900">
-              {queueSummary?.estimatedTurnTime || 'Calculating...'}
+              {queueSummary?.estimatedTurnTime || formatTime(appointment?.timeSlot || appointment?.bookedStartAt) || 'Calculating...'}
             </p>
             <p className="text-[10px] font-medium text-slate-500 mt-1">
-              Target Call Time
+              {queueData?.isFutureAppointment ? 'Scheduled Slot Time' : 'Target Call Time'}
             </p>
           </div>
         </div>
@@ -392,59 +451,6 @@ export const LiveQueueTracker = () => {
             )}
           </div>
         )}
-
-        {/* Dynamic Leave Home Now Widget */}
-        {(() => {
-          const travel = Number(travelMinutes) || 15;
-          let turnTimeMs = null;
-          if (liveWait?.predictedTurnTime) {
-            turnTimeMs = new Date(liveWait.predictedTurnTime).getTime();
-          } else if (queueSummary?.estimatedWaitMinutes != null) {
-            turnTimeMs = Date.now() + (queueSummary.estimatedWaitMinutes * 60000);
-          } else if (leaveHome?.leaveAt) {
-            turnTimeMs = new Date(leaveHome.leaveAt).getTime() + ((leaveHome.travelMinutes || 15) + 10) * 60000;
-          }
-
-          const calculatedLeaveAt = turnTimeMs
-            ? new Date(turnTimeMs - ((travel + 10) * 60000))
-            : leaveHome?.leaveAt ? new Date(leaveHome.leaveAt) : null;
-
-          return (
-            <div className="p-4 bg-emerald-50/80 border border-emerald-200 rounded-2xl space-y-3">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <Car className="w-5 h-5 text-emerald-700" />
-                  <span className="text-xs font-bold text-emerald-900 uppercase tracking-wide">
-                    LEAVE HOME NOW ESTIMATE
-                  </span>
-                </div>
-                {calculatedLeaveAt && (
-                  <span className="text-lg font-black text-emerald-700">
-                    {calculatedLeaveAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </span>
-                )}
-              </div>
-
-              <div className="flex flex-wrap items-center gap-3 text-xs text-emerald-900">
-                <label className="flex items-center gap-2 font-medium">
-                  <span>Your Travel Time:</span>
-                  <input
-                    type="number"
-                    min="1"
-                    max="180"
-                    value={travelMinutes}
-                    onChange={(e) => setTravelMinutes(e.target.value)}
-                    className="w-16 px-2 py-1 bg-white border border-emerald-300 rounded-lg text-xs font-bold text-slate-800 text-center"
-                  />
-                  <span>mins</span>
-                </label>
-                <span className="text-[11px] text-emerald-700">
-                  (+10 min check-in buffer before estimated turn time. Updates dynamically when delays change)
-                </span>
-              </div>
-            </div>
-          );
-        })()}
 
         {/* Action feedback message */}
         {actionFeedback && (
@@ -487,7 +493,7 @@ export const LiveQueueTracker = () => {
 
           {['booked', 'confirmed'].includes(appointment?.status) && (
             <button
-              onClick={() => handleAction(`/appointments/${appointment.id}/on-the-way`)}
+              onClick={() => handleAction(`/appointments/${activeApptId}/on-the-way`)}
               disabled={actionLoading}
               className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl shadow transition-all flex items-center gap-1.5 disabled:opacity-50"
             >
@@ -496,14 +502,14 @@ export const LiveQueueTracker = () => {
             </button>
           )}
 
-          {['checked_in', 'waiting'].includes(appointment?.status) && (
+          {['booked', 'confirmed', 'on_the_way', 'nearby', 'not_arrived', 'checked_in', 'waiting', 'called'].includes(appointment?.status) && !appointment?.lateReported && !['missed', 'no_show', 'completed'].includes(appointment?.status) && (
             <button
-              onClick={() => handleAction(`/appointments/${appointment.id}/late-swap`)}
-              disabled={actionLoading || appointment?.swappedTurn}
+              onClick={() => handleAction(`/appointments/${activeApptId}/late`, { lateReason: 'Traffic / Running late' })}
+              disabled={actionLoading}
               className="px-3.5 py-2 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-xl shadow transition-all flex items-center gap-1.5 disabled:opacity-50"
             >
               <Clock className="w-3.5 h-3.5" />
-              <span>I'll Be Late (Swap Turn)</span>
+              <span>I'll Be Late</span>
             </button>
           )}
 
@@ -514,9 +520,9 @@ export const LiveQueueTracker = () => {
             <span>Find Shorter Wait</span>
           </button>
 
-          {['not_arrived', 'late'].includes(appointment?.status) && (
+          {(['missed', 'not_arrived', 'late'].includes(appointment?.status) || appointment?.isMissed) && (
             <button
-              onClick={() => handleAction(`/appointments/${appointment.id}/rejoin`)}
+              onClick={() => handleAction(`/appointments/${activeApptId}/rejoin`)}
               disabled={actionLoading}
               className="px-3.5 py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold rounded-xl shadow transition-all flex items-center gap-1.5 disabled:opacity-50"
             >
@@ -526,18 +532,18 @@ export const LiveQueueTracker = () => {
           )}
 
           {/* Early Slot Opt-In Controls */}
-          {appointment?.id && (
+          {activeApptId && (
             <div className="flex items-center gap-1.5 ml-auto">
               <span className="text-[11px] font-semibold text-slate-500">Early Slot:</span>
               <button
-                onClick={() => handleAction(`/queue/appointments/${appointment.id}/early-optin`, { earlyOptIn: true })}
+                onClick={() => handleAction(`/queue/appointments/${activeApptId}/early-optin`, { earlyOptIn: true })}
                 disabled={actionLoading}
                 className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg shadow transition-all disabled:opacity-50"
               >
                 Accept Early Slot
               </button>
               <button
-                onClick={() => handleAction(`/queue/appointments/${appointment.id}/early-optin`, { earlyOptIn: false })}
+                onClick={() => handleAction(`/queue/appointments/${activeApptId}/early-optin`, { earlyOptIn: false })}
                 disabled={actionLoading}
                 className="px-2.5 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold rounded-lg transition-all disabled:opacity-50"
               >

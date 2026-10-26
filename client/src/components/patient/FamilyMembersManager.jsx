@@ -251,7 +251,7 @@ export const FamilyMembersManager = () => {
               </div>
               <div>
                 <h3 className="font-extrabold text-base text-slate-900">Add Family Member / Dependent</h3>
-                <p className="text-xs text-slate-500">Auto-generates a unique National Health ID</p>
+                <p className="text-xs text-slate-500">Auto-generates a unique SmartCare AI Patient ID</p>
               </div>
             </div>
 

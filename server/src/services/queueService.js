@@ -1,12 +1,13 @@
 import { assertDbConnected } from '../config/firebase.js';
 import { clock } from '../utils/clock.js';
+import { getHospitalTodayStr, parseSlotTimeToDate } from '../utils/timezoneDate.js';
 import { compareForCalling, getReadyCandidates } from '../domain/priority.js';
+import { notify } from './notify.js';
 import {
   calculateTimeFactor,
   calculateRemainingCurrentTime,
   calculateWaitForPatient,
   getExpectedDuration,
-  calculateLeaveAt,
   selectReasonText
 } from '../domain/waitTime.js';
 
@@ -73,6 +74,9 @@ async function computeQueueSnapshot(doctorId, date, { db, now }) {
     : 0;
 
   // 2. Fetch all active appointments for doctor & date
+  const todayIST = getHospitalTodayStr(now);
+  const isPastDate = date < todayIST;
+
   const activeStatuses = [
     'booked', 'confirmed', 'on_the_way', 'nearby', 'checked_in',
     'called', 'in_consultation', 'not_arrived', 'late', 'rejoined'
@@ -84,9 +88,12 @@ async function computeQueueSnapshot(doctorId, date, { db, now }) {
     .where('date', '==', date)
     .get();
 
-  const allAppts = apptsSnap.docs
-    .map((d) => ({ id: d.id, ...d.data() }))
-    .filter((a) => activeStatuses.includes(a.status));
+  // If date is in the past, uncompleted appointments are not active in today's live queue
+  const allAppts = isPastDate
+    ? []
+    : apptsSnap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .filter((a) => activeStatuses.includes(a.status));
 
   const completedAppts = apptsSnap.docs
     .map((d) => d.data())
@@ -131,17 +138,21 @@ async function computeQueueSnapshot(doctorId, date, { db, now }) {
     });
   };
 
-  // 4. Identify current active consultation (in_consultation or called)
-  const currentConsultation = allAppts.find((a) => a.status === 'in_consultation') ||
-    allAppts.find((a) => a.status === 'called') || null;
+  // 4. Identify current active consultation in room vs called (waiting for arrival)
+  const activeInRoom = allAppts.find((a) => a.status === 'in_consultation' || a.status === 'in_room');
+  const calledPatient = allAppts.find((a) => a.status === 'called' && !a.isHeldByDoctor);
 
-  const currentAppointmentId = currentConsultation ? currentConsultation.id : null;
+  // An absent patient whose turn is held or who is merely waiting for arrival without having entered the room
+  // must NOT count as a consultation currently in progress (PRD Section 3).
+  const activeConsultationForWait = activeInRoom || null;
+  const currentConsultation = activeInRoom || calledPatient || null;
+  const currentAppointmentId = activeInRoom ? activeInRoom.id : (calledPatient ? calledPatient.id : null);
 
-  // Enrich current consultation with expectedDurationMin before computing remaining time
-  if (currentConsultation && !currentConsultation.expectedDurationMin) {
-    currentConsultation.expectedDurationMin = getExpectedForAppt(currentConsultation);
+  // Enrich active in-room consultation with expectedDurationMin before computing remaining time
+  if (activeConsultationForWait && !activeConsultationForWait.expectedDurationMin) {
+    activeConsultationForWait.expectedDurationMin = getExpectedForAppt(activeConsultationForWait);
   }
-  const remainingCurrentMin = calculateRemainingCurrentTime(currentConsultation, now);
+  const remainingCurrentMin = activeConsultationForWait ? calculateRemainingCurrentTime(activeConsultationForWait, now) : 0;
 
   // 5. Separate ready candidates (checked_in & rejoined) vs others,
   //    enriched with per-visitType expectedDurationMin
@@ -165,12 +176,18 @@ async function computeQueueSnapshot(doctorId, date, { db, now }) {
     const aheadCount = idx;
     const aheadList = readyCandidates.slice(0, idx);
 
-    // Candidates booked earlier or same slot window but not yet checked in, enriched
+    // Candidates booked earlier or same slot window but not yet checked in, enriched.
+    // Exclude slots whose grace period has already expired without check-in.
     const notYetHereList = allAppts
-      .filter((a) =>
-        ['booked', 'confirmed', 'on_the_way', 'nearby', 'not_arrived'].includes(a.status) &&
-        a.bookedStartAt <= candidate.bookedStartAt
-      )
+      .filter((a) => {
+        if (!['booked', 'confirmed', 'on_the_way', 'nearby', 'not_arrived'].includes(a.status)) return false;
+        if (a.bookedStartAt > candidate.bookedStartAt) return false;
+        const apptDateObj = parseSlotTimeToDate(date, a.bookedStartAt || a.timeSlot);
+        if (apptDateObj && now.getTime() > apptDateObj.getTime() + 5 * 60 * 1000) {
+          return false;
+        }
+        return true;
+      })
       .map(a => ({ ...a, expectedDurationMin: getExpectedForAppt(a) }));
 
     // Per-patient stats for CoV-based range width
@@ -186,14 +203,6 @@ async function computeQueueSnapshot(doctorId, date, { db, now }) {
       stats: candidateStats,
       now
     });
-
-    let leaveAt = candidate.leaveHome?.leaveAt || null;
-    if (candidate.leaveHome?.travelMinutes) {
-      leaveAt = calculateLeaveAt({
-        predictedCallAt: waitResult.predictedCallAt,
-        travelMinutes: candidate.leaveHome.travelMinutes
-      });
-    }
 
     const newLive = {
       position,
@@ -221,25 +230,24 @@ async function computeQueueSnapshot(doctorId, date, { db, now }) {
     if (hasChanged) {
       const apptRef = db.collection('appointments').doc(candidate.id);
       const updateObj = { live: newLive, updatedAt: now };
-      if (leaveAt) {
-        updateObj['leaveHome.leaveAt'] = leaveAt;
-      }
 
       let pushItem = null;
-      if (
-        Math.abs((oldLive.waitMinLow || 0) - newLive.waitMinLow) >= 5 ||
-        (position <= 3 && (oldLive.position || 99) > 3) ||
-        position === 1
-      ) {
+      const isWaitChange = Math.abs((oldLive.waitMinLow || 0) - newLive.waitMinLow) >= 5;
+      const isUpcoming = (position <= 3 && (oldLive.position || 99) > 3) || (position === 1 && oldLive.position !== 1);
+      if (isWaitChange || isUpcoming) {
         pushItem = {
           patientHealthId: candidate.patientHealthId,
+          patientName: candidate.patientName || 'Patient',
           ownerUid: candidate.ownerUid,
+          patientUid: candidate.patientUid || candidate.patientId || candidate.ownerUid,
           appointmentId: candidate.id,
-          tokenLabel: candidate.tokenLabel,
+          tokenLabel: candidate.tokenLabel || String(candidate.tokenNumber || ''),
           position,
           waitMinLow: newLive.waitMinLow,
           waitMinHigh: newLive.waitMinHigh,
-          reasonText
+          reasonText,
+          isUpcomingTurn: isUpcoming,
+          isWaitTimeChange: isWaitChange
         };
       }
 
@@ -466,6 +474,53 @@ export async function recalculateQueue(doctorId, date) {
           }).catch(err => console.warn('Background summary pre-generation notice:', err.message));
         })
         .catch(() => {});
+    }
+  }
+
+  // PRD F6 & F8: Dispatch notifications for upcoming turns and wait-time changes
+  for (const push of pushes) {
+    const receiverUid = push.patientUid || push.ownerUid;
+    if (!receiverUid) continue;
+
+    const patientName = push.patientName || 'Patient';
+    if (push.isUpcomingTurn) {
+      try {
+        await notify({
+          uids: [receiverUid],
+          title: `${patientName}: Your turn is coming up soon!`,
+          body: `Token ${push.tokenLabel}: You are #${push.position} in line. Estimated wait: ${push.waitMinLow}-${push.waitMinHigh} mins. Please head near the clinic room.`,
+          privacyBody: `${patientName}: Your turn is coming up soon`,
+          type: 'QUEUE_UPCOMING_TURN',
+          urgent: true,
+          groupKey: `upcoming_${push.appointmentId}_pos${push.position}`,
+          data: {
+            appointmentId: push.appointmentId,
+            position: String(push.position),
+            waitMinLow: String(push.waitMinLow),
+            waitMinHigh: String(push.waitMinHigh)
+          }
+        });
+      } catch (notifErr) {
+        console.warn('Upcoming turn notify warning:', notifErr.message);
+      }
+    } else if (push.isWaitTimeChange) {
+      try {
+        await notify({
+          uids: [receiverUid],
+          title: `${patientName}: Queue wait-time update`,
+          body: `Token ${push.tokenLabel}: Estimated wait is now ${push.waitMinLow}-${push.waitMinHigh} mins${push.reasonText ? ` (${push.reasonText})` : ''}.`,
+          privacyBody: `${patientName}: Queue wait-time update`,
+          type: 'QUEUE_WAIT_TIME_CHANGED',
+          groupKey: `wait_${push.appointmentId}`,
+          data: {
+            appointmentId: push.appointmentId,
+            waitMinLow: String(push.waitMinLow),
+            waitMinHigh: String(push.waitMinHigh)
+          }
+        });
+      } catch (notifErr) {
+        console.warn('Wait time change notify warning:', notifErr.message);
+      }
     }
   }
 

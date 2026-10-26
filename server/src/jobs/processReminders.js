@@ -124,6 +124,30 @@ export async function processRemindersJob({ nowOverride, batchSize = 100, maxBat
       for (const [groupKey, items] of claimedGroups.entries()) {
         try {
           const first = items[0].data;
+
+          // PRD Section 3.5: Never send reminders for cancelled, completed, or no-show appointments
+          if (first.appointmentId) {
+            try {
+              const aptSnap = await db.collection('appointments').doc(first.appointmentId).get();
+              if (aptSnap.exists) {
+                const aptData = aptSnap.data();
+                const aptStatus = (aptData.status || '').toLowerCase();
+                if (['cancelled', 'completed', 'no_show'].includes(aptStatus)) {
+                  for (const item of items) {
+                    await item.doc.ref.update({
+                      status: 'cancelled',
+                      cancellationReason: `Appointment in status ${aptStatus}`,
+                      updatedAt: now.toISOString()
+                    });
+                  }
+                  continue;
+                }
+              }
+            } catch (aptCheckErr) {
+              console.warn('Appointment status check warning in reminder processor:', aptCheckErr.message);
+            }
+          }
+
           const receiverUids = first.receiverUids || [first.patientUid].filter(Boolean);
           const patientName = first.patientName || 'Patient';
 

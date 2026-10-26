@@ -19,7 +19,8 @@ import {
   nearby,
   rejoinQueue,
   lateSwap,
-  recordNoShowReason
+  recordNoShowReason,
+  reportLate
 } from '../controllers/appointmentLifecycleController.js';
 import { requireAuth } from '../middleware/authMiddleware.js';
 import { requireRole } from '../middleware/roleMiddleware.js';
@@ -42,6 +43,8 @@ router.post('/:id/restore', requireAuth, requireRole('reception', 'nurse', 'doct
 router.post('/:id/reschedule', requireAuth, rescheduleAppointment);
 router.post('/:id/on-the-way', requireAuth, onTheWay);
 router.post('/:id/nearby', requireAuth, nearby);
+router.post('/:id/late', requireAuth, reportLate);
+router.post('/:id/ill-be-late', requireAuth, reportLate);
 router.post('/:id/rejoin', requireAuth, rejoinQueue);
 router.post('/:id/late-swap', requireAuth, lateSwap);
 router.post('/:id/no-show-reason', requireAuth, recordNoShowReason);

@@ -16,6 +16,12 @@ export const clock = {
   setMockTime(dateOrIsoOrMs) {
     mockTime = new Date(dateOrIsoOrMs).getTime();
   },
+  set(dateOrIsoOrMs) {
+    this.setMockTime(dateOrIsoOrMs);
+  },
+  advance(ms) {
+    mockTime = this.now().getTime() + ms;
+  },
   reset() {
     mockTime = null;
   }

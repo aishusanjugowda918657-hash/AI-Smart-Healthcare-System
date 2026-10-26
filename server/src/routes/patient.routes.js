@@ -16,7 +16,8 @@ import {
   getHealthIdCard,
   refreshHealthIdQr,
   staffPatientLookup,
-  getPatientActivityHistory
+  getPatientActivityHistory,
+  getPublicInstantRecords
 } from '../controllers/patientController.js';
 import { requireAuth } from '../middleware/authMiddleware.js';
 import { requireRole } from '../middleware/roleMiddleware.js';
@@ -38,6 +39,10 @@ import { getPrescriptionsByHealthId } from '../controllers/prescriptionControlle
 import { getAdherenceMetrics } from '../controllers/reminderController.js';
 
 const router = express.Router();
+
+// Public Instant E-Records (Unauthenticated QR code scan)
+router.get('/public-records/:healthId', getPublicInstantRecords);
+router.get('/instant-records/:healthId', getPublicInstantRecords);
 
 router.post('/profile', requireAuth, createOrUpdatePatientProfile);
 router.get('/me', requireAuth, getMyPatientProfile);

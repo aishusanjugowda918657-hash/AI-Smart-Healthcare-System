@@ -49,17 +49,30 @@ export const requireAuth = async (req, res, next) => {
     const db = getDb();
     
     if (db) {
-      const userDoc = await db.collection('users').doc(decodedToken.uid).get();
-      if (userDoc.exists) {
-        const userData = userDoc.data();
-        role = userData.role || role;
-        doctorId = userData.doctorId || doctorId;
+      try {
+        const userDoc = await db.collection('users').doc(decodedToken.uid).get();
+        if (userDoc.exists) {
+          const userData = userDoc.data();
+          role = userData.role || role;
+          doctorId = userData.doctorId || doctorId;
+        }
+      } catch (dbErr) {
+        if (dbErr.code === 8 || dbErr.message?.includes('RESOURCE_EXHAUSTED') || dbErr.message?.includes('Quota exceeded')) {
+          console.warn('⚠️ Firestore quota exceeded in authMiddleware, falling back to token claims/email');
+          if (decodedToken.email?.includes('admin')) role = 'admin';
+          else if (decodedToken.email?.includes('doctor')) role = 'doctor';
+          else if (decodedToken.email?.includes('reception')) role = 'reception';
+          else if (decodedToken.email?.includes('nurse')) role = 'nurse';
+          else if (decodedToken.email?.includes('pharmacy')) role = 'pharmacy';
+        } else {
+          throw dbErr;
+        }
       }
     }
 
     const ALLOWED_ROLES = ['patient', 'doctor', 'nurse', 'reception', 'pharmacy', 'admin'];
     if (!role || !ALLOWED_ROLES.includes(role)) {
-      return res.status(401).json(formatErrorResponse('UNAUTHORIZED_ROLE', 'Missing or unknown role in authentication token. Please log in again.'));
+      role = 'patient'; // Safe default
     }
 
     req.user = {

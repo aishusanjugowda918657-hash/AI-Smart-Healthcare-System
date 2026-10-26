@@ -21,14 +21,17 @@ export const ProtectedRoute = ({ allowedRoles = [] }) => {
     return <Navigate to="/login" replace />;
   }
 
+  const normalizedRole = String(userRole || '').trim().toLowerCase();
+  const roleKey = normalizedRole === 'receptionist' ? 'reception' : normalizedRole;
+
   // Doctor must change password before accessing any protected workspace features
-  if (userRole === 'doctor' && mustChangePassword && location.pathname !== '/change-password') {
+  if (roleKey === 'doctor' && mustChangePassword && location.pathname !== '/change-password') {
     return <Navigate to="/change-password" replace />;
   }
 
   // Wrong role redirection
-  if (allowedRoles.length > 0 && !allowedRoles.includes(userRole)) {
-    const homeRoute = ROLE_ROUTES[userRole] || '/login';
+  if (allowedRoles.length > 0 && !allowedRoles.includes(roleKey)) {
+    const homeRoute = ROLE_ROUTES[roleKey] || '/login';
     return <Navigate to={homeRoute} replace />;
   }
 

@@ -22,6 +22,15 @@ export function mapAuthError(err) {
   const serverCode = err.response?.data?.error?.code || err.response?.data?.code;
   const serverMsg = err.response?.data?.error?.message || err.response?.data?.message;
 
+  if (
+    serverCode === 'RESOURCE_EXHAUSTED' ||
+    serverCode === 8 ||
+    (typeof serverMsg === 'string' && (serverMsg.includes('RESOURCE_EXHAUSTED') || serverMsg.includes('Quota exceeded'))) ||
+    (typeof err.message === 'string' && (err.message.includes('RESOURCE_EXHAUSTED') || err.message.includes('Quota exceeded')))
+  ) {
+    return 'Cloud database daily quota reached. For unlimited concurrent testing, run in local emulator mode (npm run dev:emulator).';
+  }
+
   if (serverCode === 'ACCOUNT_INCOMPLETE') {
     return 'This account was not finished. Please sign in to complete it.';
   }

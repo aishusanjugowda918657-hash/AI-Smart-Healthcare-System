@@ -135,7 +135,14 @@ export function useNotifications() {
 
     try {
       const messaging = getMessaging(app);
-      const token = await getToken(messaging, { vapidKey: VAPID_KEY });
+      let swRegistration = undefined;
+      if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+        swRegistration = await navigator.serviceWorker.ready;
+      }
+      const token = await getToken(messaging, {
+        vapidKey: VAPID_KEY,
+        serviceWorkerRegistration: swRegistration,
+      });
       if (!token) return;
 
       // Save token to server
@@ -148,11 +155,20 @@ export function useNotifications() {
 
       // Register foreground message listener
       onMessage(messaging, (payload) => {
-        const title = payload.notification?.title || 'Notification';
-        const body = payload.notification?.body || '';
+        const title = payload.notification?.title || payload.data?.title || 'Notification';
+        const body = payload.notification?.body || payload.data?.body || '';
         showToast(title, body);
         // Refresh bell count
         fetchNotifications();
+
+        // Record observable display status
+        const notifId = payload.data?.notifId || payload.data?.id;
+        if (notifId) {
+          fetch(`${API_BASE}/notifications/${notifId}/displayed`, {
+            method: 'PATCH',
+            headers,
+          }).catch(() => {});
+        }
       });
     } catch (err) {
       console.warn('FCM token registration failed:', err.message);

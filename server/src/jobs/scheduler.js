@@ -21,6 +21,7 @@ import { clock } from '../utils/clock.js';
 import { notify } from '../services/notify.js';
 import { recalculateQueue } from '../services/queueService.js';
 import { getGlobalSettings } from '../services/settingsService.js';
+import { getHospitalTodayStr, parseSlotTimeToDate } from '../utils/timezoneDate.js';
 import { offerFreedSlot, expireWaitlistOffersJob } from '../services/waitlistService.js';
 import { processRemindersJob } from './processReminders.js';
 import { followupSweepJob } from './followupSweep.js';
@@ -165,7 +166,7 @@ export async function noShowSweepJob({ nowOverride, gracePeriodMinutes = 5 } = {
     const db = assertDbConnected();
     const now = nowOverride ? new Date(nowOverride) : clock.now();
     const nowMs = now.getTime();
-    const todayStr = now.toISOString().split('T')[0];
+    const todayStr = getHospitalTodayStr(now);
     const settings = await getGlobalSettings();
 
     const checkinDeadlineMinBefore = settings.checkinDeadlineMinBefore || 10;
@@ -174,7 +175,7 @@ export async function noShowSweepJob({ nowOverride, gracePeriodMinutes = 5 } = {
     const aptSnap = await db
       .collection('appointments')
       .where('date', '==', todayStr)
-      .where('status', 'in', ['booked', 'confirmed', 'on_the_way', 'nearby', 'not_arrived', 'called', 'late', 'rejoined'])
+      .where('status', 'in', ['booked', 'confirmed', 'on_the_way', 'nearby', 'not_arrived', 'called', 'late', 'rejoined', 'waiting'])
       .get();
 
     let noShowCount = 0;
@@ -186,19 +187,27 @@ export async function noShowSweepJob({ nowOverride, gracePeriodMinutes = 5 } = {
       const pastSnap = await db
         .collection('appointments')
         .where('date', '<', todayStr)
-        .limit(50)
+        .limit(100)
         .get();
 
       for (const doc of pastSnap.docs) {
         const apt = doc.data();
         const statusLower = (apt.status || '').toLowerCase();
-        if (['booked', 'confirmed', 'on_the_way', 'nearby', 'not_arrived', 'called', 'late', 'rejoined'].includes(statusLower)) {
+        if (['booked', 'confirmed', 'on_the_way', 'nearby', 'not_arrived', 'called', 'late', 'rejoined', 'waiting'].includes(statusLower)) {
           batch.update(doc.ref, {
             status: 'no_show',
             noShowAt: now,
             updatedAt: now
           });
           noShowCount++;
+
+          if (apt.doctorId && apt.date) {
+            affectedDocDates.add(`${apt.doctorId}_${apt.date}`);
+          }
+
+          const targetApptId = apt.appointmentId || apt.id || doc.id;
+          const tokRef = db.collection('tokens').doc(`tok-${targetApptId}`);
+          batch.set(tokRef, { status: 'no_show', noShowAt: now, updatedAt: now }, { merge: true });
 
           const isSerious = apt.importance === 'serious' || apt.isSeriousFollowup || (apt.clinicalLevel || 1) >= 2;
           if (isSerious) {
@@ -223,12 +232,11 @@ export async function noShowSweepJob({ nowOverride, gracePeriodMinutes = 5 } = {
 
     for (const doc of aptSnap.docs) {
       const apt = doc.data();
-      if (!apt.timeSlot) continue;
+      const slotTimeStr = apt.timeSlot || apt.bookedStartAt;
+      if (!slotTimeStr) continue;
 
-      const [year, month, day] = (apt.date || todayStr).split('-').map(Number);
-      const [hours, mins] = apt.timeSlot.split(':').map(Number);
-      const apptTime = new Date(year, month - 1, day, hours, mins);
-      const apptTimeMs = apptTime.getTime();
+      const apptDateObj = parseSlotTimeToDate(apt.date || todayStr, slotTimeStr);
+      const apptTimeMs = apptDateObj ? apptDateObj.getTime() : nowMs;
       const checkinDeadlineMs = apptTimeMs - checkinDeadlineMinBefore * 60 * 1000;
       const graceEndMs = apt.graceEndAt ? new Date(apt.graceEndAt).getTime() : (apptTimeMs + graceMin * 60 * 1000);
       const patientName = apt.patientName || apt.patientProfile?.fullName || 'Patient';
@@ -248,7 +256,7 @@ export async function noShowSweepJob({ nowOverride, gracePeriodMinutes = 5 } = {
             await notify({
               uids: [receiverUid],
               title: `${patientName}: Please check in`,
-              body: `Please check in. Your turn is at ${apt.timeSlot}.`,
+              body: `Please check in. Your turn is at ${apt.timeSlot || apt.bookedStartAt}.`,
               privacyBody: `${patientName}: Please check in for your appointment`,
               type: 'CHECKIN_REMINDER',
               data: { appointmentId: doc.id }
@@ -260,14 +268,36 @@ export async function noShowSweepJob({ nowOverride, gracePeriodMinutes = 5 } = {
         }
       }
 
-      // B5: Grace period over without check-in or call -> mark status LATE (Missed turn)
-      if (nowMs > graceEndMs && ['not_arrived', 'called'].includes(apt.status) && !apt.missedTurnHandled) {
+      // B5: Grace period over without check-in or arrival -> transition to Missed exactly once
+      const calledGraceEndMs = apt.graceEndAt
+        ? new Date(apt.graceEndAt).getTime()
+        : (apt.calledAt ? new Date(apt.calledAt).getTime() + graceMin * 60 * 1000 : null);
+
+      const isCalledGraceExpired = apt.status === 'called' && calledGraceEndMs && nowMs > calledGraceEndMs;
+      const isExplicitGraceExpired = ['not_arrived'].includes(apt.status) && apt.graceEndAt && nowMs > new Date(apt.graceEndAt).getTime();
+
+      const isEligibleForMissed = isCalledGraceExpired
+        ? (apt.status !== 'in_consultation' && apt.status !== 'completed')
+        : (isExplicitGraceExpired && !apt.checkedInAt);
+
+      if (isEligibleForMissed && !apt.missedTurnHandled) {
         batch.update(doc.ref, {
-          status: 'late',
-          lateAt: now,
+          status: 'missed',
+          displayStatus: 'Missed',
+          isMissed: true,
+          missedAt: now,
+          lateAt: now, // compatibility with legacy late checks
           missedTurnHandled: true,
+          statusHistory: [
+            ...(apt.statusHistory || []),
+            { status: 'missed', at: now.toISOString(), reason: 'Grace period expired without arrival' }
+          ],
           updatedAt: now
         });
+
+        const targetApptId = apt.appointmentId || apt.id || doc.id;
+        const tokRef = db.collection('tokens').doc(`tok-${targetApptId}`);
+        batch.set(tokRef, { status: 'missed', missedAt: now, updatedAt: now }, { merge: true });
 
         if (apt.doctorId && apt.date) {
           affectedDocDates.add(`${apt.doctorId}_${apt.date}`);
@@ -281,7 +311,7 @@ export async function noShowSweepJob({ nowOverride, gracePeriodMinutes = 5 } = {
               body: `You missed your turn. Tap Rejoin Queue if you are still coming.`,
               privacyBody: `${patientName}: Turn missed`,
               type: 'MISSED_TURN',
-              data: { appointmentId: doc.id }
+              data: { appointmentId: doc.id, canRejoin: true }
             });
           } catch (e) {
             console.warn('Missed turn notify error:', e.message);
@@ -291,13 +321,17 @@ export async function noShowSweepJob({ nowOverride, gracePeriodMinutes = 5 } = {
 
       // B8: Silent no-show: 60 minutes passed after booked time
       const sixtyMinPastMs = apptTimeMs + 60 * 60 * 1000;
-      if (nowMs > sixtyMinPastMs && ['booked', 'confirmed', 'not_arrived', 'late'].includes(apt.status)) {
+      if (nowMs > sixtyMinPastMs && ['booked', 'confirmed', 'not_arrived', 'late', 'missed', 'waiting'].includes(apt.status)) {
         batch.update(doc.ref, {
           status: 'no_show',
           noShowAt: now,
           updatedAt: now
         });
         noShowCount++;
+
+        const targetApptId = apt.appointmentId || apt.id || doc.id;
+        const tokRef = db.collection('tokens').doc(`tok-${targetApptId}`);
+        batch.set(tokRef, { status: 'no_show', noShowAt: now, updatedAt: now }, { merge: true });
 
         if (apt.doctorId && apt.date) {
           affectedDocDates.add(`${apt.doctorId}_${apt.date}`);
@@ -310,8 +344,8 @@ export async function noShowSweepJob({ nowOverride, gracePeriodMinutes = 5 } = {
           const slotSnap = await slotRef.get();
           if (slotSnap.exists) {
             const sData = slotSnap.data();
-            const [sH, sM] = (sData.startAt || apt.timeSlot || '10:00').split(':').map(Number);
-            const slotStartMs = new Date(year, month - 1, day, sH, sM).getTime();
+            const slotStartObj = parseSlotTimeToDate(apt.date || todayStr, sData.startAt || slotTimeStr);
+            const slotStartMs = slotStartObj ? slotStartObj.getTime() : 0;
 
             if (slotStartMs > nowMs) {
               batch.update(slotRef, {
@@ -500,111 +534,127 @@ export async function appointmentRemindersJob({ nowOverride } = {}) {
 
     for (const doc of allDocs) {
       const apt = doc.data();
-      if (!apt.date || !apt.timeSlot) continue;
+      const slotTime = apt.timeSlot || apt.bookedStartAt;
+      if (!apt.date || !slotTime) continue;
 
-      const [year, month, day] = apt.date.split('-').map(Number);
-      const [hours, mins] = apt.timeSlot.split(':').map(Number);
-      const apptTime = new Date(Date.UTC(year, month - 1, day, hours, mins));
+      // Hospital timezone Asia/Kolkata date & time parsing
+      const apptTime = parseSlotTimeToDate(apt.date, slotTime);
+      if (!apptTime) continue;
       const apptMs = apptTime.getTime();
 
       const diffMs = apptMs - nowMs;
       const diffHours = diffMs / (1000 * 60 * 60);
       const diffMins = diffMs / (1000 * 60);
 
+      // Do not schedule reminders for past appointments
+      if (diffMs <= 0) continue;
+
       const receiverUids = [apt.ownerUid || apt.patientUid || apt.patientId].filter(Boolean);
       const patientName = apt.patientName || 'Patient';
 
       // 24h Reminder (between 23h and 25h before) - Rule B1: Confirm, Reschedule
-      if (diffHours >= 23 && diffHours <= 25 && !apt.reminder24hSent) {
-        const remId = `rem_24h_${doc.id}`;
-        batch.set(
-          db.collection('reminders').doc(remId),
-          {
-            id: remId,
-            appointmentId: doc.id,
-            type: 'appointment_24h',
-            healthId: apt.patientHealthId || null,
-            patientName,
-            receiverUids,
-            title: `${patientName}: Appointment Tomorrow`,
-            body: `Your consultation with ${apt.doctorName || 'Doctor'} is scheduled for tomorrow at ${apt.timeSlot}.`,
-            privacyBody: `${patientName}: Appointment reminder`,
-            actions: ['confirm', 'reschedule'],
-            status: 'pending',
-            dueAt: now,
-            attempts: 0,
-            createdAt: now,
-            updatedAt: now
-          },
-          { merge: true }
-        );
-        batch.update(doc.ref, { reminder24hSent: true, updatedAt: now });
-        remindersCreated++;
+      // Overdue policy: If between 12h and 26h before and unsent, send. If < 12h, expire 24h reminder to avoid confusing patient on the day of appointment.
+      if (!apt.reminder24hSent) {
+        if (diffHours >= 12 && diffHours <= 26) {
+          const remId = `rem_24h_${doc.id}`;
+          batch.set(
+            db.collection('reminders').doc(remId),
+            {
+              id: remId,
+              appointmentId: doc.id,
+              type: 'appointment_24h',
+              healthId: apt.patientHealthId || null,
+              patientName,
+              receiverUids,
+              title: `${patientName}: Appointment Tomorrow`,
+              body: `Your consultation with ${apt.doctorName || 'Doctor'} is scheduled for tomorrow at ${slotTime}.`,
+              privacyBody: `${patientName}: Appointment reminder`,
+              actions: ['confirm', 'reschedule'],
+              status: 'pending',
+              dueAt: now,
+              attempts: 0,
+              createdAt: now,
+              updatedAt: now
+            },
+            { merge: true }
+          );
+          batch.update(doc.ref, { reminder24hSent: true, updatedAt: now });
+          remindersCreated++;
+        } else if (diffHours < 12) {
+          // Explicit overdue policy: Window elapsed, mark as expired to prevent late send
+          batch.update(doc.ref, { reminder24hSent: true, reminder24hSkipped: 'overdue_expired', updatedAt: now });
+        }
       }
 
       // 2h Reminder (between 1.5h and 2.5h before) - Rule B1 & B11: Confirm, Cancel, Reschedule
-      if (diffHours >= 1.5 && diffHours <= 2.5 && !apt.reminder2hSent) {
-        const remId = `rem_2h_${doc.id}`;
+      // Overdue policy: If between 1h and 3h before and unsent, send. If < 1h, expire to let 30-min reminder handle it.
+      if (!apt.reminder2hSent) {
+        if (diffHours >= 1 && diffHours <= 3) {
+          const remId = `rem_2h_${doc.id}`;
 
-        // Rule B11: Repeat no-shows check (2+ no-shows in last 90 days)
-        let isRepeatNoShow = false;
-        if (apt.patientHealthId || apt.ownerUid) {
-          try {
-            const ninetyDaysAgo = new Date(nowMs - 90 * 24 * 60 * 60 * 1000);
-            const nsQuery = await db.collection('appointments')
-              .where('patientHealthId', '==', apt.patientHealthId || '')
-              .where('status', '==', 'no_show')
-              .get();
-            const recentNoShows = nsQuery.docs.filter(d => {
-              const dTime = d.data().noShowAt ? new Date(d.data().noShowAt).getTime() : 0;
-              return dTime >= ninetyDaysAgo.getTime();
-            });
-            if (recentNoShows.length >= 2) isRepeatNoShow = true;
-          } catch (nsErr) {
-            console.warn('Repeat no show check warning:', nsErr.message);
+          // Rule B11: Repeat no-shows check (2+ no-shows in last 90 days)
+          let isRepeatNoShow = false;
+          if (apt.patientHealthId || apt.ownerUid) {
+            try {
+              const ninetyDaysAgo = new Date(nowMs - 90 * 24 * 60 * 60 * 1000);
+              const nsQuery = await db.collection('appointments')
+                .where('patientHealthId', '==', apt.patientHealthId || '')
+                .where('status', '==', 'no_show')
+                .get();
+              const recentNoShows = nsQuery.docs.filter(d => {
+                const dTime = d.data().noShowAt ? new Date(d.data().noShowAt).getTime() : 0;
+                return dTime >= ninetyDaysAgo.getTime();
+              });
+              if (recentNoShows.length >= 2) isRepeatNoShow = true;
+            } catch (nsErr) {
+              console.warn('Repeat no show check warning:', nsErr.message);
+            }
           }
-        }
 
-        if (isRepeatNoShow && apt.status === 'booked') {
-          // Mark slot At Risk & offer to waitlist as backup
-          batch.update(doc.ref, { atRisk: true, repeatNoShowFlag: true });
-          const slotId = apt.slotId || (apt.slotIds ? apt.slotIds[0] : null);
-          if (slotId) {
-            const slotRef = db.collection('slots').doc(slotId);
-            batch.update(slotRef, { atRisk: true });
+          if (isRepeatNoShow && apt.status === 'booked') {
+            // Mark slot At Risk & offer to waitlist as backup
+            batch.update(doc.ref, { atRisk: true, repeatNoShowFlag: true });
+            const slotId = apt.slotId || (apt.slotIds ? apt.slotIds[0] : null);
+            if (slotId) {
+              const slotRef = db.collection('slots').doc(slotId);
+              batch.update(slotRef, { atRisk: true });
+            }
           }
-        }
 
-        batch.set(
-          db.collection('reminders').doc(remId),
-          {
-            id: remId,
-            appointmentId: doc.id,
-            type: 'appointment_2h',
-            healthId: apt.patientHealthId || null,
-            patientName,
-            receiverUids,
-            title: `${patientName}: Appointment in 2 Hours`,
-            body: isRepeatNoShow
-              ? `Your appointment with ${apt.doctorName || 'Doctor'} starts at ${apt.timeSlot}. Please confirm to keep your reserved slot.`
-              : `Your appointment with ${apt.doctorName || 'Doctor'} starts at ${apt.timeSlot}. Please confirm you are coming.`,
-            privacyBody: `${patientName}: Appointment in 2 hours`,
-            actions: ['confirm', 'cancel', 'reschedule'],
-            isRepeatNoShow,
-            status: 'pending',
-            dueAt: now,
-            attempts: 0,
-            createdAt: now,
-            updatedAt: now
-          },
-          { merge: true }
-        );
-        batch.update(doc.ref, { reminder2hSent: true, updatedAt: now });
-        remindersCreated++;
+          batch.set(
+            db.collection('reminders').doc(remId),
+            {
+              id: remId,
+              appointmentId: doc.id,
+              type: 'appointment_2h',
+              healthId: apt.patientHealthId || null,
+              patientName,
+              receiverUids,
+              title: `${patientName}: Appointment in 2 Hours`,
+              body: isRepeatNoShow
+                ? `Your appointment with ${apt.doctorName || 'Doctor'} starts at ${slotTime}. Please confirm to keep your reserved slot.`
+                : `Your appointment with ${apt.doctorName || 'Doctor'} starts at ${slotTime}. Please confirm you are coming.`,
+              privacyBody: `${patientName}: Appointment in 2 hours`,
+              actions: ['confirm', 'cancel', 'reschedule'],
+              isRepeatNoShow,
+              status: 'pending',
+              dueAt: now,
+              attempts: 0,
+              createdAt: now,
+              updatedAt: now
+            },
+            { merge: true }
+          );
+          batch.update(doc.ref, { reminder2hSent: true, updatedAt: now });
+          remindersCreated++;
+        } else if (diffHours < 1) {
+          // Explicit overdue policy: Window elapsed, mark as expired to let final reminder handle it
+          batch.update(doc.ref, { reminder2hSent: true, reminder2hSkipped: 'overdue_expired', updatedAt: now });
+        }
       }
 
       // Final reminder: 25–35 minutes before (unconfirmed only) - Rule B1
-      if (diffMins >= 25 && diffMins <= 35 && apt.status === 'booked' && !apt.reminderFinalSent) {
+      if (diffMins >= 20 && diffMins <= 40 && apt.status === 'booked' && !apt.reminderFinalSent) {
         const remId = `rem_final_${doc.id}`;
         batch.set(
           db.collection('reminders').doc(remId),

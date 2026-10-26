@@ -458,20 +458,17 @@ describe('Phase 41 — Patient Cross-Access & Authorization Boundaries Regressio
   });
 
   // =========================================================================
-  // 4. Queue Travel Time & Early Opt-in Settings Authorization
+  // 4. Queue Early Opt-in Settings Authorization & Leave-Home Removal
   // =========================================================================
   describe('4. Queue Settings Authorization Boundaries', () => {
-    it('Patient A CANNOT modify Patient B travel-time (403 FORBIDDEN & No Mutation)', async () => {
+    it('Leave-home endpoint is removed (404 NOT FOUND)', async () => {
       const res = await request(app)
         .post(`/api/queue/appointments/${apptBId}/leave-home`)
-        .set('x-demo-uid', patientAUid)
+        .set('x-demo-uid', patientBUid)
         .set('x-demo-role', 'patient')
         .send({ travelMinutes: 60 });
 
-      expect(res.statusCode).toBe(403);
-
-      const doc = await db.collection('appointments').doc(apptBId).get();
-      expect(doc.data().leaveHome?.travelMinutes).toBe(15);
+      expect(res.statusCode).toBe(404);
     });
 
     it('Patient A CANNOT modify Patient B early-optin (403 FORBIDDEN & No Mutation)', async () => {
@@ -487,16 +484,7 @@ describe('Phase 41 — Patient Cross-Access & Authorization Boundaries Regressio
       expect(doc.data().earlyOptIn).toBe(false);
     });
 
-    it('Patient B CAN update their own travel-time and early-optin (200 OK)', async () => {
-      const travelRes = await request(app)
-        .post(`/api/queue/appointments/${apptBId}/leave-home`)
-        .set('x-demo-uid', patientBUid)
-        .set('x-demo-role', 'patient')
-        .send({ travelMinutes: 35 });
-
-      expect(travelRes.statusCode).toBe(200);
-      expect(travelRes.body.success).toBe(true);
-
+    it('Patient B CAN update their own early-optin (200 OK)', async () => {
       const optinRes = await request(app)
         .post(`/api/queue/appointments/${apptBId}/early-optin`)
         .set('x-demo-uid', patientBUid)
@@ -507,22 +495,21 @@ describe('Phase 41 — Patient Cross-Access & Authorization Boundaries Regressio
       expect(optinRes.body.success).toBe(true);
 
       const doc = await db.collection('appointments').doc(apptBId).get();
-      expect(doc.data().leaveHome?.travelMinutes).toBe(35);
       expect(doc.data().earlyOptIn).toBe(true);
     });
 
-    it('Authorized Caregiver CAN update dependent appointment travel-time (200 OK)', async () => {
-      const travelRes = await request(app)
-        .post(`/api/queue/appointments/${apptDepId}/leave-home`)
+    it('Authorized Caregiver CAN update dependent appointment early-optin (200 OK)', async () => {
+      const optinRes = await request(app)
+        .post(`/api/queue/appointments/${apptDepId}/early-optin`)
         .set('x-demo-uid', caregiverUid)
         .set('x-demo-role', 'patient')
-        .send({ travelMinutes: 25 });
+        .send({ earlyOptIn: true });
 
-      expect(travelRes.statusCode).toBe(200);
-      expect(travelRes.body.success).toBe(true);
+      expect(optinRes.statusCode).toBe(200);
+      expect(optinRes.body.success).toBe(true);
 
       const doc = await db.collection('appointments').doc(apptDepId).get();
-      expect(doc.data().leaveHome?.travelMinutes).toBe(25);
+      expect(doc.data().earlyOptIn).toBe(true);
     });
   });
 

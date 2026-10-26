@@ -5,6 +5,7 @@ import { recalculateQueue, calculateQueueReadOnly } from '../services/queueServi
 import { getReadyCandidates } from '../domain/priority.js';
 import { writeAuditLog } from '../utils/audit.js';
 import { verifyRecordAccess } from './medicalController.js';
+import { notify } from '../services/notify.js';
 
 /**
  * Verifies if the authenticated doctor owns the target queue/doctor.
@@ -155,11 +156,15 @@ export const callNextPatient = async (req, res, next) => {
         throw new AppError('CONFLICT', 'The selected candidate was already called or modified by another process.', 409);
       }
 
+      const graceMin = 5;
+      const graceEndIso = new Date(now.getTime() + graceMin * 60 * 1000).toISOString();
+
       // Transactional updates
       tx.update(apptRef, {
         status: 'called',
         calledAt: nowIso,
-        consultStartAt: nowIso,
+        graceDurationMin: graceMin,
+        graceEndAt: graceEndIso,
         statusHistory: [
           ...(freshSnap.data().statusHistory || []),
           { status: 'called', at: nowIso, by: doctorUid }
@@ -170,8 +175,24 @@ export const callNextPatient = async (req, res, next) => {
       const queueRef = db.collection('counters').doc(`token_lock_${targetDoctorId}_${date}`);
       tx.set(queueRef, { lastCalledAt: nowIso, currentApptId: nextAppt.id }, { merge: true });
 
-      return { ...nextAppt, status: 'called', calledAt: nowIso };
+      return { ...nextAppt, status: 'called', calledAt: nowIso, graceDurationMin: graceMin, graceEndAt: graceEndIso };
     });
+
+    // Update token document in tokens collection
+    try {
+      const tokRef = db.collection('tokens').doc(`tok-${result.id}`);
+      const tSnap = await tokRef.get();
+      if (tSnap.exists) {
+        await tokRef.update({ status: 'called', calledAt: nowIso, graceEndAt: result.graceEndAt, updatedAt: now });
+      } else {
+        const qTokens = await db.collection('tokens').where('appointmentId', '==', result.id).limit(1).get();
+        if (!qTokens.empty) {
+          await qTokens.docs[0].ref.update({ status: 'called', calledAt: nowIso, graceEndAt: result.graceEndAt, updatedAt: now });
+        }
+      }
+    } catch (tokErr) {
+      console.warn('Call next patient token update warning:', tokErr.message);
+    }
 
     // Write audit log
     await writeAuditLog({
@@ -181,6 +202,28 @@ export const callNextPatient = async (req, res, next) => {
       targetType: 'appointment',
       targetId: result.id
     });
+
+    // Notify patient that their turn is called (PRD F6 & F8)
+    const receiverUid = result.ownerUid || result.patientUid || result.patientId;
+    const patientName = result.patientName || 'Patient';
+    if (receiverUid) {
+      try {
+        await notify({
+          uids: [receiverUid],
+          title: `${patientName}: It is your turn!`,
+          body: `Doctor is ready for you now in consultation room. Please proceed inside.`,
+          privacyBody: `${patientName}: Your turn has been called`,
+          type: 'TURN_CALLED',
+          urgent: true,
+          data: {
+            appointmentId: result.id,
+            tokenLabel: result.tokenLabel || String(result.tokenNumber)
+          }
+        });
+      } catch (notifErr) {
+        console.warn('Call next patient notify warning:', notifErr.message);
+      }
+    }
 
     // Recalculate queue after call
     await recalculateQueue(targetDoctorId, date);
@@ -207,11 +250,17 @@ export const callSpecificToken = async (req, res, next) => {
     const db = assertDbConnected();
     const now = clock.now();
     const nowIso = now.toISOString();
-    const apptRef = db.collection('appointments').doc(id);
-    const snap = await apptRef.get();
+    let apptRef = db.collection('appointments').doc(id);
+    let snap = await apptRef.get();
 
     if (!snap.exists) {
-      throw new AppError('NOT_FOUND', 'Appointment document not found.', 404);
+      const dSnap = await db.collection('appointments').where('displayId', '==', id).limit(1).get();
+      if (!dSnap.empty) {
+        apptRef = dSnap.docs[0].ref;
+        snap = dSnap.docs[0];
+      } else {
+        throw new AppError('NOT_FOUND', 'Appointment document not found.', 404);
+      }
     }
 
     const apt = snap.data();
@@ -221,10 +270,14 @@ export const callSpecificToken = async (req, res, next) => {
       throw new AppError('INVALID_TRANSITION', `Cannot call appointment in status ${apt.status}.`, 422);
     }
 
+    const graceMin = 5;
+    const graceEndIso = new Date(now.getTime() + graceMin * 60 * 1000).toISOString();
+
     await apptRef.update({
       status: 'called',
       calledAt: nowIso,
-      consultStartAt: nowIso,
+      graceDurationMin: graceMin,
+      graceEndAt: graceEndIso,
       outOfOrderReason: reason.trim(),
       statusHistory: [
         ...(apt.statusHistory || []),
@@ -233,6 +286,21 @@ export const callSpecificToken = async (req, res, next) => {
       updatedAt: now
     });
 
+    try {
+      const tokRef = db.collection('tokens').doc(`tok-${id}`);
+      const tSnap = await tokRef.get();
+      if (tSnap.exists) {
+        await tokRef.update({ status: 'called', calledAt: nowIso, graceEndAt: graceEndIso, updatedAt: now });
+      } else {
+        const qTokens = await db.collection('tokens').where('appointmentId', '==', id).limit(1).get();
+        if (!qTokens.empty) {
+          await qTokens.docs[0].ref.update({ status: 'called', calledAt: nowIso, graceEndAt: graceEndIso, updatedAt: now });
+        }
+      }
+    } catch (tokErr) {
+      console.warn('Call specific token update warning:', tokErr.message);
+    }
+
     await writeAuditLog({
       actorUid: req.user.uid,
       actorRole: req.user.role || 'doctor',
@@ -240,6 +308,28 @@ export const callSpecificToken = async (req, res, next) => {
       targetType: 'appointment',
       targetId: id
     });
+
+    // Notify patient that their turn is called (PRD F6 & F8)
+    const specificReceiverUid = apt.ownerUid || apt.patientUid || apt.patientId;
+    const specificPatientName = apt.patientName || 'Patient';
+    if (specificReceiverUid) {
+      try {
+        await notify({
+          uids: [specificReceiverUid],
+          title: `${specificPatientName}: It is your turn!`,
+          body: `Doctor is ready for you now in consultation room. Please proceed inside.`,
+          privacyBody: `${specificPatientName}: Your turn has been called`,
+          type: 'TURN_CALLED',
+          urgent: true,
+          data: {
+            appointmentId: id,
+            tokenLabel: apt.tokenLabel || String(apt.tokenNumber)
+          }
+        });
+      } catch (notifErr) {
+        console.warn('Call specific token notify warning:', notifErr.message);
+      }
+    }
 
     await recalculateQueue(apt.doctorId, apt.date);
 
@@ -257,11 +347,17 @@ export const holdToken = async (req, res, next) => {
   try {
     const { id } = req.params;
     const db = assertDbConnected();
-    const apptRef = db.collection('appointments').doc(id);
-    const snap = await apptRef.get();
+    let apptRef = db.collection('appointments').doc(id);
+    let snap = await apptRef.get();
 
     if (!snap.exists) {
-      throw new AppError('NOT_FOUND', 'Appointment not found.', 404);
+      const dSnap = await db.collection('appointments').where('displayId', '==', id).limit(1).get();
+      if (!dSnap.empty) {
+        apptRef = dSnap.docs[0].ref;
+        snap = dSnap.docs[0];
+      } else {
+        throw new AppError('NOT_FOUND', 'Appointment not found.', 404);
+      }
     }
 
     const apt = snap.data();
@@ -308,7 +404,15 @@ export const finishConsultation = async (req, res, next) => {
     if (targetApptId) {
       apptRef = db.collection('appointments').doc(targetApptId);
       const snap = await apptRef.get();
-      if (snap.exists) apt = { id: snap.id, ...snap.data() };
+      if (snap.exists) {
+        apt = { id: snap.id, ...snap.data() };
+      } else {
+        const dSnap = await db.collection('appointments').where('displayId', '==', targetApptId).limit(1).get();
+        if (!dSnap.empty) {
+          apptRef = dSnap.docs[0].ref;
+          apt = { id: dSnap.docs[0].id, ...dSnap.docs[0].data() };
+        }
+      }
     }
 
     if (!apt) {
@@ -650,54 +754,6 @@ export const markEmergency = async (req, res, next) => {
 };
 
 /**
- * POST /api/appointments/:id/leave-home (PRD F7)
- */
-export const setLeaveHomeParams = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const { travelMinutes = 0 } = req.body;
-    const db = assertDbConnected();
-    const apptRef = db.collection('appointments').doc(id);
-    const snap = await apptRef.get();
-
-    if (!snap.exists) {
-      throw new AppError('NOT_FOUND', 'Appointment not found.', 404);
-    }
-
-    const apt = snap.data();
-    const uid = req.user?.uid;
-    let isOwner =
-      (apt.patientUid && apt.patientUid === uid) ||
-      (apt.ownerUid && apt.ownerUid === uid) ||
-      (apt.bookedByUid && apt.bookedByUid === uid) ||
-      (apt.bookedBy && apt.bookedBy === uid) ||
-      (apt.patientId && apt.patientId === uid);
-
-    if (req.user?.role === 'patient' && !isOwner && (apt.patientHealthId || apt.healthId)) {
-      const targetHealthId = apt.patientHealthId || apt.healthId;
-      const access = await verifyRecordAccess({ db, uid, role: 'patient', patientHealthId: targetHealthId }).catch(() => ({ authorized: false }));
-      if (access?.authorized) isOwner = true;
-    }
-
-    if (req.user?.role === 'patient' && !isOwner) {
-      throw new AppError('FORBIDDEN', 'Access forbidden: You can only modify your own appointment.', 403);
-    }
-    const travelMin = parseInt(travelMinutes, 10);
-
-    await apptRef.update({
-      'leaveHome.travelMinutes': travelMin,
-      updatedAt: clock.now()
-    });
-
-    await recalculateQueue(apt.doctorId, apt.date);
-
-    res.status(200).json(formatSuccessResponse({ id, travelMinutes: travelMin }));
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
  * POST /api/appointments/:id/early-optin (PRD F7)
  */
 export const toggleEarlyOptIn = async (req, res, next) => {
@@ -832,4 +888,219 @@ export const getDoctorWaitPrediction = async (req, res, next) => {
     next(error);
   }
 };
+
+/**
+ * POST /api/queue/start-consultation
+ * POST /api/queue/start/:id
+ * Doctor records patient has arrived in the consultation room.
+ * Transitions status to in_consultation, records consultStartAt.
+ */
+export const startConsultation = async (req, res, next) => {
+  try {
+    const { appointmentId, id: paramId } = req.body;
+    const targetId = appointmentId || paramId || req.params.id;
+    if (!targetId) {
+      throw new AppError('VALIDATION_ERROR', 'Appointment ID is required.', 400);
+    }
+
+    const db = assertDbConnected();
+    const now = clock.now();
+    const nowIso = now.toISOString();
+
+    const apptRef = db.collection('appointments').doc(targetId);
+    const snap = await apptRef.get();
+    if (!snap.exists) {
+      throw new AppError('NOT_FOUND', 'Appointment not found.', 404);
+    }
+
+    const apt = snap.data();
+    await assertDoctorOwnership(req, apt.doctorId);
+
+    if (!['called', 'checked_in', 'rejoined', 'booked', 'confirmed'].includes(apt.status)) {
+      throw new AppError('INVALID_TRANSITION', `Cannot start consultation for appointment in status ${apt.status}.`, 422);
+    }
+
+    await apptRef.update({
+      status: 'in_consultation',
+      consultStartAt: nowIso,
+      statusHistory: [
+        ...(apt.statusHistory || []),
+        { status: 'in_consultation', at: nowIso, by: req.user.uid }
+      ],
+      updatedAt: now
+    });
+
+    // Update token
+    try {
+      const tokRef = db.collection('tokens').doc(`tok-${targetId}`);
+      const tSnap = await tokRef.get();
+      if (tSnap.exists) {
+        await tokRef.update({ status: 'in_consultation', updatedAt: now });
+      } else {
+        const qTokens = await db.collection('tokens').where('appointmentId', '==', targetId).limit(1).get();
+        if (!qTokens.empty) {
+          await qTokens.docs[0].ref.update({ status: 'in_consultation', updatedAt: now });
+        }
+      }
+    } catch (e) {
+      console.warn('Token update on start consultation error:', e.message);
+    }
+
+    await writeAuditLog({
+      actorUid: req.user.uid,
+      actorRole: req.user.role || 'doctor',
+      action: 'CONSULTATION_STARTED',
+      targetType: 'appointment',
+      targetId
+    });
+
+    await recalculateQueue(apt.doctorId, apt.date);
+
+    res.status(200).json(formatSuccessResponse({ id: targetId, status: 'in_consultation', consultStartAt: nowIso }, 'Consultation started.'));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * POST /api/queue/doctor/:doctorId/end-session
+ * POST /api/queue/end-session
+ * Marks doctor session completed for today, sweeps any remaining missed/called/waiting appointments
+ * to final no_show without releasing booked slot history, and updates queue status.
+ */
+export const endDoctorSession = async (req, res, next) => {
+  try {
+    const { doctorId, date: requestedDate } = req.body;
+    const db = assertDbConnected();
+    const doctorUid = req.user.uid;
+    const now = clock.now();
+    const nowIso = now.toISOString();
+
+    let targetDoctorId = doctorId || req.params.doctorId;
+    if (!targetDoctorId) {
+      const docSnap = await db.collection('doctors').doc(doctorUid).get();
+      targetDoctorId = docSnap.exists ? docSnap.data().doctorId : 'DOC-001';
+    }
+
+    await assertDoctorOwnership(req, targetDoctorId);
+
+    const date = requestedDate || nowIso.split('T')[0];
+
+    // Mark the queue session as ended
+    const queueDocRef = db.collection('queues').doc(`${targetDoctorId}_${date}`);
+    await queueDocRef.set({
+      doctorId: targetDoctorId,
+      date,
+      status: 'completed',
+      sessionEnded: true,
+      sessionEndedAt: nowIso,
+      updatedAt: now
+    }, { merge: true });
+
+    // Sweep all remaining unfinished appointments for this doctor & date
+    const apptsSnap = await db
+      .collection('appointments')
+      .where('doctorId', '==', targetDoctorId)
+      .where('date', '==', date)
+      .get();
+
+    const batch = db.batch();
+    const affectedAppts = [];
+
+    for (const doc of apptsSnap.docs) {
+      const apt = doc.data();
+      if (['missed', 'called', 'not_arrived', 'late', 'checked_in', 'waiting', 'booked', 'confirmed'].includes(apt.status)) {
+        batch.update(doc.ref, {
+          status: 'no_show',
+          displayStatus: 'No Show',
+          sessionEnded: true,
+          missedTurnHandled: true,
+          statusHistory: [
+            ...(apt.statusHistory || []),
+            { status: 'no_show', at: nowIso, by: doctorUid, reason: 'Doctor session ended' }
+          ],
+          updatedAt: now
+        });
+        affectedAppts.push(doc.id);
+
+        const tokRef = db.collection('tokens').doc(`tok-${doc.id}`);
+        batch.set(tokRef, { status: 'no_show', updatedAt: now }, { merge: true });
+      }
+    }
+
+    if (affectedAppts.length > 0) {
+      await batch.commit();
+    }
+
+    await writeAuditLog({
+      actorUid: doctorUid,
+      actorRole: req.user.role || 'doctor',
+      action: 'DOCTOR_SESSION_ENDED',
+      targetType: 'queue',
+      targetId: `${targetDoctorId}_${date}`,
+      details: { affectedCount: affectedAppts.length }
+    });
+
+    await recalculateQueue(targetDoctorId, date);
+
+    res.status(200).json(formatSuccessResponse({
+      doctorId: targetDoctorId,
+      date,
+      sessionEnded: true,
+      closedCount: affectedAppts.length
+    }, 'Doctor session ended. Inactive and missed tokens finalized as No-Show.'));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * GET /api/queue/reception-overview
+ * Overview of today's queue across doctors or for a specific doctor,
+ * categorizing Not Arrived, Late / Missed, Ready & Waiting, and In Progress.
+ */
+export const getReceptionQueueOverview = async (req, res, next) => {
+  try {
+    const { doctorId, date: requestedDate } = req.query;
+    const db = assertDbConnected();
+    const date = requestedDate || clock.now().toISOString().split('T')[0];
+
+    let query = db.collection('appointments').where('date', '==', date);
+    if (doctorId) {
+      query = query.where('doctorId', '==', doctorId);
+    }
+
+    const snap = await query.get();
+    const appts = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+    const notArrived = appts.filter(a => ['booked', 'confirmed', 'not_arrived'].includes(a.status));
+    const lateOrMissed = appts.filter(a => a.lateReported || ['late', 'missed'].includes(a.status));
+    const readyWaiting = appts.filter(a => ['checked_in', 'rejoined'].includes(a.status));
+    const inProgress = appts.filter(a => ['called', 'in_consultation'].includes(a.status));
+    const completed = appts.filter(a => a.status === 'completed');
+    const noShow = appts.filter(a => a.status === 'no_show');
+
+    res.status(200).json(formatSuccessResponse({
+      date,
+      counts: {
+        total: appts.length,
+        notArrived: notArrived.length,
+        lateOrMissed: lateOrMissed.length,
+        readyWaiting: readyWaiting.length,
+        inProgress: inProgress.length,
+        completed: completed.length,
+        noShow: noShow.length
+      },
+      notArrived,
+      lateOrMissed,
+      readyWaiting,
+      inProgress,
+      completed,
+      noShow
+    }));
+  } catch (error) {
+    next(error);
+  }
+};
+
 

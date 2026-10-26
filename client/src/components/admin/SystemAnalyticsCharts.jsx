@@ -67,13 +67,30 @@ export const SystemAnalyticsCharts = () => {
 
         if (data.auditLogs && data.auditLogs.length > 0) {
           setAuditLogs(
-            data.auditLogs.map((a) => ({
-              id: a.id || `aud-${Math.random()}`,
-              action: a.action || 'SYSTEM_EVENT',
-              userRole: a.userRole || 'admin',
-              resourceId: a.resourceId || 'sys-001',
-              time: a.timestamp ? new Date(a.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '10:00 AM'
-            }))
+            data.auditLogs.map((a) => {
+              let displayTime = 'Just now';
+              if (a.timestamp) {
+                try {
+                  const d = typeof a.timestamp === 'string' || typeof a.timestamp === 'number'
+                    ? new Date(a.timestamp)
+                    : a.timestamp._seconds
+                    ? new Date(a.timestamp._seconds * 1000)
+                    : a.timestamp.seconds
+                    ? new Date(a.timestamp.seconds * 1000)
+                    : null;
+                  if (d && !isNaN(d.getTime())) {
+                    displayTime = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                  }
+                } catch (_) {}
+              }
+              return {
+                id: a.id || `aud-${Math.random()}`,
+                action: a.action || 'SYSTEM_EVENT',
+                userRole: a.userRole || a.actorRole || 'admin',
+                resourceId: a.targetId || a.resourceId || (a.details && (a.details.patientHealthId || a.details.targetId)) || 'system',
+                time: displayTime
+              };
+            })
           );
         }
       }

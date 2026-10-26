@@ -16,35 +16,109 @@ export const scanCheckIn = async (req, res, next) => {
 
     let appointmentId = reqAptId;
     let code = rawCode;
-
-    // 1. Parse QR payload if string provided (Format: APPT:<id>:<code>)
-    if (qrPayload && typeof qrPayload === 'string') {
-      const match = qrPayload.trim().match(/^APPT:([^:]+):(.+)$/);
-      if (!match) {
-        throw new AppError('INVALID_QR_FORMAT', 'Invalid QR code payload structure. Format must be APPT:<id>:<code>.', 400);
-      }
-      appointmentId = match[1];
-      code = match[2];
-    }
-
-    if (!appointmentId || !code) {
-      throw new AppError('VALIDATION_ERROR', 'Appointment ID and security code are required for QR check-in.', 400);
-    }
+    let apt = null;
+    let aptRef = null;
+    let skipCodeCheck = false;
 
     const db = assertDbConnected();
-    const aptRef = db.collection('appointments').doc(appointmentId);
-    const snap = await aptRef.get();
+    const now = clock.now();
+    const todayStr = now.toISOString().split('T')[0];
 
-    if (!snap.exists) {
-      throw new AppError('APPOINTMENT_NOT_FOUND', 'Appointment document not found.', 404);
-    }
+    // Check if qrPayload contains a Health ID (e.g. SCAI-... or PHI-... or URL like /e-records/SCAI-...)
+    const healthIdMatch = qrPayload && typeof qrPayload === 'string'
+      ? qrPayload.trim().match(/(SCAI-\d{4}-\d{6}-P|PHI-[A-Z0-9-]+)/i)
+      : null;
 
-    const apt = snap.data();
+    if (healthIdMatch && (!appointmentId || !code)) {
+      const scannedHealthId = healthIdMatch[1].toUpperCase();
 
-    // 2. Security hash verification (sha256)
-    const computedHash = crypto.createHash('sha256').update(code.trim()).digest('hex');
-    if (!apt.checkInCodeHash || apt.checkInCodeHash !== computedHash) {
-      throw new AppError('INVALID_CODE', 'Invalid check-in security code or hash mismatch.', 400);
+      // Look up patient
+      let patientDoc = await db.collection('patients').doc(scannedHealthId).get();
+      if (!patientDoc.exists) {
+        const pSnap = await db.collection('patients').where('healthId', '==', scannedHealthId).limit(1).get();
+        if (!pSnap.empty) patientDoc = pSnap.docs[0];
+      }
+
+      let patientData = patientDoc.exists ? patientDoc.data() : null;
+      if (patientData && patientData.migratedTo) {
+        const migDoc = await db.collection('patients').doc(patientData.migratedTo).get();
+        if (migDoc.exists) patientData = migDoc.data();
+      }
+
+      const patientName = patientData?.name || patientData?.fullName || 'Verified Patient';
+
+      // Find active appointment for today
+      let apptQuery = await db.collection('appointments')
+        .where('patientHealthId', '==', scannedHealthId)
+        .where('date', '==', todayStr)
+        .limit(1)
+        .get();
+
+      if (apptQuery.empty && patientData?.ownerUid) {
+        apptQuery = await db.collection('appointments')
+          .where('patientUid', '==', patientData.ownerUid)
+          .where('date', '==', todayStr)
+          .limit(1)
+          .get();
+      }
+
+      if (!apptQuery.empty) {
+        aptRef = apptQuery.docs[0].ref;
+        const snap = apptQuery.docs[0];
+        appointmentId = snap.id;
+        apt = snap.data();
+        skipCodeCheck = true;
+      } else {
+        return res.status(200).json(formatSuccessResponse({
+          status: 'verified_patient',
+          code: 'VERIFIED_PATIENT_CARD',
+          healthId: scannedHealthId,
+          patientName,
+          patient: patientData,
+          message: `Verified patient card for ${patientName} (${scannedHealthId}). No appointment scheduled for today.`
+        }, 'Verified patient card scanned.'));
+      }
+    } else {
+      // 1. Parse QR payload if string provided (Format: APPT:<id>:<code>)
+      if (qrPayload && typeof qrPayload === 'string') {
+        const match = qrPayload.trim().match(/^APPT:([^:]+):(.+)$/);
+        if (!match) {
+          throw new AppError('INVALID_QR_FORMAT', 'Invalid QR code payload structure. Format must be APPT:<id>:<code> or SmartCare Patient Health Card.', 400);
+        }
+        appointmentId = match[1];
+        code = match[2];
+      }
+
+      if (!appointmentId || !code) {
+        throw new AppError('VALIDATION_ERROR', 'Appointment ID and security code are required for QR check-in.', 400);
+      }
+
+      aptRef = db.collection('appointments').doc(appointmentId);
+      let snap = await aptRef.get();
+
+      if (!snap.exists) {
+        const qSnap = await db.collection('appointments').where('displayId', '==', appointmentId).limit(1).get();
+        if (!qSnap.empty) {
+          aptRef = qSnap.docs[0].ref;
+          snap = qSnap.docs[0];
+        } else {
+          const qSnap2 = await db.collection('appointments').where('appointmentId', '==', appointmentId).limit(1).get();
+          if (!qSnap2.empty) {
+            aptRef = qSnap2.docs[0].ref;
+            snap = qSnap2.docs[0];
+          } else {
+            throw new AppError('APPOINTMENT_NOT_FOUND', 'Appointment document not found.', 404);
+          }
+        }
+      }
+
+      apt = snap.data();
+
+      // 2. Security hash verification (sha256)
+      const computedHash = crypto.createHash('sha256').update(code.trim()).digest('hex');
+      if (!apt.checkInCodeHash || apt.checkInCodeHash !== computedHash) {
+        throw new AppError('INVALID_CODE', 'Invalid check-in security code or hash mismatch.', 400);
+      }
     }
 
     // 3. Single-use check
@@ -53,8 +127,6 @@ export const scanCheckIn = async (req, res, next) => {
     }
 
     // 4. Date validation
-    const now = clock.now();
-    const todayStr = now.toISOString().split('T')[0];
     if (apt.date && apt.date !== todayStr) {
       throw new AppError('WRONG_DATE', `Check-in is only permitted on the scheduled date (${apt.date}). Today is ${todayStr}.`, 400);
     }
@@ -96,7 +168,8 @@ export const scanCheckIn = async (req, res, next) => {
 
     res.status(200).json(formatSuccessResponse({
       code: 'CHECKIN_SUCCESS',
-      appointmentId,
+      appointmentId: apt.displayId || appointmentId,
+      displayId: apt.displayId,
       status: 'checked_in',
       tokenNumber: apt.tokenNumber,
       tokenDisplayId: apt.tokenId || apt.id,
@@ -119,7 +192,7 @@ export const manualCheckIn = async (req, res, next) => {
     const { tokenLabel, appointmentDate, appointmentId, phone, patientName, healthId, query } = req.body;
 
     // PRD F5 Requirement: Reject manual check-in by Health ID!
-    if (healthId || (query && /^PHI-/i.test(query.trim()))) {
+    if (healthId || (query && /^(PHI|SCAI)-/i.test(query.trim()))) {
       throw new AppError('HEALTH_ID_REJECTED', 'Manual check-in by Health ID is disabled for privacy & security reasons. Please search by Token Number, Appointment ID, or Phone Number.', 400);
     }
 
@@ -129,10 +202,23 @@ export const manualCheckIn = async (req, res, next) => {
 
     let targetDoc = null;
 
-    // Search Strategy 1: Direct appointmentId
-    if (appointmentId) {
-      const snap = await db.collection('appointments').doc(appointmentId).get();
-      if (snap.exists) targetDoc = { id: snap.id, ...snap.data() };
+    // Search Strategy 1: Direct appointmentId or displayId
+    if (appointmentId || (query && /^APT-/i.test(query.trim()))) {
+      const searchKey = (appointmentId || query).trim();
+      const snap = await db.collection('appointments').doc(searchKey).get();
+      if (snap.exists) {
+        targetDoc = { id: snap.id, ...snap.data() };
+      } else {
+        const dSnap = await db.collection('appointments').where('displayId', '==', searchKey).limit(1).get();
+        if (!dSnap.empty) {
+          targetDoc = { id: dSnap.docs[0].id, ...dSnap.docs[0].data() };
+        } else {
+          const aSnap = await db.collection('appointments').where('appointmentId', '==', searchKey).limit(1).get();
+          if (!aSnap.empty) {
+            targetDoc = { id: aSnap.docs[0].id, ...aSnap.docs[0].data() };
+          }
+        }
+      }
     }
 
     // Search Strategy 2: Token Label + Date
@@ -205,7 +291,8 @@ export const manualCheckIn = async (req, res, next) => {
 
     res.status(200).json(formatSuccessResponse({
       code: 'CHECKIN_SUCCESS',
-      appointmentId: targetDoc.id,
+      appointmentId: targetDoc.displayId || targetDoc.appointmentId || targetDoc.id,
+      displayId: targetDoc.displayId,
       status: 'checked_in',
       tokenNumber: targetDoc.tokenNumber,
       patientName: targetDoc.patientName || 'Patient',
