@@ -168,9 +168,10 @@ async function removeInvalidTokens(db, uid, invalidTokens) {
  * @param {object}   [opts.data]      - Extra key-value data attached to push
  * @param {string}   [opts.groupKey]  - Group key for 60-second batching
  * @param {boolean}  [opts.urgent]    - Override quiet hours / grouping
+ * @param {object}   [opts.batch]     - Optional external Firestore WriteBatch to write into
  * @returns {Promise<{ written: number, pushed: number, skipped: number, results: Array<object> }>}
  */
-export async function notify({ uids, title, body, privacyBody, type = 'system', data = {}, groupKey, urgent = false }) {
+export async function notify({ uids, title, body, privacyBody, type = 'system', data = {}, groupKey, urgent = false, batch: externalBatch = null }) {
   if (!uids || uids.length === 0) return { written: 0, pushed: 0, skipped: 0, results: [] };
 
   const db = assertDbConnected();
@@ -195,7 +196,7 @@ export async function notify({ uids, title, body, privacyBody, type = 'system', 
   const notifRefsByUid = {};
 
   // Batch in-app notification writes (max 500 per Firestore batch)
-  const batch = db.batch();
+  const batch = externalBatch || db.batch();
 
   for (const uid of uids) {
     const notifRef = db.collection('notifications').doc();
@@ -221,7 +222,9 @@ export async function notify({ uids, title, body, privacyBody, type = 'system', 
     written++;
   }
 
-  await batch.commit();
+  if (!externalBatch) {
+    await batch.commit();
+  }
 
   // FCM push (only if flag is on)
   if (!flags.push) {

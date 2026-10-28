@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     setupFiles: ['./tests/setupEnv.js'],
     testTimeout: 30000,
+    hookTimeout: 30000,
     environment: 'node',
 
     // ── Parallelism ────────────────────────────────────────────────

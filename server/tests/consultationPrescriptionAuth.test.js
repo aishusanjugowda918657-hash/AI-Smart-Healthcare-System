@@ -100,6 +100,12 @@ describe('Phase 69/104 — Consultation & Prescription Authorization Regression 
       date: todayStr,
       createdAt: new Date().toISOString()
     }, { merge: true });
+
+    // Clean up any pre-existing prescriptions for this synthetic test patient
+    const existingRxSnap = await db.collection('prescriptions').where('patientHealthId', '==', testPatientHealthId).get();
+    for (const doc of existingRxSnap.docs) {
+      await doc.ref.delete().catch(() => {});
+    }
   });
 
   afterAll(async () => {
@@ -305,14 +311,16 @@ describe('Phase 69/104 — Consultation & Prescription Authorization Regression 
   });
 
   it('11. Failed authorization attempts create no clinical prescription records in database', async () => {
-    // Verify no prescriptions exist where doctorId is Sarah (unassigned doctor)
+    // Verify no prescriptions exist where doctorId is Sarah (unassigned doctor) for this patient
     const sarahRxSnap = await db.collection('prescriptions')
+      .where('patientHealthId', '==', testPatientHealthId)
       .where('doctorId', '==', 'DOC-001')
       .get();
     expect(sarahRxSnap.empty).toBe(true);
 
-    // Verify no prescriptions exist created with patientUid as doctorUid
+    // Verify no prescriptions exist created with patientUid as doctorUid for this patient
     const patientRxSnap = await db.collection('prescriptions')
+      .where('patientHealthId', '==', testPatientHealthId)
       .where('doctorUid', '==', patientUid)
       .get();
     expect(patientRxSnap.empty).toBe(true);

@@ -46,12 +46,14 @@ export async function generateSlotsJob(daysAhead = 14) {
   try {
     const db = assertDbConnected();
     const doctorsSnap = await db.collection('doctors').get();
-    const doctors = doctorsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const doctors = doctorsSnap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .filter((doc) => doc.active !== false && doc.status !== 'inactive');
 
     let totalSlots = 0;
     const today = new Date();
 
-    for (const doc of doctors) {
+    await Promise.all(doctors.map(async (doc) => {
       const doctorId = doc.doctorId || doc.id;
       const schedule = doc.schedule || {
         slotMinutes: 10,
@@ -66,22 +68,28 @@ export async function generateSlotsJob(daysAhead = 14) {
         lunch: { start: '13:00', end: '14:00' }
       };
 
-      const leavesSnap = await db.collection('leaves').where('doctorId', '==', doctorId).get();
-      const leaves = leavesSnap.docs.map((l) => l.data());
+      const [leavesSnap, slotsSnap] = await Promise.all([
+        db.collection('leaves').where('doctorId', '==', doctorId).get(),
+        db.collection('slots').where('doctorId', '==', doctorId).get()
+      ]);
 
+      const leaves = leavesSnap.docs.map((l) => l.data());
+      const slotsByDate = new Map();
+      slotsSnap.docs.forEach((s) => {
+        const data = s.data();
+        if (data.date) {
+          if (!slotsByDate.has(data.date)) slotsByDate.set(data.date, []);
+          slotsByDate.get(data.date).push({ id: s.id, ...data });
+        }
+      });
+
+      const allNewSlots = [];
       for (let i = 0; i < daysAhead; i++) {
         const d = new Date(today);
         d.setDate(today.getDate() + i);
         const dateStr = d.toISOString().split('T')[0];
 
-        const existingSnap = await db
-          .collection('slots')
-          .where('doctorId', '==', doctorId)
-          .where('date', '==', dateStr)
-          .get();
-
-        const existingSlots = existingSnap.docs.map((s) => ({ id: s.id, ...s.data() }));
-
+        const existingSlots = slotsByDate.get(dateStr) || [];
         const generated = generateSlotsForDoctorDate({
           doctorId,
           date: dateStr,
@@ -91,15 +99,23 @@ export async function generateSlotsJob(daysAhead = 14) {
         });
 
         if (generated.length > 0) {
+          allNewSlots.push(...generated);
+        }
+      }
+
+      if (allNewSlots.length > 0) {
+        const chunkSize = 400;
+        for (let c = 0; c < allNewSlots.length; c += chunkSize) {
+          const chunk = allNewSlots.slice(c, c + chunkSize);
           const batch = db.batch();
-          generated.forEach((s) => {
+          chunk.forEach((s) => {
             batch.set(db.collection('slots').doc(s.id), { ...s, updatedAt: new Date() }, { merge: true });
           });
           await batch.commit();
-          totalSlots += generated.length;
         }
+        totalSlots += allNewSlots.length;
       }
-    }
+    }));
 
     return { success: true, totalSlots, doctorsProcessed: doctors.length };
   } catch (error) {
@@ -175,7 +191,8 @@ export async function noShowSweepJob({ nowOverride, gracePeriodMinutes = 5 } = {
     const aptSnap = await db
       .collection('appointments')
       .where('date', '==', todayStr)
-      .where('status', 'in', ['booked', 'confirmed', 'on_the_way', 'nearby', 'not_arrived', 'called', 'late', 'rejoined', 'waiting'])
+      .where('status', 'in', ['booked', 'BOOKED', 'confirmed', 'CONFIRMED', 'on_the_way', 'nearby', 'not_arrived', 'called', 'late', 'rejoined', 'waiting'])
+      .limit(100)
       .get();
 
     let noShowCount = 0;
@@ -201,7 +218,7 @@ export async function noShowSweepJob({ nowOverride, gracePeriodMinutes = 5 } = {
           });
           noShowCount++;
 
-          if (apt.doctorId && apt.date) {
+          if (apt.doctorId && apt.date === todayStr) {
             affectedDocDates.add(`${apt.doctorId}_${apt.date}`);
           }
 
@@ -216,7 +233,7 @@ export async function noShowSweepJob({ nowOverride, gracePeriodMinutes = 5 } = {
             batch.set(alertRef, {
               id: alertId,
               appointmentId: doc.id,
-              patientHealthId: apt.patientHealthId || apt.healthId,
+              patientHealthId: apt.patientHealthId || apt.healthId || null,
               patientName: apt.patientName || 'Patient',
               reasons: [`Patient missed an important follow-up (${doc.id})`],
               kind: 'no_show_followup',
@@ -258,19 +275,25 @@ export async function noShowSweepJob({ nowOverride, gracePeriodMinutes = 5 } = {
         });
 
         if (receiverUid && !apt.checkinReminderSent) {
-          try {
-            await notify({
-              uids: [receiverUid],
-              title: `${patientName}: Please check in`,
-              body: `Please check in. Your turn is at ${apt.timeSlot || apt.bookedStartAt}.`,
-              privacyBody: `${patientName}: Please check in for your appointment`,
-              type: 'CHECKIN_REMINDER',
-              data: { appointmentId: doc.id }
-            });
-            batch.update(doc.ref, { checkinReminderSent: true });
-          } catch (e) {
-            console.warn('Checkin reminder notify error:', e.message);
-          }
+          const notifRef = db.collection('notifications').doc();
+          batch.set(notifRef, {
+            id: notifRef.id,
+            uid: receiverUid,
+            title: `${patientName}: Please check in`,
+            body: `Please check in. Your turn is at ${apt.timeSlot || apt.bookedStartAt}.`,
+            privacyBody: `${patientName}: Please check in for your appointment`,
+            type: 'CHECKIN_REMINDER',
+            data: { appointmentId: doc.id },
+            read: false,
+            status: 'in_app_only',
+            pushStatus: 'none',
+            attempts: 0,
+            lastAttemptAt: null,
+            providerResponse: null,
+            createdAt: now,
+            updatedAt: now
+          });
+          batch.update(doc.ref, { checkinReminderSent: true });
         }
       }
 
@@ -305,32 +328,37 @@ export async function noShowSweepJob({ nowOverride, gracePeriodMinutes = 5 } = {
         const tokRef = db.collection('tokens').doc(`tok-${targetApptId}`);
         batch.set(tokRef, { status: 'missed', missedAt: now, updatedAt: now }, { merge: true });
 
-        if (apt.doctorId && apt.date) {
+        if (apt.doctorId && apt.date === todayStr) {
           affectedDocDates.add(`${apt.doctorId}_${apt.date}`);
         }
 
         if (receiverUid) {
-          try {
-            await notify({
-              uids: [receiverUid],
-              title: `${patientName}: You missed your turn`,
-              body: `You missed your turn. Tap Rejoin Queue if you are still coming.`,
-              privacyBody: `${patientName}: Turn missed`,
-              type: 'MISSED_TURN',
-              data: { appointmentId: doc.id, canRejoin: true }
-            });
-          } catch (e) {
-            console.warn('Missed turn notify error:', e.message);
-          }
+          const notifRef = db.collection('notifications').doc();
+          batch.set(notifRef, {
+            id: notifRef.id,
+            uid: receiverUid,
+            title: `${patientName}: You missed your turn`,
+            body: `You missed your turn. Tap Rejoin Queue if you are still coming.`,
+            privacyBody: `${patientName}: Turn missed`,
+            type: 'MISSED_TURN',
+            data: { appointmentId: doc.id, canRejoin: true },
+            read: false,
+            status: 'in_app_only',
+            pushStatus: 'none',
+            attempts: 0,
+            lastAttemptAt: null,
+            providerResponse: null,
+            createdAt: now,
+            updatedAt: now
+          });
         }
       }
 
       // Rule B8: Silent no-show: 60 minutes passed after booked time
       const sixtyMinPastMs = apptTimeMs + 60 * 60 * 1000;
-      const isEmergencyPatient = apt.clinicalLevel === 3 || apt.urgency === 'emergency' || apt.urgencySuggested === 'emergency' || apt.priorityCategory === 'EMERGENCY';
+      const isEmergencyPatient = apt.urgency === 'emergency' || apt.priorityCategory === 'EMERGENCY';
 
       if (nowMs > sixtyMinPastMs && isEmergencyPatient && !apt.checkedInAt) {
-        // Clinical Safety: Emergency patients follow authorized clinical priority and must NEVER be automatically cancelled or marked as no-show
         if (!apt.emergencyAlertSent) {
           const alertId = `alert_emergency_unattended_${doc.id}_${nowMs}`;
           batch.set(db.collection('alerts').doc(alertId), {
@@ -345,10 +373,9 @@ export async function noShowSweepJob({ nowOverride, gracePeriodMinutes = 5 } = {
           });
           batch.update(doc.ref, { emergencyAlertSent: true, updatedAt: now });
         }
-        continue;
       }
 
-      if (nowMs > sixtyMinPastMs && ['booked', 'confirmed', 'not_arrived', 'late', 'missed', 'waiting', 'on_the_way', 'nearby'].includes(apt.status) && !apt.checkedInAt) {
+      if (nowMs > sixtyMinPastMs && !isEmergencyPatient && ['booked', 'confirmed', 'not_arrived', 'late', 'missed', 'waiting', 'on_the_way', 'nearby'].includes(statusLower) && !apt.checkedInAt) {
         batch.update(doc.ref, {
           status: 'no_show',
           noShowAt: now,
@@ -360,33 +387,35 @@ export async function noShowSweepJob({ nowOverride, gracePeriodMinutes = 5 } = {
         const tokRef = db.collection('tokens').doc(`tok-${targetApptId}`);
         batch.set(tokRef, { status: 'no_show', noShowAt: now, updatedAt: now }, { merge: true });
 
-        if (apt.doctorId && apt.date) {
+        if (apt.doctorId && apt.date === todayStr) {
           affectedDocDates.add(`${apt.doctorId}_${apt.date}`);
         }
 
         // Release slot ONLY if slot start time is still in the future! (Never offer/free past slot)
-        const slotIds = apt.slotIds || (apt.slotId ? [apt.slotId] : []);
-        for (const sId of slotIds) {
-          const slotRef = db.collection('slots').doc(sId);
-          const slotSnap = await slotRef.get();
-          if (slotSnap.exists) {
-            const sData = slotSnap.data();
-            const slotStartObj = parseSlotTimeToDate(apt.date || todayStr, sData.startAt || slotTimeStr);
-            const slotStartMs = slotStartObj ? slotStartObj.getTime() : 0;
+        if (apptTimeMs > nowMs) {
+          const slotIds = apt.slotIds || (apt.slotId ? [apt.slotId] : []);
+          for (const sId of slotIds) {
+            const slotRef = db.collection('slots').doc(sId);
+            const slotSnap = await slotRef.get();
+            if (slotSnap.exists) {
+              const sData = slotSnap.data();
+              const slotStartObj = parseSlotTimeToDate(apt.date || todayStr, sData.startAt || slotTimeStr);
+              const slotStartMs = slotStartObj ? slotStartObj.getTime() : 0;
 
-            if (slotStartMs > nowMs) {
-              batch.update(slotRef, {
-                status: SlotStatus.FREE,
-                appointmentId: null,
-                bookedBy: null,
-                updatedAt: now
-              });
+              if (slotStartMs > nowMs) {
+                batch.update(slotRef, {
+                  status: SlotStatus.FREE,
+                  appointmentId: null,
+                  bookedBy: null,
+                  updatedAt: now
+                });
 
-              if (slotStartMs - nowMs > 20 * 60 * 1000) {
-                try {
-                  await offerFreedSlot({ id: slotSnap.id, ...sData, status: SlotStatus.FREE });
-                } catch (wErr) {
-                  console.warn('Waitlist offer warning on no-show:', wErr.message);
+                if (slotStartMs - nowMs > 20 * 60 * 1000) {
+                  try {
+                    await offerFreedSlot({ id: slotSnap.id, ...sData, status: SlotStatus.FREE });
+                  } catch (wErr) {
+                    console.warn('Waitlist offer warning on no-show:', wErr.message);
+                  }
                 }
               }
             }
@@ -401,7 +430,7 @@ export async function noShowSweepJob({ nowOverride, gracePeriodMinutes = 5 } = {
           batch.set(alertRef, {
             id: alertId,
             appointmentId: doc.id,
-            patientHealthId: apt.patientHealthId || apt.healthId,
+            patientHealthId: apt.patientHealthId || apt.healthId || null,
             patientName,
             reasons: [`Patient missed an important follow-up (${doc.id})`],
             kind: 'no_show_followup',
@@ -416,28 +445,36 @@ export async function noShowSweepJob({ nowOverride, gracePeriodMinutes = 5 } = {
         }
 
         if (receiverUid) {
-          try {
-            await notify({
-              uids: [receiverUid],
-              title: `${patientName}: You missed your appointment`,
-              body: `You missed your appointment. Tap Rebook if you wish to reschedule.`,
-              privacyBody: `${patientName}: Appointment missed`,
-              type: 'NO_SHOW',
-              data: { appointmentId: doc.id, offerRebook: true }
-            });
-          } catch (e) {
-            console.warn('No show notify error:', e.message);
-          }
+          const notifRef = db.collection('notifications').doc();
+          batch.set(notifRef, {
+            id: notifRef.id,
+            uid: receiverUid,
+            title: `${patientName}: You missed your appointment`,
+            body: `You missed your appointment. Tap Rebook if you wish to reschedule.`,
+            privacyBody: `${patientName}: Appointment missed`,
+            type: 'NO_SHOW',
+            data: { appointmentId: doc.id, offerRebook: true },
+            read: false,
+            status: 'in_app_only',
+            pushStatus: 'none',
+            attempts: 0,
+            lastAttemptAt: null,
+            providerResponse: null,
+            createdAt: now,
+            updatedAt: now
+          });
         }
       }
     }
 
     await batch.commit();
 
-    for (const key of affectedDocDates) {
-      const [docId, dDate] = key.split('_');
-      await recalculateQueue(docId, dDate);
-    }
+    await Promise.all(
+      Array.from(affectedDocDates).map((key) => {
+        const [docId, dDate] = key.split('_');
+        return recalculateQueue(docId, dDate);
+      })
+    );
 
     return { success: true, processedCount: aptSnap.size, noShowCount };
   } catch (error) {
@@ -596,17 +633,25 @@ export async function appointmentRemindersJob({ nowOverride } = {}) {
         // At appointment time: between 5 minutes before and up to 10 minutes past slot time
         if (diffMins <= 5 && diffMins >= -10 && !apt.checkinAtTimeReminderSent) {
           if (receiverUids.length > 0) {
-            try {
-              await notify({
-                uids: receiverUids,
+            for (const rUid of receiverUids) {
+              const notifRef = db.collection('notifications').doc();
+              batch.set(notifRef, {
+                id: notifRef.id,
+                uid: rUid,
                 title: `${patientName}: Appointment time now — Please check in`,
                 body: `Your appointment with ${apt.doctorName || 'Doctor'} scheduled for ${slotTime} is starting now. Please check in to enter the queue.`,
                 privacyBody: `${patientName}: Please check in for your appointment`,
                 type: 'CHECKIN_REMINDER',
-                data: { appointmentId: doc.id, scheduledTime: slotTime, checkinRequired: true }
+                data: { appointmentId: doc.id, scheduledTime: slotTime, checkinRequired: true },
+                read: false,
+                status: 'in_app_only',
+                pushStatus: 'none',
+                attempts: 0,
+                lastAttemptAt: null,
+                providerResponse: null,
+                createdAt: now,
+                updatedAt: now
               });
-            } catch (e) {
-              console.warn('At-time check-in notify warning:', e.message);
             }
           }
           batch.update(doc.ref, { checkinAtTimeReminderSent: true, updatedAt: now });
@@ -617,17 +662,25 @@ export async function appointmentRemindersJob({ nowOverride } = {}) {
         if (diffMins < -10 && diffMins >= -60 && !apt.checkinOverdueReminderSent) {
           const minsOverdue = Math.round(Math.abs(diffMins));
           if (receiverUids.length > 0) {
-            try {
-              await notify({
-                uids: receiverUids,
+            for (const rUid of receiverUids) {
+              const notifRef = db.collection('notifications').doc();
+              batch.set(notifRef, {
+                id: notifRef.id,
+                uid: rUid,
                 title: `${patientName}: Appointment overdue — Please check in now`,
                 body: `Your appointment scheduled for ${slotTime} was at ${slotTime} (${minsOverdue} mins ago). Please check in now to keep your place in queue.`,
                 privacyBody: `${patientName}: Appointment overdue — check in now`,
                 type: 'CHECKIN_OVERDUE',
-                data: { appointmentId: doc.id, scheduledTime: slotTime, minutesOverdue: minsOverdue, checkinRequired: true }
+                data: { appointmentId: doc.id, scheduledTime: slotTime, minutesOverdue: minsOverdue, checkinRequired: true },
+                read: false,
+                status: 'in_app_only',
+                pushStatus: 'none',
+                attempts: 0,
+                lastAttemptAt: null,
+                providerResponse: null,
+                createdAt: now,
+                updatedAt: now
               });
-            } catch (e) {
-              console.warn('Overdue check-in notify warning:', e.message);
             }
           }
           batch.update(doc.ref, { checkinOverdueReminderSent: true, updatedAt: now });

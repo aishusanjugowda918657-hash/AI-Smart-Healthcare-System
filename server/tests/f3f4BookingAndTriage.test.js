@@ -184,7 +184,7 @@ describe('Phase 4 - Feature F3 & F4 Booking, Triage & Check-in QR Verification',
   // enforces the emergency level on the backend, regardless of client payload.
   // -------------------------------------------------------------
   it('Server STRICTLY ENFORCES emergency clinicalLevel when booking with red flag symptoms (Regression Test)', async () => {
-    const emergencyDate = '2026-10-28';
+    const emergencyDate = '2026-11-01';
     const emergencyHealthId = `HID-EMG-${Date.now()}`;
     const targetSlotId = `${doctorId}_${emergencyDate}_1130_${Date.now()}`;
     const db = assertDbConnected();

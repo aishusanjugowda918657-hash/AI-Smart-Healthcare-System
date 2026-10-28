@@ -21,6 +21,7 @@ import { assertDbConnected } from '../config/firebase.js';
 import { createAppointment } from './bookingController.js';
 import { cancelAppointment } from './appointmentController.js';
 import { evaluatePrescriptionSafety } from '../domain/safety.js';
+import { searchHelp, getArticleSummaries } from '../domain/helpSearch.js';
 import flags from '../config/flags.js';
 import medicinesConfig from '../config/clinical/medicines.json' with { type: 'json' };
 
@@ -31,7 +32,8 @@ import medicinesConfig from '../config/clinical/medicines.json' with { type: 'js
  */
 export const aiChat = async (req, res, next) => {
   try {
-    const { message = '', language = 'en', patientHealthId, history = [] } = req.body;
+    // inputMode is a UI hint sent by the client ('voice' or 'text'); server ignores it for logic
+    const { message = '', language = 'en', patientHealthId, history = [], inputMode } = req.body;
     const { uid } = req.user || {};
 
     if (!message || !message.trim()) {
@@ -64,7 +66,8 @@ export const aiChat = async (req, res, next) => {
               { label: 'General Medicine', action: 'SELECT_DEPT_gen' },
               { label: 'Cardiology', action: 'SELECT_DEPT_card' },
               { label: 'Pediatrics', action: 'SELECT_DEPT_ped' }
-            ]
+            ],
+            aiSource: 'quick_chip'
           });
 
         case 'TOKEN_STATUS': {
@@ -76,7 +79,8 @@ export const aiChat = async (req, res, next) => {
             success: true,
             language,
             message: waitMsg,
-            tokenData: result
+            tokenData: result,
+            aiSource: 'quick_chip'
           });
         }
 
@@ -86,7 +90,8 @@ export const aiChat = async (req, res, next) => {
             success: true,
             language,
             message: result.message || `Estimated wait: approximately ${result.estimatedWaitMinutes} minutes.`,
-            waitData: result
+            waitData: result,
+            aiSource: 'quick_chip'
           });
         }
 
@@ -95,7 +100,8 @@ export const aiChat = async (req, res, next) => {
           return res.status(200).json({
             success: true,
             language,
-            message: `${result.doctorName} OPD Timings: ${result.timings}. Lunch break: ${result.lunchBreak}.`
+            message: `${result.doctorName} OPD Timings: ${result.timings}. Lunch break: ${result.lunchBreak}.`,
+            aiSource: 'quick_chip'
           });
         }
 
@@ -104,18 +110,41 @@ export const aiChat = async (req, res, next) => {
           return res.status(200).json({
             success: true,
             language,
-            message: result.message
+            message: result.message,
+            aiSource: 'quick_chip'
           });
         }
       }
     }
 
-    // 3. GEMINI FUNCTION CALLING LOOP (runWithTools)
+    // 3. HELP LIBRARY SEARCH (handles common questions without Gemini)
+    const helpResult = searchHelp(message, language);
+    if (helpResult.matched) {
+      return res.status(200).json(helpResult.reply);
+    }
+
+    // 4. GEMINI FUNCTION CALLING LOOP (runWithTools) – only if AI is available
+    if (!flags.ai) {
+      // AI off → return help topic chips or fallback
+      if (!helpResult.matched) {
+        return res.status(200).json({
+          ...helpResult.reply,
+          aiSource: 'help_fallback'
+        });
+      }
+    }
+
     const trimmedHistory = (history || []).slice(-6); // Limit to last 6 messages
     const systemPrompt = buildChatSystemPrompt(language);
 
+    // Ground Gemini with help library knowledge
+    const helpContext = getArticleSummaries(language);
+    const groundingNote = helpContext.length > 0
+      ? `\n\nReference knowledge base articles:\n${helpContext.map(a => `- ${a.title}: ${a.answer} ${(a.steps || []).join(' ')}`).join('\n')}`
+      : '';
+
     const result = await runWithTools({
-      system: systemPrompt,
+      system: systemPrompt + groundingNote,
       messages: trimmedHistory.concat([{ role: 'user', content: message }]),
       tools: PATIENT_CHAT_TOOL_DECLARATIONS,
       toolHandler: executePatientChatTool,
@@ -124,11 +153,16 @@ export const aiChat = async (req, res, next) => {
     });
 
     if (!result) {
+      // Gemini failed → use help topic chips or generic fallback
+      if (!helpResult.matched && helpResult.reply) {
+        return res.status(200).json({ ...helpResult.reply, aiSource: 'help_fallback' });
+      }
       const fallback = getChatFallback(language);
       return res.status(200).json({
         ...fallback,
         response: fallback.message + ' Disclaimer: This is AI generated content.',
-        language
+        language,
+        aiSource: 'rule_fallback'
       });
     }
 
@@ -143,14 +177,16 @@ export const aiChat = async (req, res, next) => {
       confirmToken: result.confirmToken || null,
       actionRequired: result.actionRequired || null,
       summary: result.summary || null,
-      sources: result.sources || []
+      sources: result.sources || [],
+      aiSource: 'gemini'
     });
 
   } catch (error) {
     console.warn('⚠️ aiChat error:', error.message);
     res.status(200).json({
       ...getChatFallback(req.body?.language || 'en'),
-      language: req.body?.language || 'en'
+      language: req.body?.language || 'en',
+      aiSource: 'error_fallback'
     });
   }
 };

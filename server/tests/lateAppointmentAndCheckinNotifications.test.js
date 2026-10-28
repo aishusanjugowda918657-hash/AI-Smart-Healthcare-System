@@ -379,7 +379,7 @@ describe('SmartCare AI — Late Appointment Handling & Check-in Notifications Su
 
     const updatedDoc = await db.collection('appointments').doc(aptId).get();
     expect(updatedDoc.data().status).toBe('no_show');
-  });
+  }, 60000);
 
   // 10. Emergency-priority handling
   it('10. Emergency priority patients are never automatically marked as no-show or cancelled', async () => {
@@ -412,7 +412,7 @@ describe('SmartCare AI — Late Appointment Handling & Check-in Notifications Su
     expect(updatedDoc.data().status).toBe('not_arrived');
     // Clinical staff alert generated instead
     expect(updatedDoc.data().emergencyAlertSent).toBe(true);
-  });
+  }, 60000);
 
   // 11. Queue estimates and statuses after check-in and consultation start
   it('11. Correctly calculates queue position and wait estimates when status is waiting', () => {

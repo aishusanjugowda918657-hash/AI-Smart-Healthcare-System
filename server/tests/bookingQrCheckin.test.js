@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import request from 'supertest';
 import crypto from 'crypto';
 import app from '../src/app.js';
 import { assertDbConnected } from '../src/config/firebase.js';
+import { clock } from '../src/utils/clock.js';
 
 const makeHash = (raw) => crypto.createHash('sha256').update(raw).digest('hex');
 
@@ -25,7 +26,8 @@ async function seedAppointment(db, overrides = {}) {
 
 describe('Booking QR Checkin Regression', () => {
   let db;
-  beforeEach(() => { db = assertDbConnected(); });
+  beforeEach(() => { db = assertDbConnected(); clock.reset(); });
+  afterEach(() => { clock.reset(); });
 
   it('1. qrPayload is APPT format', async () => {
     const { id, rawCode } = await seedAppointment(db);
@@ -149,6 +151,7 @@ describe('Booking QR Checkin Regression', () => {
 
   it('13. Dispatches check-in notification on-demand when patient checks queue status', async () => {
     const todayStr = new Date().toISOString().split('T')[0];
+    clock.set(`${todayStr}T11:17:00+05:30`);
     const patientUid = 'patient_notify_test_' + Date.now();
     const { id } = await seedAppointment(db, {
       date: todayStr,

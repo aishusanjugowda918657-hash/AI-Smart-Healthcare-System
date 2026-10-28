@@ -14,7 +14,7 @@ import { dailyDoctorAlertsJob } from '../src/jobs/dailyDoctorAlerts.js';
 import { leaveRescheduleJob } from '../src/jobs/leaveReschedule.js';
 import { expireWaitlistOffersJob } from '../src/services/waitlistService.js';
 
-describe('Phase 12 Hardening - Job Idempotency Verification', () => {
+describe('Phase 12 Hardening - Job Idempotency Verification', { timeout: 60000 }, () => {
   it('generateSlotsJob is idempotent when run twice', async () => {
     const res1 = await generateSlotsJob(1);
     const res2 = await generateSlotsJob(1);

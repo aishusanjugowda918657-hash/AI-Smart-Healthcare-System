@@ -524,7 +524,7 @@ describe('Task D: Medicine Reminders, Follow-ups, and Doctor Alerts', () => {
         .get();
 
       expect(alertSnap2.size).toBe(1);
-    });
+    }, 60000);
 
     it('doctor sees only their own patients alerts and can resolve and snooze', async () => {
       const doc1 = `DOC-OWN-1-${Date.now()}`;

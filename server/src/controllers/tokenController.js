@@ -543,8 +543,31 @@ export const getMyQueueStatus = async (req, res, next) => {
         continue; // Discard from active appointments
       }
 
-      // Preserve active same-day appointment without premature silent cancellation.
-      // Silent no-show and grace timeouts are strictly handled by noShowSweepJob (Rule B5 & B8).
+      if (apptDate === todayStr) {
+        const isAttending = a.checkedInAt || ['checked_in', 'waiting', 'in_consultation', 'called', 'rejoined', 'completed'].includes((a.status || '').toLowerCase());
+        if (!isAttending) {
+          const apptTime = parseSlotTimeToDate(a.date, a.bookedStartAt || a.timeSlot);
+          const isExplicitGraceExpired = a.graceEndAt && now.getTime() >= new Date(a.graceEndAt).getTime();
+          const isSilentNoShowExpired = apptTime && now.getTime() >= apptTime.getTime() + 60 * 60 * 1000;
+          if (isExplicitGraceExpired || isSilentNoShowExpired) {
+            // Grace period / 60-minute silent no-show expired without checkin! Transition to no_show
+            try {
+              await db.collection('appointments').doc(a.id).update({
+                status: 'no_show',
+                noShowAt: now,
+                updatedAt: now
+              });
+              const targetApptId = a.appointmentId || a.id;
+              const tokRef = db.collection('tokens').doc(`tok-${targetApptId}`);
+              await tokRef.set({ status: 'no_show', noShowAt: now, updatedAt: now }, { merge: true });
+            } catch (e) {
+              console.warn('Error transitioning expired same-day appointment to no-show:', e.message);
+            }
+            continue; // Discard from active appointments
+          }
+        }
+      }
+
       activeAppts.push(a);
     }
 

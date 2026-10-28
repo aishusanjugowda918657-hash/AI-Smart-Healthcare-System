@@ -1,8 +1,14 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
 /**
  * Custom Speech Hook wrapping browser SpeechRecognition & SpeechSynthesis (PRD F14)
  * Supports en-IN, hi-IN, kn-IN, ta-IN with privacy mode, speed controls, and fallbacks.
+ *
+ * VOICE BEHAVIOUR RULES (Task fix):
+ *   - Track inputMode per message: 'voice' when from mic, 'text' when typed
+ *   - speak() only when explicitly called; the ChatbotPage decides when to call it
+ *   - cancelSpeech() for immediate stop (type after mic, widget close, page change, new send, [Stop])
+ *   - speakerEnabled toggle (defaults ON) — user preference
  */
 export function useSpeech(initialLang = 'en-IN') {
   const [lang, setLang] = useState(initialLang);
@@ -13,8 +19,14 @@ export function useSpeech(initialLang = 'en-IN') {
   const [privacyMode, setPrivacyMode] = useState(false); // Do not speak medical details aloud
   const [isTypingMode, setIsTypingMode] = useState(false);
   const [supportMessage, setSupportMessage] = useState(null);
+  const [speakerEnabled, setSpeakerEnabled] = useState(true); // Speaker toggle (default ON)
+  const [lastInputMode, setLastInputMode] = useState('text'); // 'voice' | 'text'
 
   const recognitionRef = useRef(null);
+  const utteranceRef = useRef(null);
+
+  // Track whether speech synthesis is available
+  const synthAvailable = typeof window !== 'undefined' && 'speechSynthesis' in window;
 
   useEffect(() => {
     // Check SpeechRecognition support
@@ -66,19 +78,20 @@ export function useSpeech(initialLang = 'en-IN') {
     }
   }, [lang]);
 
-  const startListening = () => {
+  const startListening = useCallback(() => {
     if (recognitionRef.current && !isListening) {
       try {
         setTranscript('');
         recognitionRef.current.lang = lang;
         recognitionRef.current.start();
+        setLastInputMode('voice');
       } catch (err) {
         console.warn('Could not start recognition:', err.message);
       }
     }
-  };
+  }, [isListening, lang]);
 
-  const stopListening = () => {
+  const stopListening = useCallback(() => {
     if (recognitionRef.current && isListening) {
       try {
         recognitionRef.current.stop();
@@ -86,18 +99,41 @@ export function useSpeech(initialLang = 'en-IN') {
         console.warn('Could not stop recognition:', err.message);
       }
     }
-  };
+  }, [isListening]);
 
-  const toggleListening = () => {
+  const toggleListening = useCallback(() => {
     if (isListening) {
       stopListening();
     } else {
       startListening();
     }
-  };
+  }, [isListening, startListening, stopListening]);
 
-  const speak = (text = '') => {
-    if (!('speechSynthesis' in window)) {
+  /**
+   * Cancel any active speech synthesis immediately.
+   * Called when: user types after mic, widget closes, page changes, new message sent, [Stop] pressed.
+   */
+  const cancelSpeech = useCallback(() => {
+    if (synthAvailable) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch (_) { /* ignore */ }
+      setIsSpeaking(false);
+      utteranceRef.current = null;
+    }
+  }, [synthAvailable]);
+
+  /**
+   * Speak text aloud.
+   * The ChatbotPage is responsible for checking the rules before calling this:
+   *   - lastInputMode must be 'voice'
+   *   - speakerEnabled must be true
+   *   - privacyMode must be false
+   *   - synthAvailable must be true
+   * This function itself still checks privacyMode and synthAvailable as a safety net.
+   */
+  const speak = useCallback((text = '') => {
+    if (!synthAvailable) {
       setSupportMessage('Text-to-speech is not supported by your browser.');
       return;
     }
@@ -118,19 +154,41 @@ export function useSpeech(initialLang = 'en-IN') {
       utterance.onend = () => setIsSpeaking(false);
       utterance.onerror = () => setIsSpeaking(false);
 
+      utteranceRef.current = utterance;
       window.speechSynthesis.speak(utterance);
     } catch (err) {
       console.warn('Speech synthesis error:', err.message);
       setIsSpeaking(false);
     }
-  };
+  }, [synthAvailable, privacyMode, lang, speechRate]);
 
-  const stopSpeaking = () => {
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      setIsSpeaking(false);
-    }
-  };
+  const stopSpeaking = useCallback(() => {
+    cancelSpeech();
+  }, [cancelSpeech]);
+
+  /**
+   * Mark input mode as 'text' — call this when the user types.
+   * Also cancels any ongoing speech since user switched to text.
+   */
+  const markTextInput = useCallback(() => {
+    setLastInputMode('text');
+    cancelSpeech();
+  }, [cancelSpeech]);
+
+  /**
+   * Mark input mode as 'voice' — called internally when mic starts.
+   */
+  const markVoiceInput = useCallback(() => {
+    setLastInputMode('voice');
+  }, []);
+
+  /**
+   * Check whether the bot should speak a reply.
+   * Rules: (lastInputMode === 'voice') AND speakerEnabled AND !privacyMode AND synthAvailable
+   */
+  const shouldSpeak = useCallback(() => {
+    return lastInputMode === 'voice' && speakerEnabled && !privacyMode && synthAvailable;
+  }, [lastInputMode, speakerEnabled, privacyMode, synthAvailable]);
 
   return {
     lang,
@@ -143,6 +201,7 @@ export function useSpeech(initialLang = 'en-IN') {
     toggleListening,
     speak,
     stopSpeaking,
+    cancelSpeech,
     isSpeaking,
     speechRate,
     setSpeechRate,
@@ -150,6 +209,13 @@ export function useSpeech(initialLang = 'en-IN') {
     setPrivacyMode,
     isTypingMode,
     setIsTypingMode,
-    supportMessage
+    supportMessage,
+    speakerEnabled,
+    setSpeakerEnabled,
+    lastInputMode,
+    setLastInputMode,
+    markTextInput,
+    markVoiceInput,
+    shouldSpeak
   };
 }

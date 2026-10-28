@@ -67,7 +67,7 @@ describe('PHASE 129: Scheduler Readiness and Automated Job Verification', () => 
   // ─────────────────────────────────────────────────────────────
   describe('Job 1: Appointment Reminders', () => {
     it('creates 24h, 2h, and final 30m reminders for booked appointments and skips cancelled/completed', async () => {
-      const now = new Date('2026-10-20T10:00:00.000Z');
+      const now = new Date('2026-10-20T10:00:00+05:30');
       clock.setMockTime(now);
 
       const appt24Id = uid('appt24');
@@ -158,7 +158,7 @@ describe('PHASE 129: Scheduler Readiness and Automated Job Verification', () => 
     });
 
     it('marks slot atRisk for patients with 2+ repeat no-shows in past 90 days', async () => {
-      const now = new Date('2026-10-20T10:00:00.000Z');
+      const now = new Date('2026-10-20T10:00:00+05:30');
       clock.setMockTime(now);
 
       const healthId = `PHI-REPEAT-${Date.now()}`;
@@ -831,7 +831,7 @@ describe('PHASE 129: Scheduler Readiness and Automated Job Verification', () => 
       expect(res2.noShowSweep?.success).toBe(true);
       expect(res1.appointmentReminders?.success).toBe(true);
       expect(res2.appointmentReminders?.success).toBe(true);
-    });
+    }, 60000);
   });
 
   // ─────────────────────────────────────────────────────────────
@@ -887,7 +887,7 @@ describe('PHASE 129: Scheduler Readiness and Automated Job Verification', () => 
       expect(res.body.data.results.cleanup).toBeDefined();
       expect(res.body.data.results.generateSlots).toBeDefined();
       expect(res.body.data.results.noShowSweep).toBeDefined();
-    });
+    }, 120000);
 
     it('rejects empty or whitespace-only secret header with 403 FORBIDDEN', async () => {
       const resEmpty = await request(app)

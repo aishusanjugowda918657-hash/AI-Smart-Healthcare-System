@@ -144,7 +144,7 @@ describe('Phase 16 - Family Members & Dependents API Verification', () => {
     expect(res.body.data.relationship).toBe('Son');
     expect(res.body.data.primaryAccountUid).toBe('demo-patient-001');
     expect(res.body.data.isDependent).toBe(true);
-    expect(res.body.data.patientHealthId).toMatch(/^(PHI|HID)-\d{4}-[0-9A-Z]{5,6}(-[0-9A-Z])?$/);
+    expect(res.body.data.patientHealthId).toMatch(/^(PHI|HID|SCAI)-\d{4}-[0-9A-Z]{5,6}(-[0-9A-Z])?$/);
 
     createdDependentHealthId = res.body.data.patientHealthId;
     createdDependentId = res.body.data.patientUid;

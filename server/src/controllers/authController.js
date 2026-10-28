@@ -177,6 +177,16 @@ export const getMe = async (req, res, next) => {
       .limit(1)
       .get();
 
+    let selfPatient = null;
+    if (!patientSnap.empty) {
+      selfPatient = { id: patientSnap.docs[0].id, ...patientSnap.docs[0].data() };
+    } else {
+      const directPatientDoc = await db.collection('patients').doc(uid).get();
+      if (directPatientDoc.exists) {
+        selfPatient = { id: directPatientDoc.id, ...directPatientDoc.data() };
+      }
+    }
+
     let doctorDisplayId = userData.displayId || userData.doctorDisplayId || null;
     let resolvedDoctorId = userData.doctorId || null;
     if (userData.role === 'doctor' || userData.doctorId) {

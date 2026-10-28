@@ -208,8 +208,8 @@ describe('Queue Stale Appointment Lifecycle & Leave Home Removal Regression Test
 
   // 2. A same-day appointment whose grace period has expired
   it('2. A same-day appointment whose grace period has expired without check-in is transitioned and removed', async () => {
-    // Current time: 10:15 AM IST
-    const currentMockTime = dayjs.tz('2026-10-22 10:15', HOSPITAL_TZ).toDate();
+    // Current time: 11:05 AM IST (65 mins past 10:00 AM slot -> silent no-show window expired)
+    const currentMockTime = dayjs.tz('2026-10-22 11:05', HOSPITAL_TZ).toDate();
     clock.setMockTime(currentMockTime);
 
     const apptId = 'APT-TODAY-EXPIRED';

@@ -569,8 +569,57 @@ export async function recalculateQueue(doctorId, date) {
     updatedCount++;
   }
 
+  // PRD F6 & F8: Dispatch notifications for upcoming turns and wait-time changes into writesBatch
+  for (const push of pushes) {
+    const receiverUid = push.patientUid || push.ownerUid;
+    if (!receiverUid) continue;
+
+    const patientName = push.patientName || 'Patient';
+    if (push.isUpcomingTurn) {
+      try {
+        await notify({
+          uids: [receiverUid],
+          title: `${patientName}: Your turn is coming up soon!`,
+          body: `Token ${push.tokenLabel}: You are #${push.position} in line. Estimated wait: ${push.waitMinLow}-${push.waitMinHigh} mins. Please head near the clinic room.`,
+          privacyBody: `${patientName}: Your turn is coming up soon`,
+          type: 'QUEUE_UPCOMING_TURN',
+          urgent: true,
+          groupKey: `upcoming_${push.appointmentId}_pos${push.position}`,
+          data: {
+            appointmentId: push.appointmentId,
+            position: String(push.position),
+            waitMinLow: String(push.waitMinLow),
+            waitMinHigh: String(push.waitMinHigh)
+          },
+          batch: writesBatch
+        });
+      } catch (notifErr) {
+        console.warn('Upcoming turn notify warning:', notifErr.message);
+      }
+    } else if (push.isWaitTimeChange) {
+      try {
+        await notify({
+          uids: [receiverUid],
+          title: `${patientName}: Queue wait-time update`,
+          body: `Token ${push.tokenLabel}: Estimated wait is now ${push.waitMinLow}-${push.waitMinHigh} mins${push.reasonText ? ` (${push.reasonText})` : ''}.`,
+          privacyBody: `${patientName}: Queue wait-time update`,
+          type: 'QUEUE_WAIT_TIME_CHANGED',
+          groupKey: `wait_${push.appointmentId}`,
+          data: {
+            appointmentId: push.appointmentId,
+            waitMinLow: String(push.waitMinLow),
+            waitMinHigh: String(push.waitMinHigh)
+          },
+          batch: writesBatch
+        });
+      } catch (notifErr) {
+        console.warn('Wait time change notify warning:', notifErr.message);
+      }
+    }
+  }
+
   // 7. Commit batch writes if any changed
-  if (updatedCount > 0) {
+  if (updatedCount > 0 || pushes.length > 0) {
     await writesBatch.commit();
   }
 
@@ -615,53 +664,6 @@ export async function recalculateQueue(doctorId, date) {
           }).catch(err => console.warn('Background summary pre-generation notice:', err.message));
         })
         .catch(() => {});
-    }
-  }
-
-  // PRD F6 & F8: Dispatch notifications for upcoming turns and wait-time changes
-  for (const push of pushes) {
-    const receiverUid = push.patientUid || push.ownerUid;
-    if (!receiverUid) continue;
-
-    const patientName = push.patientName || 'Patient';
-    if (push.isUpcomingTurn) {
-      try {
-        await notify({
-          uids: [receiverUid],
-          title: `${patientName}: Your turn is coming up soon!`,
-          body: `Token ${push.tokenLabel}: You are #${push.position} in line. Estimated wait: ${push.waitMinLow}-${push.waitMinHigh} mins. Please head near the clinic room.`,
-          privacyBody: `${patientName}: Your turn is coming up soon`,
-          type: 'QUEUE_UPCOMING_TURN',
-          urgent: true,
-          groupKey: `upcoming_${push.appointmentId}_pos${push.position}`,
-          data: {
-            appointmentId: push.appointmentId,
-            position: String(push.position),
-            waitMinLow: String(push.waitMinLow),
-            waitMinHigh: String(push.waitMinHigh)
-          }
-        });
-      } catch (notifErr) {
-        console.warn('Upcoming turn notify warning:', notifErr.message);
-      }
-    } else if (push.isWaitTimeChange) {
-      try {
-        await notify({
-          uids: [receiverUid],
-          title: `${patientName}: Queue wait-time update`,
-          body: `Token ${push.tokenLabel}: Estimated wait is now ${push.waitMinLow}-${push.waitMinHigh} mins${push.reasonText ? ` (${push.reasonText})` : ''}.`,
-          privacyBody: `${patientName}: Queue wait-time update`,
-          type: 'QUEUE_WAIT_TIME_CHANGED',
-          groupKey: `wait_${push.appointmentId}`,
-          data: {
-            appointmentId: push.appointmentId,
-            waitMinLow: String(push.waitMinLow),
-            waitMinHigh: String(push.waitMinHigh)
-          }
-        });
-      } catch (notifErr) {
-        console.warn('Wait time change notify warning:', notifErr.message);
-      }
     }
   }
 

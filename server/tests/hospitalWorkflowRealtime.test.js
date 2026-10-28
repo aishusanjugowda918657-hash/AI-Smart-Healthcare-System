@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import request from 'supertest';
 import app from '../src/app.js';
 import { processNoShowsAndReminders } from '../src/services/schedulerService.js';
@@ -21,6 +21,23 @@ describe('Hospital Real-Time Workflow & No-Show Engine Integration Tests', () =>
       role: 'doctor',
       doctorId: 'DOC-001'
     }, { merge: true });
+  });
+
+  beforeEach(async () => {
+    db = assertDbConnected();
+    const testPatients = ['noshow-patient-001', 'rx-test-patient-001'];
+    for (const p of testPatients) {
+      const appts = await db.collection('appointments').where('patientUid', '==', p).get();
+      for (const d of appts.docs) await d.ref.delete();
+      const locks = await db.collection('appointment_locks').where('patientUid', '==', p).get();
+      for (const d of locks.docs) await d.ref.delete();
+    }
+    const allLocks = await db.collection('appointment_locks').get();
+    for (const d of allLocks.docs) {
+      if (d.id.includes('noshow-patient-001') || d.id.includes('rx-test-patient-001')) {
+        await d.ref.delete().catch(() => {});
+      }
+    }
   });
 
   afterAll(async () => {

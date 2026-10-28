@@ -1,23 +1,27 @@
-import React, { useState } from 'react';
-import { Bot, Send, ShieldAlert, Sparkles, User, RefreshCw, Mic, MicOff, Volume2, VolumeX, Eye, EyeOff, CheckCircle2 } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Bot, Send, ShieldAlert, Sparkles, User, RefreshCw, Mic, MicOff, Volume2, VolumeX, Eye, EyeOff, CheckCircle2, Square } from 'lucide-react';
 import { AI_DISCLAIMER_TEXT } from '../utils/constants';
 import { useSpeech } from '../hooks/useSpeech';
 import API from '../services/api';
 import MarkdownRenderer from '../components/common/MarkdownRenderer';
 
 export const ChatbotPage = () => {
+  const navigate = useNavigate();
   const [messages, setMessages] = useState([
     {
       id: 'msg-1',
       sender: 'ai',
-      text: "Hello! I am your AI Smart Healthcare Assistant. I can help answer hospital questions, check queue token status, and guide booking.\n\nAI assistant. It does not give medical advice."
+      text: "Hello! I am your AI Smart Healthcare Assistant. I can help answer hospital questions, check queue token status, and guide booking.\n\nAI assistant. It does not give medical advice.",
+      inputMode: 'text' // initial message, no voice
     }
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [selectedLang, setSelectedLang] = useState('en-IN');
-  const [pendingConfirm, setPendingConfirm] = useState(null); // { confirmToken, summary, message }
+  const [pendingConfirm, setPendingConfirm] = useState(null);
   const [disclaimerChecked, setDisclaimerChecked] = useState(false);
+  const messagesEndRef = useRef(null);
 
   const {
     isListening,
@@ -27,13 +31,21 @@ export const ChatbotPage = () => {
     speak,
     isSpeaking,
     stopSpeaking,
+    cancelSpeech,
     speechRate,
     setSpeechRate,
     privacyMode,
     setPrivacyMode,
     isTypingMode,
     setIsTypingMode,
-    supportMessage
+    supportMessage,
+    speakerEnabled,
+    setSpeakerEnabled,
+    lastInputMode,
+    setLastInputMode,
+    markTextInput,
+    markVoiceInput,
+    shouldSpeak
   } = useSpeech(selectedLang);
 
   const quickChips = [
@@ -43,39 +55,66 @@ export const ChatbotPage = () => {
     { label: 'Talk to Staff', text: 'Talk to Staff' }
   ];
 
-  const handleSendMessage = async (textToSend) => {
+  // Auto-scroll to bottom on new messages
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, loading]);
+
+  // Cancel speech on page unmount / navigation
+  useEffect(() => {
+    return () => {
+      cancelSpeech();
+    };
+  }, [cancelSpeech]);
+
+  /**
+   * Send a message. inputModeOverride can be 'text' (for chips), 'voice', or auto-detected.
+   */
+  const handleSendMessage = async (textToSend, inputModeOverride) => {
     const query = textToSend || transcript || input;
     if (!query.trim()) return;
 
-    const userMsg = { id: `user-${Date.now()}`, sender: 'user', text: query };
+    // Determine input mode for this message
+    const mode = inputModeOverride || (transcript && transcript.trim() === query.trim() ? 'voice' : 'text');
+
+    // Cancel any ongoing speech when sending a new message
+    cancelSpeech();
+
+    const userMsg = { id: `user-${Date.now()}`, sender: 'user', text: query, inputMode: mode };
     setMessages((prev) => [...prev, userMsg]);
     setInput('');
     setTranscript('');
+    setLastInputMode(mode);
     setLoading(true);
 
     try {
       const res = await API.post('/ai/chat', {
         message: query,
         language: selectedLang.split('-')[0],
+        inputMode: mode, // sent to server (server ignores for logic, only a UI hint)
         history: messages.map(m => ({ role: m.sender === 'user' ? 'user' : 'model', text: m.text }))
       });
 
       const data = res.data;
       const aiResponse = data.message || data.response || 'How else can I assist you?';
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `ai-${Date.now()}`,
-          sender: 'ai',
-          text: aiResponse,
-          quickChips: data.quickChips || null,
-          isEmergency: data.isEmergency || false
-        }
-      ]);
+      const aiMsg = {
+        id: `ai-${Date.now()}`,
+        sender: 'ai',
+        text: aiResponse,
+        quickChips: data.quickChips || null,
+        actionButtons: data.actionButtons || null,
+        isEmergency: data.isEmergency || false,
+        aiSource: data.aiSource || null,
+        inputMode: mode // remember what triggered this reply
+      };
 
-      // Speak response unless privacy mode active
-      speak(aiResponse);
+      setMessages((prev) => [...prev, aiMsg]);
+
+      // VOICE RULE: Speak ONLY if the user used the mic AND speaker is enabled AND not privacy mode
+      if (mode === 'voice' && speakerEnabled && !privacyMode) {
+        speak(aiResponse);
+      }
 
       if (data.confirmToken) {
         setPendingConfirm({
@@ -93,12 +132,47 @@ export const ChatbotPage = () => {
         {
           id: `ai-${Date.now()}`,
           sender: 'ai',
-          text: fallbackText
+          text: fallbackText,
+          inputMode: mode
         }
       ]);
-      speak(fallbackText);
+      // Only speak fallback if voice mode
+      if (mode === 'voice' && speakerEnabled && !privacyMode) {
+        speak(fallbackText);
+      }
     } finally {
       setLoading(false);
+    }
+  };
+
+  /**
+   * Quick chips are text actions — never speak.
+   */
+  const handleQuickChip = (chipText) => {
+    cancelSpeech();
+    handleSendMessage(chipText, 'text');
+  };
+
+  /**
+   * Action button click — navigate to route.
+   */
+  const handleActionButton = (route) => {
+    cancelSpeech();
+    if (route) {
+      navigate(route);
+    }
+  };
+
+  /**
+   * Handle typing in the input field — marks text mode and cancels speech.
+   */
+  const handleInputChange = (e) => {
+    const val = e.target.value;
+    setInput(val);
+    setTranscript(val);
+    // If user starts typing after mic, switch to text mode and cancel speech
+    if (lastInputMode === 'voice') {
+      markTextInput();
     }
   };
 
@@ -118,10 +192,11 @@ export const ChatbotPage = () => {
         {
           id: `ai-${Date.now()}`,
           sender: 'ai',
-          text: `✅ ${confirmText}`
+          text: `✅ ${confirmText}`,
+          inputMode: 'text'
         }
       ]);
-      speak(confirmText);
+      // Confirmation is a text action, never auto-speak
       setPendingConfirm(null);
       setDisclaimerChecked(false);
     } catch (err) {
@@ -129,6 +204,15 @@ export const ChatbotPage = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  /**
+   * Clear chat & cancel speech
+   */
+  const handleClearChat = () => {
+    cancelSpeech();
+    setMessages([messages[0]]);
+    setPendingConfirm(null);
   };
 
   return (
@@ -158,9 +242,24 @@ export const ChatbotPage = () => {
             <option value="ta-IN" className="text-slate-900">தமிழ் (Tamil)</option>
           </select>
 
+          {/* Speaker Toggle */}
+          <button
+            onClick={() => {
+              setSpeakerEnabled(!speakerEnabled);
+              if (speakerEnabled) cancelSpeech(); // turning off → stop any active speech
+            }}
+            title={speakerEnabled ? "Speaker On (click to mute)" : "Speaker Off (click to unmute)"}
+            className={`p-2 rounded-xl text-xs flex items-center transition-colors ${speakerEnabled ? 'bg-white/10 hover:bg-white/20 text-white' : 'bg-rose-500 text-white'}`}
+          >
+            {speakerEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+          </button>
+
           {/* Privacy Toggle */}
           <button
-            onClick={() => setPrivacyMode(!privacyMode)}
+            onClick={() => {
+              setPrivacyMode(!privacyMode);
+              if (!privacyMode) cancelSpeech(); // turning on privacy → stop speech
+            }}
             title={privacyMode ? "Privacy Mode Active (Silent)" : "Privacy Mode Off (Speak Aloud)"}
             className={`p-2 rounded-xl text-xs flex items-center transition-colors ${privacyMode ? 'bg-amber-400 text-slate-900' : 'bg-white/10 hover:bg-white/20 text-white'}`}
           >
@@ -169,7 +268,7 @@ export const ChatbotPage = () => {
 
           {/* Clear Chat */}
           <button
-            onClick={() => { setMessages([messages[0]]); setPendingConfirm(null); }}
+            onClick={handleClearChat}
             className="p-2 bg-white/10 hover:bg-white/20 rounded-xl text-xs flex items-center transition-colors"
           >
             <RefreshCw className="w-4 h-4" />
@@ -217,16 +316,62 @@ export const ChatbotPage = () => {
               ) : (
                 m.text
               )}
+
+              {/* Action Buttons (from help library) */}
+              {m.sender === 'ai' && m.actionButtons && m.actionButtons.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {m.actionButtons.map((btn, i) => (
+                    <button
+                      key={i}
+                      onClick={() => handleActionButton(btn.route)}
+                      className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white text-[11px] font-bold rounded-lg transition-colors shadow-sm"
+                    >
+                      {btn.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Dynamic Quick Chips from server response */}
+              {m.sender === 'ai' && m.quickChips && m.quickChips.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {m.quickChips.map((chip, i) => (
+                    <button
+                      key={i}
+                      onClick={() => handleQuickChip(chip.label)}
+                      className="px-2.5 py-1 bg-white hover:bg-teal-50 text-teal-700 text-[10px] font-semibold border border-teal-200 rounded-full transition-colors"
+                    >
+                      {chip.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               {m.sender === 'ai' && (
                 <div className="mt-2 pt-2 border-t border-slate-200/60 flex items-center justify-between text-[10px] text-slate-400">
                   <span>Non-clinical informational reply</span>
-                  <button
-                    onClick={() => speak(m.text)}
-                    className="hover:text-teal-600 flex items-center space-x-1"
-                  >
-                    <Volume2 className="w-3 h-3" />
-                    <span>Listen</span>
-                  </button>
+                  <div className="flex items-center space-x-2">
+                    {/* Listen button (manual re-listen) */}
+                    <button
+                      onClick={() => speak(m.text)}
+                      className="hover:text-teal-600 flex items-center space-x-1"
+                      title="Listen to this reply"
+                    >
+                      <Volume2 className="w-3 h-3" />
+                      <span>Listen</span>
+                    </button>
+                    {/* Stop button (when speaking) */}
+                    {isSpeaking && (
+                      <button
+                        onClick={cancelSpeech}
+                        className="hover:text-rose-600 flex items-center space-x-1"
+                        title="Stop speaking"
+                      >
+                        <Square className="w-3 h-3" />
+                        <span>Stop</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -283,6 +428,7 @@ export const ChatbotPage = () => {
             </div>
           </div>
         )}
+        <div ref={messagesEndRef} />
       </div>
 
       {/* Quick Chips */}
@@ -290,7 +436,7 @@ export const ChatbotPage = () => {
         {quickChips.map((qc, idx) => (
           <button
             key={idx}
-            onClick={() => handleSendMessage(qc.text)}
+            onClick={() => handleQuickChip(qc.text)}
             className="px-3.5 py-1.5 bg-white hover:bg-teal-50 hover:text-teal-700 text-slate-700 text-[11px] font-bold border border-slate-200 rounded-full transition-colors shadow-xs"
           >
             {qc.label}
@@ -334,7 +480,7 @@ export const ChatbotPage = () => {
           <input
             type="text"
             value={transcript || input}
-            onChange={(e) => { setInput(e.target.value); setTranscript(e.target.value); }}
+            onChange={handleInputChange}
             placeholder="Type or tap mic to speak..."
             className="flex-1 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-teal-500 focus:bg-white"
           />

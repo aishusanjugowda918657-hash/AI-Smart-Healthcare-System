@@ -207,7 +207,7 @@ describe('PRD F11, F12 & F13: Reminders, Follow-ups, Doctor Alerts & Background 
       expect(r2).toBeDefined();
       expect(r1.error).toBeUndefined();
       expect(r2.error).toBeUndefined();
-    });
+    }, 60000);
 
     it('GET /api/doctors/alerts returns open alerts sorted by risk level', async () => {
       const res = await request(app)

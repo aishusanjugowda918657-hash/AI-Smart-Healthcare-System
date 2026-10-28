@@ -8,9 +8,10 @@ describe('Appointment Persistence & Cancellation Regression', () => {
   let testPatientUid = 'test-patient-persist';
   let slotId;
 
+  let testDate = '2026-11-01';
+
   beforeEach(async () => {
     db = assertDbConnected();
-    const today = new Date().toISOString().split('T')[0];
     slotId = `test_slot_${Date.now()}`;
 
     // Seed doctor record with identity mapping
@@ -54,14 +55,14 @@ describe('Appointment Persistence & Cancellation Regression', () => {
     for (const doc of locksSnap.docs) {
       await doc.ref.delete();
     }
-    await db.collection('appointment_locks').doc(`dup_HID-001_dr-test-001_${today}`).delete().catch(() => {});
-    await db.collection('appointment_locks').doc(`dup_HID-002_dr-test-001_${today}`).delete().catch(() => {});
-    await db.collection('appointment_locks').doc(`dup_${testPatientUid}_dr-test-001-uid_${today}`).delete().catch(() => {});
+    await db.collection('appointment_locks').doc(`dup_HID-001_dr-test-001_${testDate}`).delete().catch(() => {});
+    await db.collection('appointment_locks').doc(`dup_HID-002_dr-test-001_${testDate}`).delete().catch(() => {});
+    await db.collection('appointment_locks').doc(`dup_${testPatientUid}_dr-test-001-uid_${testDate}`).delete().catch(() => {});
 
     await db.collection('slots').doc(slotId).set({
       id: slotId,
       doctorId: 'dr-test-001',
-      date: today,
+      date: testDate,
       startAt: '09:00',
       endAt: '09:30',
       status: 'FREE'
@@ -74,7 +75,7 @@ describe('Appointment Persistence & Cancellation Regression', () => {
       .send({
         doctorId: 'dr-test-001',
         departmentId: 'dept-gen',
-        date: new Date().toISOString().split('T')[0],
+        date: testDate,
         timeSlot: '09:00',
         slotId: slotId,
         patientName: isDependent ? dependentName : 'Test Patient',

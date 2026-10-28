@@ -108,6 +108,14 @@ describe('Prescription Display Formatting & UID Privacy Regression', () => {
     beforeEach(async () => {
       db = assertDbConnected();
 
+      // Clean up previous visits and medical records for this testHealthId
+      for (const col of ['visits', 'medicalRecords']) {
+        const snap1 = await db.collection(col).where('healthId', '==', testHealthId).get();
+        for (const doc of snap1.docs) await doc.ref.delete();
+        const snap2 = await db.collection(col).where('patientHealthId', '==', testHealthId).get();
+        for (const doc of snap2.docs) await doc.ref.delete();
+      }
+
       // Seed doctor profile for Dr. Aarti Sunil Kamath
       await db.collection('doctors').doc(aartiUid).set({
         uid: aartiUid,

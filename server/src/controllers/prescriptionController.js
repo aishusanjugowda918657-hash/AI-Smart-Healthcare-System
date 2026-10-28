@@ -382,7 +382,7 @@ export const createDigitalPrescription = async (req, res, next) => {
       patientName,
       patientAge,
       doctorUid,
-      doctorId: doctorDisplayId || doctorId || doctorUid,
+      doctorId: doctorId || doctorDisplayId || doctorUid,
       doctorDisplayId: doctorDisplayId || 'DOC-GEN-ASK-001',
       doctorName,
       appointmentId: appointmentId || '',
