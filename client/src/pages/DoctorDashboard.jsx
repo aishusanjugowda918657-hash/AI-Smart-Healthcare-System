@@ -387,8 +387,13 @@ export const DoctorDashboard = () => {
                 </p>
               </div>
             ) : (
-              <div className="py-6 text-center text-slate-400">
+              <div className="py-6 text-center text-slate-400 space-y-2">
                 <p className="text-xs">No checked-in patients currently in the waiting queue.</p>
+                {summary?.notArrived > 0 && (
+                  <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 py-1.5 px-3 rounded-lg font-medium inline-block">
+                    {summary.notArrived} scheduled patient{summary.notArrived > 1 ? 's' : ''} awaiting check-in. Go to <Link to="/doctor/queue" className="underline font-bold text-amber-900">Today's Patient Queue</Link> to check them in.
+                  </p>
+                )}
               </div>
             )}
           </div>

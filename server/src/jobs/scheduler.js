@@ -232,6 +232,12 @@ export async function noShowSweepJob({ nowOverride, gracePeriodMinutes = 5 } = {
 
     for (const doc of aptSnap.docs) {
       const apt = doc.data();
+      const statusLower = (apt.status || '').toLowerCase();
+      // An active consultation in room, patient with consultStartAt, or completed visit can never be swept as missed or no-show
+      if (['in_consultation', 'in_room', 'completed'].includes(statusLower) || apt.consultStartAt) {
+        continue;
+      }
+
       const slotTimeStr = apt.timeSlot || apt.bookedStartAt;
       if (!slotTimeStr) continue;
 
@@ -243,7 +249,7 @@ export async function noShowSweepJob({ nowOverride, gracePeriodMinutes = 5 } = {
       const receiverUid = apt.ownerUid || apt.patientUid || apt.patientId;
 
       // B2: Check-in deadline = 10 min before booked time. If not checked in by then -> status not_arrived
-      if (nowMs >= checkinDeadlineMs && ['booked', 'confirmed', 'on_the_way'].includes(apt.status) && !apt.checkedInAt) {
+      if (nowMs >= checkinDeadlineMs && ['booked', 'confirmed', 'on_the_way', 'nearby'].includes(apt.status) && !apt.checkedInAt) {
         batch.update(doc.ref, {
           status: 'not_arrived',
           notArrivedAt: now,
@@ -319,9 +325,30 @@ export async function noShowSweepJob({ nowOverride, gracePeriodMinutes = 5 } = {
         }
       }
 
-      // B8: Silent no-show: 60 minutes passed after booked time
+      // Rule B8: Silent no-show: 60 minutes passed after booked time
       const sixtyMinPastMs = apptTimeMs + 60 * 60 * 1000;
-      if (nowMs > sixtyMinPastMs && ['booked', 'confirmed', 'not_arrived', 'late', 'missed', 'waiting'].includes(apt.status)) {
+      const isEmergencyPatient = apt.clinicalLevel === 3 || apt.urgency === 'emergency' || apt.urgencySuggested === 'emergency' || apt.priorityCategory === 'EMERGENCY';
+
+      if (nowMs > sixtyMinPastMs && isEmergencyPatient && !apt.checkedInAt) {
+        // Clinical Safety: Emergency patients follow authorized clinical priority and must NEVER be automatically cancelled or marked as no-show
+        if (!apt.emergencyAlertSent) {
+          const alertId = `alert_emergency_unattended_${doc.id}_${nowMs}`;
+          batch.set(db.collection('alerts').doc(alertId), {
+            id: alertId,
+            appointmentId: doc.id,
+            patientHealthId: apt.patientHealthId || apt.healthId || apt.patientUid || 'UNKNOWN',
+            patientName: patientName || 'Patient',
+            kind: 'emergency_unattended',
+            reasons: [`Emergency patient (${patientName}) has not checked in 60+ minutes past scheduled time`],
+            status: 'open',
+            createdAt: now
+          });
+          batch.update(doc.ref, { emergencyAlertSent: true, updatedAt: now });
+        }
+        continue;
+      }
+
+      if (nowMs > sixtyMinPastMs && ['booked', 'confirmed', 'not_arrived', 'late', 'missed', 'waiting', 'on_the_way', 'nearby'].includes(apt.status) && !apt.checkedInAt) {
         batch.update(doc.ref, {
           status: 'no_show',
           noShowAt: now,
@@ -518,12 +545,13 @@ export async function appointmentRemindersJob({ nowOverride } = {}) {
     const now = nowOverride ? new Date(nowOverride) : clock.now();
     const nowMs = now.getTime();
 
-    const [bookedSnap, confirmedSnap] = await Promise.all([
+    const [bookedSnap, confirmedSnap, notArrivedSnap] = await Promise.all([
       db.collection('appointments').where('status', '==', 'booked').limit(200).get(),
       db.collection('appointments').where('status', '==', 'confirmed').limit(100).get(),
+      db.collection('appointments').where('status', '==', 'not_arrived').limit(100).get(),
     ]);
 
-    const allDocs = [...bookedSnap.docs, ...confirmedSnap.docs];
+    const allDocs = [...bookedSnap.docs, ...confirmedSnap.docs, ...notArrivedSnap.docs];
 
     if (allDocs.length === 0) {
       return { success: true, remindersCreated: 0 };
@@ -546,11 +574,69 @@ export async function appointmentRemindersJob({ nowOverride } = {}) {
       const diffHours = diffMs / (1000 * 60 * 60);
       const diffMins = diffMs / (1000 * 60);
 
-      // Do not schedule reminders for past appointments
-      if (diffMs <= 0) continue;
-
       const receiverUids = [apt.ownerUid || apt.patientUid || apt.patientId].filter(Boolean);
       const patientName = apt.patientName || 'Patient';
+      const isCheckedInOrActive = !!apt.checkedInAt || ['checked_in', 'waiting', 'called', 'in_room', 'in_consultation', 'completed', 'cancelled', 'no_show'].includes((apt.status || '').toLowerCase());
+
+      // Reconcile and cancel stale pending reminders if appointment is already resolved or checked in
+      if (isCheckedInOrActive) {
+        try {
+          const remSnap = await db.collection('reminders')
+            .where('appointmentId', '==', doc.id)
+            .where('status', '==', 'pending')
+            .get();
+          if (!remSnap.empty) {
+            remSnap.docs.forEach((d) => batch.update(d.ref, { status: 'cancelled', cancelledReason: 'appointment_active_or_resolved', updatedAt: now }));
+          }
+        } catch (_) {}
+      }
+
+      // Check-in notifications for unchecked-in patients (At Appointment Time & Overdue)
+      if (!isCheckedInOrActive) {
+        // At appointment time: between 5 minutes before and up to 10 minutes past slot time
+        if (diffMins <= 5 && diffMins >= -10 && !apt.checkinAtTimeReminderSent) {
+          if (receiverUids.length > 0) {
+            try {
+              await notify({
+                uids: receiverUids,
+                title: `${patientName}: Appointment time now — Please check in`,
+                body: `Your appointment with ${apt.doctorName || 'Doctor'} scheduled for ${slotTime} is starting now. Please check in to enter the queue.`,
+                privacyBody: `${patientName}: Please check in for your appointment`,
+                type: 'CHECKIN_REMINDER',
+                data: { appointmentId: doc.id, scheduledTime: slotTime, checkinRequired: true }
+              });
+            } catch (e) {
+              console.warn('At-time check-in notify warning:', e.message);
+            }
+          }
+          batch.update(doc.ref, { checkinAtTimeReminderSent: true, updatedAt: now });
+          remindersCreated++;
+        }
+
+        // Overdue check-in notification: > 10 minutes past slot time, up to 60 minutes
+        if (diffMins < -10 && diffMins >= -60 && !apt.checkinOverdueReminderSent) {
+          const minsOverdue = Math.round(Math.abs(diffMins));
+          if (receiverUids.length > 0) {
+            try {
+              await notify({
+                uids: receiverUids,
+                title: `${patientName}: Appointment overdue — Please check in now`,
+                body: `Your appointment scheduled for ${slotTime} was at ${slotTime} (${minsOverdue} mins ago). Please check in now to keep your place in queue.`,
+                privacyBody: `${patientName}: Appointment overdue — check in now`,
+                type: 'CHECKIN_OVERDUE',
+                data: { appointmentId: doc.id, scheduledTime: slotTime, minutesOverdue: minsOverdue, checkinRequired: true }
+              });
+            } catch (e) {
+              console.warn('Overdue check-in notify warning:', e.message);
+            }
+          }
+          batch.update(doc.ref, { checkinOverdueReminderSent: true, updatedAt: now });
+          remindersCreated++;
+        }
+      }
+
+      // Future reminders (24h, 2h, final) ONLY apply when appointment start time is still in the future
+      if (diffMs <= 0) continue;
 
       // 24h Reminder (between 23h and 25h before) - Rule B1: Confirm, Reschedule
       // Overdue policy: If between 12h and 26h before and unsent, send. If < 12h, expire 24h reminder to avoid confusing patient on the day of appointment.

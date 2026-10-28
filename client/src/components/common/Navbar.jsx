@@ -1,16 +1,13 @@
 import React, { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { useNotifications } from '../../context/NotificationContext';
-import { Activity, Bell, LogOut, Bot, Menu, X } from 'lucide-react';
-import Badge from './Badge';
+import { Activity, LogOut, Bot, Menu, X } from 'lucide-react';
+import NotificationBell from './NotificationBell';
 
 import { ROLE_ROUTES } from '../../config/roles';
 
 export const Navbar = ({ onToggleMobileMenu, mobileMenuOpen = false }) => {
   const { currentUser, userRole, loginSynced, patientProfile, logout } = useAuth();
-  const { notifications, unreadCount, markAsRead, markRead, markAllRead } = useNotifications();
-  const [showNotifMenu, setShowNotifMenu] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -80,66 +77,8 @@ export const Navbar = ({ onToggleMobileMenu, mobileMenuOpen = false }) => {
               </Link>
             )}
 
-            {/* Notifications Dropdown */}
-            <div className="relative">
-              <button
-                onClick={() => setShowNotifMenu(!showNotifMenu)}
-                className="relative p-2 text-slate-600 hover:text-indigo-600 hover:bg-slate-100 rounded-xl transition-colors"
-              >
-                <Bell className="w-5 h-5" />
-                {unreadCount > 0 && (
-                  <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-rose-500 animate-pulse"></span>
-                )}
-              </button>
-
-              {showNotifMenu && (
-                <div className="absolute right-0 mt-2 w-80 bg-white rounded-2xl shadow-xl border border-slate-200 p-4 z-50 animate-in fade-in slide-in-from-top-2">
-                  <div className="flex items-center justify-between pb-2 border-b border-slate-100 mb-2">
-                    <h4 className="font-bold text-xs text-slate-800 uppercase tracking-wider">Notifications</h4>
-                    <div className="flex items-center gap-2">
-                      <Badge variant="primary">{unreadCount} New</Badge>
-                      {unreadCount > 0 && (
-                        <button
-                          onClick={markAllRead}
-                          className="text-[10px] text-indigo-600 hover:text-indigo-800 font-semibold cursor-pointer"
-                        >
-                          Mark all read
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="max-h-60 overflow-y-auto divide-y divide-slate-100">
-                    {notifications.length === 0 ? (
-                      <p className="text-xs text-slate-400 py-4 text-center">No notifications yet.</p>
-                    ) : (
-                      notifications.map((n) => (
-                        <div
-                          key={n.id}
-                          className={`py-2 px-1 flex items-center justify-between gap-2 hover:bg-slate-50 transition-colors ${!n.read ? 'bg-indigo-50/50' : ''}`}
-                        >
-                          <div className="flex-1">
-                            <p className="text-xs font-semibold text-slate-800">{n.title}</p>
-                            <p className="text-[11px] text-slate-500 line-clamp-2">{n.message}</p>
-                          </div>
-                          {!n.read && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                (markRead || markAsRead)(n.id);
-                              }}
-                              className="text-[10px] px-2 py-0.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded font-semibold shrink-0 cursor-pointer"
-                            >
-                              Mark read
-                            </button>
-                          )}
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
+            {/* Readable Notification Center Bell */}
+            <NotificationBell />
 
             {/* User Profile & Logout */}
             <div className="flex items-center space-x-3 border-l border-slate-200 pl-4">

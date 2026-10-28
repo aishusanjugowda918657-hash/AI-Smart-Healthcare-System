@@ -10,7 +10,7 @@ import { recalculateQueue } from '../services/queueService.js';
 import { getGlobalSettings } from '../services/settingsService.js';
 import { notify } from '../services/notify.js';
 import { isTimeOverlapping } from '../utils/time.js';
-import { parseSlotTimeToDate } from '../utils/timezoneDate.js';
+import { parseSlotTimeToDate, getHospitalTodayStr } from '../utils/timezoneDate.js';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
@@ -130,7 +130,7 @@ export const cancelAppointment = async (req, res, next) => {
 
     const now = clock.now();
     const nowMs = now.getTime();
-    const todayStr = now.toISOString().split('T')[0];
+    const todayStr = getHospitalTodayStr(now);
     const isStaff = req.user && ['doctor', 'admin', 'reception', 'nurse'].includes(req.user.role);
 
     if (!isStaff && apt.timeSlot && apt.date) {

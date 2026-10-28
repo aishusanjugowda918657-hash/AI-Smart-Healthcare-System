@@ -150,9 +150,12 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
       if (res.data?.success) {
         setActionMessage('Patient arrived in room. Consultation started.');
         fetchQueue();
+        return true;
       }
+      return false;
     } catch (err) {
       setError(err.response?.data?.message || err.message);
+      return false;
     }
   };
 
@@ -186,6 +189,21 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
       }
     } catch (err) {
       setError(err.response?.data?.message || err.message);
+    }
+  };
+
+  const handleCheckInPatient = async (appointmentId, patientName) => {
+    try {
+      setActionMessage('');
+      const res = await API.post('/checkin/manual', { appointmentId });
+      if (res.data?.success) {
+        setActionMessage(`Checked in ${patientName || 'patient'}. Patient is now in the Ready Queue!`);
+        fetchQueue();
+      } else {
+        setError(res.data?.error?.message || 'Failed to check in patient');
+      }
+    } catch (err) {
+      setError(err.response?.data?.message || err.message || 'Check-in failed');
     }
   };
 
@@ -481,10 +499,21 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
                   {currentConsultation.status === 'called' ? (
                     <div className="space-y-2">
                       <button
-                        onClick={() => handleStartConsultation(currentConsultation.id)}
+                        onClick={async () => {
+                          const ok = await handleStartConsultation(currentConsultation.id);
+                          if (ok) {
+                            navigate(`/doctor/consultation/${currentConsultation.id}`, { state: { ...currentConsultation, status: 'in_consultation' } });
+                          }
+                        }}
                         className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg shadow transition text-center flex items-center justify-center gap-1.5"
                       >
-                        <span>✓ Patient Arrived (Start Consultation)</span>
+                        <span>✓ Patient Arrived (Start Consultation & Workspace)</span>
+                      </button>
+                      <button
+                        onClick={() => navigate(`/doctor/consultation/${currentConsultation.id}`, { state: { ...currentConsultation } })}
+                        className="w-full py-1 text-slate-500 hover:text-slate-800 text-[11px] font-medium transition text-center underline"
+                      >
+                        Open Clinical Workspace (Review records only)
                       </button>
                       <div className="flex gap-2">
                         <button
@@ -799,12 +828,21 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
                     const patientDisplayName = pt.patientName || pt.patientHealthId || 'Patient';
                     const scheduledTime = pt.timeSlot || pt.bookedStartAt || 'Scheduled';
                     return (
-                      <div key={pt.id} className="py-2 flex items-center justify-between text-xs hover:bg-slate-50 px-1 rounded transition-colors">
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-semibold text-slate-800 font-mono">{tokenText}</span>
-                          <span className="text-slate-600 ml-1">{patientDisplayName}</span>
+                      <div key={pt.id} className="py-2.5 flex items-center justify-between text-xs hover:bg-slate-50 px-2 rounded-lg transition-colors border border-transparent hover:border-slate-100">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-slate-800 font-mono bg-slate-100 px-1.5 py-0.5 rounded">{tokenText}</span>
+                          <span className="text-slate-700 font-medium ml-1">{patientDisplayName}</span>
                         </div>
-                        <span className="text-slate-400 font-mono">🕒 {scheduledTime}</span>
+                        <div className="flex items-center gap-2.5">
+                          <span className="text-slate-400 font-mono text-[11px]">🕒 {scheduledTime}</span>
+                          <button
+                            onClick={() => handleCheckInPatient(pt.id, pt.patientName)}
+                            className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 font-bold text-[11px] rounded-lg transition flex items-center gap-1 shadow-xs"
+                            title="Mark patient as checked-in to move them to the Ready Queue"
+                          >
+                            <span>✓ Check In</span>
+                          </button>
+                        </div>
                       </div>
                     );
                   })}
@@ -828,14 +866,23 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
                     const tokenText = pt.tokenLabel || (pt.tokenNumber ? `Token #${pt.tokenNumber}` : pt.id);
                     const patientDisplayName = pt.patientName || pt.patientHealthId || 'Patient';
                     return (
-                      <div key={pt.id} className="py-2 flex items-center justify-between text-xs hover:bg-rose-50/50 px-1 rounded transition-colors">
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-semibold text-rose-800 font-mono">{tokenText}</span>
-                          <span className="text-slate-600 ml-1">{patientDisplayName}</span>
+                      <div key={pt.id} className="py-2.5 flex items-center justify-between text-xs hover:bg-rose-50/50 px-2 rounded-lg transition-colors border border-transparent hover:border-rose-100">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-rose-800 font-mono bg-rose-50 px-1.5 py-0.5 rounded">{tokenText}</span>
+                          <span className="text-slate-700 font-medium ml-1">{patientDisplayName}</span>
                         </div>
-                        <span className="px-1.5 py-0.5 bg-rose-100 text-rose-700 text-[10px] font-bold rounded">
-                          LATE
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="px-1.5 py-0.5 bg-rose-100 text-rose-700 text-[10px] font-bold rounded">
+                            LATE
+                          </span>
+                          <button
+                            onClick={() => handleCheckInPatient(pt.id, pt.patientName)}
+                            className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-300 font-bold text-[11px] rounded-lg transition flex items-center gap-1 shadow-xs"
+                            title="Check in late arrival"
+                          >
+                            <span>✓ Check In</span>
+                          </button>
+                        </div>
                       </div>
                     );
                   })}

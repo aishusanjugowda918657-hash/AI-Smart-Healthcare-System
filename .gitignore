@@ -39,9 +39,12 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Test State
+# Test State & Demo Profiles
 .realtest-state.json
 server/.local/
 docs/qa-screens/
+local-demo-profiles/
+.local-demo-profiles/
+demo_credentials.json
 
 

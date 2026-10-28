@@ -36,14 +36,14 @@ export const ScheduleConfigurator = () => {
 
   const fetchLeaves = useCallback(async () => {
     try {
-      const res = await API.get('/doctors/leaves');
+      const res = await API.get(`/doctors/leaves${doctorId ? `?doctorId=${doctorId}` : ''}`);
       if (res.data?.success && Array.isArray(res.data.data)) {
         setLeaves(res.data.data);
       }
     } catch (err) {
       console.warn('Leaves fetch notice:', err.message);
     }
-  }, []);
+  }, [doctorId]);
 
   useEffect(() => {
     fetchLeaves();
@@ -115,6 +115,10 @@ export const ScheduleConfigurator = () => {
     setMessage(null);
     try {
       await API.post('/doctors/leaves', {
+        doctorId,
+        date: leaveStart,
+        fromAt: `${leaveStart}T00:00:00Z`,
+        toAt: `${leaveEnd}T23:59:59Z`,
         startDate: leaveStart,
         endDate: leaveEnd,
         reason: leaveReason || 'Planned Leave'
@@ -413,7 +417,7 @@ export const ScheduleConfigurator = () => {
                 >
                   <div>
                     <span className="font-bold text-slate-800">
-                      {lv.startDate} to {lv.endDate}
+                      {(lv.startDate || lv.date || lv.fromAt?.split('T')[0])} to {(lv.endDate || lv.toAt?.split('T')[0] || lv.startDate || lv.date)}
                     </span>
                     <span className="text-slate-500 ml-3">({lv.reason || 'Leave'})</span>
                   </div>

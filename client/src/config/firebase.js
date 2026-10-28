@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, connectAuthEmulator } from 'firebase/auth';
+import { initializeAuth, getAuth, GoogleAuthProvider, connectAuthEmulator, setPersistence, browserSessionPersistence } from 'firebase/auth';
 import { getFirestore, connectFirestoreEmulator } from 'firebase/firestore';
 
 // ── Required environment variable guard ───────────────────────────
@@ -44,10 +44,19 @@ let googleProvider;
 
 try {
   app = initializeApp(firebaseConfig);
-  auth = getAuth(app);
+  try {
+    // Initialize auth with browserSessionPersistence so each browser tab/window has an isolated session
+    auth = initializeAuth(app, {
+      persistence: browserSessionPersistence
+    });
+  } catch (authInitErr) {
+    auth = getAuth(app);
+    setPersistence(auth, browserSessionPersistence).catch(() => {});
+  }
   db = getFirestore(app);
   googleProvider = new GoogleAuthProvider();
-  console.log("✅ Client Firebase SDK initialized successfully.");
+
+  console.log("✅ Client Firebase SDK initialized successfully (Session-Scoped Auth Persistence).");
 
   // Conditional Emulator Connection
   const isEmulatorMode =

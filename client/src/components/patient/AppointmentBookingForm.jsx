@@ -193,7 +193,19 @@ export const AppointmentBookingForm = () => {
         visitType: triageData?.visitType || 'new'
       });
       const res = await API.get(`/booking/doctor-options?${queryParams.toString()}`);
-      const options = res.data?.data || [];
+      const rawOptions = res.data?.data || [];
+      // Deduplicate options defensively by doctor identifier and doctor name
+      const seen = new Set();
+      const options = rawOptions.filter((d) => {
+        const key = d.doctorId || d.id;
+        const nameKey = (d.name || d.fullName || '').trim().toLowerCase();
+        if ((key && seen.has(key)) || (nameKey && seen.has(nameKey))) {
+          return false;
+        }
+        if (key) seen.add(key);
+        if (nameKey) seen.add(nameKey);
+        return true;
+      });
       setDoctorOptions(options);
       if (options.length > 0) {
         setSelectedDoctorId(options[0].doctorId || options[0].id);

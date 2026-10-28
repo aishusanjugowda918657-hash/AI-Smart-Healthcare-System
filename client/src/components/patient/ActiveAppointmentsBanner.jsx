@@ -23,7 +23,7 @@ export const ActiveAppointmentsBanner = () => {
     try {
       const res = await API.get('/appointments/my-appointments');
       const todayStr = getTodayInHospitalTz();
-      const activeStatuses = ['booked', 'confirmed', 'on_the_way', 'nearby', 'checked_in', 'waiting', 'called', 'in_room'];
+      const activeStatuses = ['booked', 'confirmed', 'on_the_way', 'nearby', 'checked_in', 'waiting', 'called', 'in_room', 'in_consultation'];
 
       let activeAppts = [];
       if (res.data?.tabs?.upcoming) {

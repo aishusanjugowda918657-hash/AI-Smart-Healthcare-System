@@ -1,5 +1,6 @@
 import { assertDbConnected } from '../config/firebase.js';
 import { clock } from '../utils/clock.js';
+import { getHospitalTodayStr } from '../utils/timezoneDate.js';
 import { AppError, formatSuccessResponse } from '../utils/errors.js';
 import { recalculateQueue, calculateQueueReadOnly } from '../services/queueService.js';
 import { getReadyCandidates } from '../domain/priority.js';
@@ -34,7 +35,8 @@ export async function assertDoctorOwnership(req, targetDoctorId) {
   if (callerDoc.exists) {
     const dData = callerDoc.data();
     const callerDoctorId = dData.doctorId || dData.doctorUid || callerDoc.id;
-    if (callerDoctorId !== targetDoctorId && dData.uid !== targetDoctorId) {
+    const callerDisplayId = dData.displayId || dData.doctorDisplayId || null;
+    if (callerDoctorId !== targetDoctorId && dData.uid !== targetDoctorId && callerDisplayId !== targetDoctorId) {
       throw new AppError('FORBIDDEN', "Access forbidden: You cannot access or modify another doctor's queue.", 403);
     }
     return true;
@@ -69,7 +71,7 @@ export const getDoctorQueueReadOnly = async (req, res, next) => {
     const { doctorId } = req.params;
     await assertDoctorOwnership(req, doctorId);
 
-    const date = req.query.date || clock.now().toISOString().split('T')[0];
+    const date = req.query.date || getHospitalTodayStr(clock.now());
 
     const result = await calculateQueueReadOnly(doctorId, date);
 
@@ -93,7 +95,7 @@ export const getDoctorQueueToday = async (req, res, next) => {
     const { doctorId } = req.params;
     await assertDoctorOwnership(req, doctorId);
 
-    const date = req.query.date || clock.now().toISOString().split('T')[0];
+    const date = req.query.date || getHospitalTodayStr(clock.now());
 
     const result = await calculateQueueReadOnly(doctorId, date);
 
@@ -112,7 +114,7 @@ export const getDoctorQueueToday = async (req, res, next) => {
 export const callNextPatient = async (req, res, next) => {
   try {
     const { doctorId, date: requestedDate } = req.body;
-    const date = requestedDate || clock.now().toISOString().split('T')[0];
+    const date = requestedDate || getHospitalTodayStr(clock.now());
     const db = assertDbConnected();
     const doctorUid = req.user.uid;
 
@@ -124,6 +126,20 @@ export const callNextPatient = async (req, res, next) => {
 
     await assertDoctorOwnership(req, targetDoctorId);
 
+    // Resolve all doctor identifiers for querying appointments
+    const candidateDocIds = new Set([targetDoctorId, doctorUid]);
+    try {
+      const docSnap = await db.collection('doctors').doc(doctorUid).get();
+      if (docSnap.exists) {
+        const d = docSnap.data();
+        if (d.doctorId) { targetDoctorId = d.doctorId; candidateDocIds.add(d.doctorId); }
+        if (d.uid) candidateDocIds.add(d.uid);
+        if (d.doctorUid) candidateDocIds.add(d.doctorUid);
+        if (d.displayId) candidateDocIds.add(d.displayId);
+      }
+    } catch (_) {}
+    const docIdList = Array.from(candidateDocIds).filter(Boolean);
+
     const now = clock.now();
     const nowIso = now.toISOString();
 
@@ -131,15 +147,28 @@ export const callNextPatient = async (req, res, next) => {
       // Fetch active appointments for doctor & date
       const apptsSnap = await db
         .collection('appointments')
-        .where('doctorId', '==', targetDoctorId)
+        .where('doctorId', 'in', docIdList.slice(0, 10))
         .where('date', '==', date)
         .get();
 
       const active = apptsSnap.docs
         .map((d) => ({ id: d.id, ref: d.ref, ...d.data() }))
-        .filter((a) => ['checked_in', 'rejoined', 'called', 'in_consultation'].includes(a.status));
+        .filter((a) => ['checked_in', 'waiting', 'rejoined', 'called', 'in_consultation'].includes(a.status));
 
-      // If doctor is already in consultation with someone, complete or handle
+      // Concurrency protection: prevent calling next patient if consultation is already in progress or patient is active in room
+      const inConsultation = active.find((a) => a.status === 'in_consultation' || a.status === 'in_room');
+      if (inConsultation) {
+        throw new AppError('ACTIVE_CONSULTATION_IN_PROGRESS', `Cannot call next patient while consultation is in progress with ${inConsultation.patientName || 'current patient'} (${inConsultation.tokenLabel || inConsultation.tokenNumber || inConsultation.id}). Please complete or hold the active consultation before calling another patient.`, 409);
+      }
+
+      const activeCalled = active.find((a) => a.status === 'called' && !a.isHeldByDoctor);
+      if (activeCalled) {
+        const graceEndMs = activeCalled.graceEndAt ? new Date(activeCalled.graceEndAt).getTime() : 0;
+        if (graceEndMs > now.getTime()) {
+          throw new AppError('PATIENT_ALREADY_CALLED', `Patient ${activeCalled.patientName || ''} (${activeCalled.tokenLabel || activeCalled.tokenNumber || activeCalled.id}) has already been called and is within the grace period. Please wait, start consultation, or hold before calling another patient.`, 409);
+        }
+      }
+
       const ready = getReadyCandidates(active, now);
 
       if (ready.length === 0) {
@@ -268,6 +297,19 @@ export const callSpecificToken = async (req, res, next) => {
 
     if (!['checked_in', 'rejoined', 'booked', 'confirmed'].includes(apt.status)) {
       throw new AppError('INVALID_TRANSITION', `Cannot call appointment in status ${apt.status}.`, 422);
+    }
+
+    // Concurrency protection: prevent calling specific token if a consultation is already in progress
+    const activeConsultSnap = await db
+      .collection('appointments')
+      .where('doctorId', '==', apt.doctorId)
+      .where('date', '==', apt.date)
+      .where('status', 'in', ['in_consultation', 'in_room'])
+      .get();
+
+    const otherInConsult = activeConsultSnap.docs.find((d) => d.id !== id);
+    if (otherInConsult) {
+      throw new AppError('ACTIVE_CONSULTATION_IN_PROGRESS', `Cannot call specific patient while another consultation is in progress (Appointment ${otherInConsult.id}). Please complete or hold the active consultation first.`, 409);
     }
 
     const graceMin = 5;
@@ -452,12 +494,71 @@ export const finishConsultation = async (req, res, next) => {
       status: 'completed',
       consultEndAt: nowIso,
       actualDurationMinutes: durationMin,
+      live: null,
       statusHistory: [
         ...(apt.statusHistory || []),
         { status: 'completed', at: nowIso, by: doctorUid }
       ],
       updatedAt: now
     });
+
+    // Update token in tokens collection to completed
+    try {
+      const tokRef = db.collection('tokens').doc(`tok-${apt.id}`);
+      const tSnap = await tokRef.get();
+      if (tSnap.exists) {
+        await tokRef.update({
+          status: 'completed',
+          consultEndAt: nowIso,
+          graceEndAt: null,
+          updatedAt: now
+        });
+      } else {
+        const qTokens = await db.collection('tokens').where('appointmentId', '==', apt.id).limit(1).get();
+        if (!qTokens.empty) {
+          await qTokens.docs[0].ref.update({
+            status: 'completed',
+            consultEndAt: nowIso,
+            graceEndAt: null,
+            updatedAt: now
+          });
+        }
+      }
+    } catch (tokErr) {
+      console.warn('Finish consultation token update warning:', tokErr.message);
+    }
+
+    // Rule: Reconcile and cancel pending reminders for this completed appointment
+    try {
+      const remsSnap = await db.collection('reminders')
+        .where('appointmentId', '==', apt.id)
+        .where('status', '==', 'pending')
+        .get();
+      if (!remsSnap.empty) {
+        const batch = db.batch();
+        remsSnap.docs.forEach((d) => batch.update(d.ref, { status: 'cancelled', cancelledReason: 'completed', updatedAt: now }));
+        await batch.commit();
+      }
+    } catch (remErr) {
+      console.warn('Completed appointment reminder reconciliation warning:', remErr.message);
+    }
+
+    // Clear active room appointment from queue locks
+    try {
+      const lockRef = db.collection('counters').doc(`token_lock_${apt.doctorId}_${apt.date}`);
+      const lockSnap = await lockRef.get();
+      if (lockSnap.exists && lockSnap.data().currentApptId === apt.id) {
+        await lockRef.update({ currentApptId: null, lastCompletedAt: nowIso });
+      }
+
+      const queueRef = db.collection('queues').doc(`${apt.doctorId}_${apt.date}`);
+      const qSnap = await queueRef.get();
+      if (qSnap.exists && qSnap.data().currentAppointmentId === apt.id) {
+        await queueRef.update({ currentAppointmentId: null, lastRecalcAt: now });
+      }
+    } catch (lockErr) {
+      console.warn('Queue lock clear warning on finish:', lockErr.message);
+    }
 
     // 1. Update consultationStats collection (keep last 20)
     const statsDocId = `${apt.doctorId}_${apt.departmentId}_${apt.visitType || 'new'}_${apt.complexity || 'moderate'}`;
@@ -552,8 +653,8 @@ export const extendConsultation = async (req, res, next) => {
     await assertDoctorOwnership(req, doctorId);
 
     const db = assertDbConnected();
-    const date = clock.now().toISOString().split('T')[0];
     const now = clock.now();
+    const date = getHospitalTodayStr(now);
 
     const queueRef = db.collection('queues').doc(`${doctorId}_${date}`);
     const queueSnap = await queueRef.get();
@@ -576,7 +677,7 @@ export const undoExtendConsultation = async (req, res, next) => {
     await assertDoctorOwnership(req, doctorId);
 
     const db = assertDbConnected();
-    const date = clock.now().toISOString().split('T')[0];
+    const date = getHospitalTodayStr(clock.now());
 
     const queueRef = db.collection('queues').doc(`${doctorId}_${date}`);
     await queueRef.set({ extendMin: 0 }, { merge: true });
@@ -599,7 +700,7 @@ export const startBreak = async (req, res, next) => {
 
     const db = assertDbConnected();
     const now = clock.now();
-    const date = now.toISOString().split('T')[0];
+    const date = getHospitalTodayStr(now);
     const breakUntil = new Date(now.getTime() + parseInt(minutes, 10) * 60 * 1000).toISOString();
 
     const queueRef = db.collection('queues').doc(`${doctorId}_${date}`);
@@ -619,7 +720,7 @@ export const endBreak = async (req, res, next) => {
     await assertDoctorOwnership(req, doctorId);
 
     const db = assertDbConnected();
-    const date = clock.now().toISOString().split('T')[0];
+    const date = getHospitalTodayStr(clock.now());
 
     const queueRef = db.collection('queues').doc(`${doctorId}_${date}`);
     await queueRef.set({ breakUntil: null, breakMinutes: 0 }, { merge: true });
@@ -641,7 +742,7 @@ export const doctorLateStart = async (req, res, next) => {
     await assertDoctorOwnership(req, doctorId);
 
     const db = assertDbConnected();
-    const date = clock.now().toISOString().split('T')[0];
+    const date = getHospitalTodayStr(clock.now());
 
     const queueRef = db.collection('queues').doc(`${doctorId}_${date}`);
     await queueRef.set({ delayMin: parseInt(minutes, 10) }, { merge: true });
@@ -805,7 +906,7 @@ export const toggleEarlyOptIn = async (req, res, next) => {
 export const getPublicDisplayBoard = async (req, res, next) => {
   try {
     const { departmentId } = req.params;
-    const date = clock.now().toISOString().split('T')[0];
+    const date = getHospitalTodayStr(clock.now());
     const db = assertDbConnected();
 
     // Query active appointments in department
@@ -846,7 +947,7 @@ export const getPublicDisplayBoard = async (req, res, next) => {
 export const getDoctorWaitPrediction = async (req, res, next) => {
   try {
     const { doctorId } = req.params;
-    const { visitType = 'new', date = clock.now().toISOString().split('T')[0] } = req.query;
+    const { visitType = 'new', date = getHospitalTodayStr(clock.now()) } = req.query;
     const db = assertDbConnected();
 
     // Fetch queue document
@@ -916,17 +1017,48 @@ export const startConsultation = async (req, res, next) => {
     const apt = snap.data();
     await assertDoctorOwnership(req, apt.doctorId);
 
-    if (!['called', 'checked_in', 'rejoined', 'booked', 'confirmed'].includes(apt.status)) {
+    if (!['called', 'checked_in', 'rejoined', 'booked', 'confirmed', 'in_consultation'].includes(apt.status)) {
       throw new AppError('INVALID_TRANSITION', `Cannot start consultation for appointment in status ${apt.status}.`, 422);
+    }
+
+    // Concurrency protection: prevent two appointments from becoming active consultation simultaneously
+    const activeConsultSnap = await db
+      .collection('appointments')
+      .where('doctorId', '==', apt.doctorId)
+      .where('date', '==', apt.date)
+      .where('status', 'in', ['in_consultation', 'in_room'])
+      .get();
+
+    const otherInConsult = activeConsultSnap.docs.find((d) => d.id !== targetId);
+    if (otherInConsult) {
+      throw new AppError('CONCURRENT_CONSULTATION_NOT_ALLOWED', `Doctor already has an active consultation in progress (Appointment ID: ${otherInConsult.id}). Concurrent consultations are not allowed. Please complete or hold the active consultation before starting another.`, 409);
+    }
+
+    const effectiveStartIso = apt.consultStartAt || nowIso;
+    const statusHistory = [
+      ...(apt.statusHistory || [])
+    ];
+    if (apt.status !== 'in_consultation') {
+      statusHistory.push({ status: 'in_consultation', at: nowIso, by: req.user.uid });
     }
 
     await apptRef.update({
       status: 'in_consultation',
-      consultStartAt: nowIso,
-      statusHistory: [
-        ...(apt.statusHistory || []),
-        { status: 'in_consultation', at: nowIso, by: req.user.uid }
-      ],
+      consultStartAt: effectiveStartIso,
+      graceEndAt: null,
+      graceDurationMin: null,
+      isMissed: false,
+      missedTurnHandled: true,
+      live: {
+        position: 1,
+        aheadCount: 0,
+        waitMinLow: 0,
+        waitMinHigh: 0,
+        predictedCallAt: null,
+        reasonText: 'Consultation in progress',
+        updatedAt: nowIso
+      },
+      statusHistory,
       updatedAt: now
     });
 
@@ -935,15 +1067,45 @@ export const startConsultation = async (req, res, next) => {
       const tokRef = db.collection('tokens').doc(`tok-${targetId}`);
       const tSnap = await tokRef.get();
       if (tSnap.exists) {
-        await tokRef.update({ status: 'in_consultation', updatedAt: now });
+        await tokRef.update({
+          status: 'in_consultation',
+          startedAt: effectiveStartIso,
+          consultStartAt: effectiveStartIso,
+          graceEndAt: null,
+          updatedAt: now
+        });
       } else {
         const qTokens = await db.collection('tokens').where('appointmentId', '==', targetId).limit(1).get();
         if (!qTokens.empty) {
-          await qTokens.docs[0].ref.update({ status: 'in_consultation', updatedAt: now });
+          await qTokens.docs[0].ref.update({
+            status: 'in_consultation',
+            startedAt: effectiveStartIso,
+            consultStartAt: effectiveStartIso,
+            graceEndAt: null,
+            updatedAt: now
+          });
         }
       }
     } catch (e) {
       console.warn('Token update on start consultation error:', e.message);
+    }
+
+    // Update queue document & locks
+    try {
+      const lockRef = db.collection('counters').doc(`token_lock_${apt.doctorId}_${apt.date}`);
+      await lockRef.set({
+        currentApptId: targetId,
+        consultStartAt: effectiveStartIso,
+        inConsultationAt: nowIso
+      }, { merge: true });
+
+      const queueRef = db.collection('queues').doc(`${apt.doctorId}_${apt.date}`);
+      await queueRef.set({
+        currentAppointmentId: targetId,
+        lastRecalcAt: now
+      }, { merge: true });
+    } catch (qErr) {
+      console.warn('Queue lock update on start consultation warning:', qErr.message);
     }
 
     await writeAuditLog({
@@ -956,7 +1118,11 @@ export const startConsultation = async (req, res, next) => {
 
     await recalculateQueue(apt.doctorId, apt.date);
 
-    res.status(200).json(formatSuccessResponse({ id: targetId, status: 'in_consultation', consultStartAt: nowIso }, 'Consultation started.'));
+    res.status(200).json(formatSuccessResponse({
+      id: targetId,
+      status: 'in_consultation',
+      consultStartAt: effectiveStartIso
+    }, 'Consultation started.'));
   } catch (error) {
     next(error);
   }
@@ -1063,7 +1229,7 @@ export const getReceptionQueueOverview = async (req, res, next) => {
   try {
     const { doctorId, date: requestedDate } = req.query;
     const db = assertDbConnected();
-    const date = requestedDate || clock.now().toISOString().split('T')[0];
+    const date = requestedDate || getHospitalTodayStr(clock.now());
 
     let query = db.collection('appointments').where('date', '==', date);
     if (doctorId) {

@@ -2,15 +2,13 @@
  * Updated NotificationContext (PRD F8)
  *
  * Wraps the useNotifications hook to provide global notification state
- * to any component in the tree, including the NotificationBell in the Navbar.
- *
- * Backward-compatibility aliases:
- *  - markAsRead(id)  → markRead(id)
- *  - n.message       → n.body (the API uses 'body'; Navbar uses 'message')
+ * to any component in the tree, including the NotificationBell in the Navbar
+ * and the floating in-app NotificationToast across all pages.
  */
 
 import React, { createContext, useContext } from 'react';
 import { useNotifications as useNotificationsHook } from '../hooks/useNotifications.js';
+import NotificationToast from '../components/common/NotificationToast.jsx';
 
 const NotificationContext = createContext(null);
 
@@ -27,11 +25,10 @@ export const NotificationProvider = ({ children }) => {
   const value = {
     ...state,
     notifications: normalised,
-    // Backward-compat alias for Navbar
+    // Backward-compat alias for Navbar and legacy callers
     markAsRead: state.markRead,
-    // Maintain old clearAll for any existing consumers
     clearAll: () => state.markAllRead(),
-    addNotification: () => {}, // no-op: server is source of truth now
+    addNotification: () => {}, // no-op: server and real-time Firestore are source of truth
   };
 
   return (
@@ -41,13 +38,25 @@ export const NotificationProvider = ({ children }) => {
   );
 };
 
+export const GlobalNotificationToast = () => {
+  const ctx = useContext(NotificationContext);
+  if (!ctx || !ctx.toast) return null;
+  return (
+    <NotificationToast
+      toast={ctx.toast}
+      onDismiss={ctx.dismissToast}
+      onMarkRead={ctx.markRead}
+    />
+  );
+};
+
 export const useNotificationContext = () => {
   const ctx = useContext(NotificationContext);
   if (!ctx) throw new Error('useNotificationContext must be used within NotificationProvider');
   return ctx;
 };
 
-// Named export used by Navbar and other components
+// Named export used across components
 export const useNotifications = () => useNotificationContext();
 
 export default NotificationContext;

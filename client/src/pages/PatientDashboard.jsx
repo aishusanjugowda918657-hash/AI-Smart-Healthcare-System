@@ -42,7 +42,7 @@ export const PatientDashboard = () => {
 
         const CANCELLED_STATUSES = ['cancelled', 'cancelled_by_patient', 'cancelled_by_doctor', 'cancelled_by_clinic'];
         const COMPLETED_STATUSES = ['completed', 'no_show'];
-        const ACTIVE_STATUSES = ['booked', 'confirmed', 'checked_in', 'waiting', 'called', 'in_room', 'on_the_way', 'nearby', 'rejoined'];
+        const ACTIVE_STATUSES = ['booked', 'confirmed', 'checked_in', 'waiting', 'called', 'in_room', 'in_consultation', 'on_the_way', 'nearby', 'rejoined'];
 
         const normalized = rawAppts.map((a) => {
           const statusLower = (a.status || '').toLowerCase();
@@ -92,7 +92,7 @@ export const PatientDashboard = () => {
 
         // Next appointment strictly from upcoming list sorted by date asc
         const sortedAsc = [...upcomingList].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-        const next = sortedAsc.find((a) => ['booked', 'confirmed', 'checked_in', 'waiting', 'called', 'in_room'].includes((a.status || '').toLowerCase()));
+        const next = sortedAsc.find((a) => ['booked', 'confirmed', 'checked_in', 'waiting', 'called', 'in_room', 'in_consultation'].includes((a.status || '').toLowerCase()));
         setNextAppointment(next || null);
       }
 

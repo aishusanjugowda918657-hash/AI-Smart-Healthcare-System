@@ -1,15 +1,123 @@
 /**
  * NotificationBell (PRD F8)
- * Displays a bell icon with unread count badge and a dropdown list.
- * Clicking a notification marks it read and navigates to the relevant page.
  *
- * Also shows the foreground toast when a push arrives while the tab is open.
+ * Full-featured, readable notification center:
+ *  - Prominent unread badge with exact count.
+ *  - Responsive, scrollable panel (mobile & desktop).
+ *  - Complete, readable message text without artificial truncation.
+ *  - Appointment & queue token context badges.
+ *  - Individual "Mark as read" and "Mark all as read" actions.
+ *  - Direct navigation to relevant appointments/queue pages.
+ *  - Empty state and "View all notifications" link.
  */
 
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bell, CheckCheck, X } from 'lucide-react';
+import {
+  Bell,
+  CheckCheck,
+  Check,
+  Calendar,
+  Clock,
+  Pill,
+  AlertCircle,
+  ExternalLink,
+  X,
+  Inbox
+} from 'lucide-react';
 import { useNotifications } from '../../context/NotificationContext';
+import { useAuth } from '../../context/AuthContext';
+import { resolveNotificationLink } from './NotificationToast';
+
+function formatNotificationTime(isoStr) {
+  if (!isoStr) return '';
+  const d = new Date(isoStr);
+  if (isNaN(d.getTime())) return '';
+
+  const now = new Date();
+  const diffSec = Math.floor((now.getTime() - d.getTime()) / 1000);
+
+  if (diffSec < 60) return 'Just now';
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+
+  const isToday =
+    d.getDate() === now.getDate() &&
+    d.getMonth() === now.getMonth() &&
+    d.getFullYear() === now.getFullYear();
+
+  const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (isToday) return `Today at ${timeStr}`;
+
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const isYesterday =
+    d.getDate() === yesterday.getDate() &&
+    d.getMonth() === yesterday.getMonth() &&
+    d.getFullYear() === yesterday.getFullYear();
+
+  if (isYesterday) return `Yesterday at ${timeStr}`;
+
+  return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${timeStr}`;
+}
+
+function getTypeBadge(type) {
+  switch (type) {
+    case 'emergency':
+    case 'triage':
+      return {
+        icon: <AlertCircle className="w-3.5 h-3.5 text-rose-600" />,
+        label: 'Emergency Alert',
+        bg: 'bg-rose-50 text-rose-700 border-rose-200'
+      };
+    case 'medicine':
+      return {
+        icon: <Pill className="w-3.5 h-3.5 text-violet-600" />,
+        label: 'Medicine Reminder',
+        bg: 'bg-violet-50 text-violet-700 border-violet-200'
+      };
+    case 'TURN_CALLED':
+      return {
+        icon: <Clock className="w-3.5 h-3.5 text-emerald-600" />,
+        label: 'Turn Called',
+        bg: 'bg-emerald-50 text-emerald-800 border-emerald-200 font-bold'
+      };
+    case 'QUEUE_UPCOMING_TURN':
+      return {
+        icon: <Clock className="w-3.5 h-3.5 text-amber-600" />,
+        label: 'Upcoming Turn',
+        bg: 'bg-amber-50 text-amber-800 border-amber-200'
+      };
+    case 'QUEUE_WAIT_TIME_CHANGED':
+    case 'QUEUE_REJOINED':
+    case 'FAIRNESS_BUMP':
+      return {
+        icon: <Clock className="w-3.5 h-3.5 text-cyan-600" />,
+        label: 'Queue Update',
+        bg: 'bg-cyan-50 text-cyan-800 border-cyan-200'
+      };
+    case 'APPOINTMENT_CONFIRMED':
+    case 'APPOINTMENT_RESCHEDULED':
+    case 'appointment_24h':
+    case 'appointment_2h':
+      return {
+        icon: <Calendar className="w-3.5 h-3.5 text-indigo-600" />,
+        label: 'Appointment',
+        bg: 'bg-indigo-50 text-indigo-800 border-indigo-200'
+      };
+    case 'APPOINTMENT_CANCELLED':
+      return {
+        icon: <X className="w-3.5 h-3.5 text-slate-600" />,
+        label: 'Cancelled',
+        bg: 'bg-slate-100 text-slate-700 border-slate-300'
+      };
+    default:
+      return {
+        icon: <Bell className="w-3.5 h-3.5 text-slate-600" />,
+        label: 'Notice',
+        bg: 'bg-slate-50 text-slate-700 border-slate-200'
+      };
+  }
+}
 
 export function NotificationBell() {
   const {
@@ -17,157 +125,248 @@ export function NotificationBell() {
     unreadCount,
     markRead,
     markAllRead,
-    toast,
-    dismissToast,
     loading,
   } = useNotifications();
 
+  const { userRole } = useAuth();
   const [open, setOpen] = useState(false);
   const panelRef = useRef(null);
   const navigate = useNavigate();
 
-  // Close on outside click
+  // Close dropdown on outside click or escape key
   useEffect(() => {
-    const handler = (e) => {
+    const handleClickOutside = (e) => {
       if (panelRef.current && !panelRef.current.contains(e.target)) {
         setOpen(false);
       }
     };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
 
-  const handleClick = async (n) => {
-    if (!n.read) await markRead(n.id);
+    if (open) {
+      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('keydown', handleKeyDown);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open]);
+
+  const handleNotificationClick = async (n) => {
+    if (!n.read) {
+      await markRead(n.id);
+    }
     setOpen(false);
-    // Navigate to the relevant page
-    if (n.data?.appointmentId) {
-      navigate(`/live-queue?id=${n.data.appointmentId}`);
-    } else if (n.type === 'triage' || n.type === 'emergency') {
-      navigate('/triage-alerts');
-    } else {
-      navigate('/notifications');
-    }
+    const targetLink = resolveNotificationLink(n, userRole);
+    navigate(targetLink);
   };
 
-  const typeIcon = (type) => {
-    switch (type) {
-      case 'emergency': case 'triage': return '🚨';
-      case 'medicine': return '💊';
-      case 'appointment_24h': case 'appointment_2h': return '📅';
-      case 'FAIRNESS_BUMP': return '⏩';
-      default: return '🔔';
-    }
+  const handleMarkOne = async (e, id) => {
+    e.stopPropagation();
+    await markRead(id);
   };
+
+  const allPageLink = String(userRole || '').toLowerCase() === 'doctor'
+    ? '/doctor/notifications'
+    : '/notifications';
 
   return (
-    <>
-      {/* ── Foreground Toast ─────────────────────────────── */}
-      {toast && (
+    <div ref={panelRef} className="relative inline-block text-left">
+      {/* ── Bell Trigger Button ─────────────────────────────── */}
+      <button
+        id="notification-bell-btn"
+        data-testid="notification-bell-btn"
+        onClick={() => setOpen((prev) => !prev)}
+        aria-expanded={open}
+        aria-haspopup="true"
+        aria-label={`Notifications${unreadCount > 0 ? `, ${unreadCount} unread` : ''}`}
+        className={`relative p-2.5 rounded-xl transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+          open
+            ? 'bg-indigo-50 text-indigo-700'
+            : 'text-slate-600 hover:text-indigo-600 hover:bg-slate-100'
+        }`}
+      >
+        <Bell className="w-5 h-5" />
+
+        {unreadCount > 0 && (
+          <span
+            id="notification-unread-badge"
+            data-testid="notification-unread-badge"
+            className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1.5 flex items-center justify-center rounded-full bg-rose-500 text-[11px] font-extrabold text-white shadow-md ring-2 ring-white animate-in zoom-in-75 duration-200"
+          >
+            {unreadCount > 99 ? '99+' : unreadCount}
+          </span>
+        )}
+      </button>
+
+      {/* ── Accessible, Readable Dropdown Panel ─────────────────── */}
+      {open && (
         <div
-          role="alert"
-          className="fixed top-4 right-4 z-[9999] max-w-sm bg-indigo-700 text-white rounded-2xl shadow-2xl px-5 py-4 flex items-start gap-3 animate-in slide-in-from-top-3 duration-300"
+          id="notification-panel"
+          data-testid="notification-panel"
+          className="fixed inset-x-3 top-16 sm:inset-x-auto sm:absolute sm:right-0 sm:top-full sm:mt-2 w-auto sm:w-[440px] max-w-[460px] bg-white rounded-2xl shadow-2xl border border-slate-200/90 z-50 overflow-hidden ring-1 ring-black/5 animate-in fade-in zoom-in-95 duration-150 flex flex-col"
+          style={{ maxHeight: 'min(580px, calc(100vh - 80px))' }}
         >
-          <Bell className="w-5 h-5 mt-0.5 shrink-0" />
-          <div className="flex-1 min-w-0">
-            <p className="font-semibold text-sm leading-tight">{toast.title}</p>
-            <p className="text-xs opacity-80 mt-0.5 line-clamp-2">{toast.body}</p>
-          </div>
-          <button
-            onClick={dismissToast}
-            className="p-1 rounded-lg hover:bg-white/20 transition-colors shrink-0"
-            aria-label="Dismiss"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
-
-      {/* ── Bell Icon + Dropdown ─────────────────────────── */}
-      <div ref={panelRef} className="relative">
-        <button
-          id="notification-bell-btn"
-          onClick={() => setOpen((o) => !o)}
-          aria-label={`Notifications${unreadCount > 0 ? `, ${unreadCount} unread` : ''}`}
-          className="relative p-2 text-slate-600 hover:text-indigo-600 hover:bg-slate-100 rounded-xl transition-colors"
-        >
-          <Bell className="w-5 h-5" />
-          {unreadCount > 0 && (
-            <span className="absolute top-1 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-[9px] font-bold text-white">
-              {unreadCount > 99 ? '99+' : unreadCount}
-            </span>
-          )}
-        </button>
-
-        {open && (
-          <div
-            id="notification-panel"
-            className="absolute right-0 mt-2 w-80 bg-white rounded-2xl shadow-2xl border border-slate-200 z-50 overflow-hidden"
-          >
-            {/* Header */}
-            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
-              <span className="font-bold text-xs text-slate-700 uppercase tracking-wider">
+          {/* Header */}
+          <div className="flex items-center justify-between px-4 py-3.5 bg-slate-50/90 border-b border-slate-200/80 backdrop-blur-sm shrink-0">
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-sm text-slate-800">
                 Notifications
               </span>
-              <div className="flex items-center gap-2">
-                {unreadCount > 0 && (
-                  <button
-                    onClick={markAllRead}
-                    className="flex items-center gap-1 text-[11px] text-indigo-600 hover:text-indigo-800 font-medium"
-                  >
-                    <CheckCheck className="w-3 h-3" />
-                    Mark all read
-                  </button>
-                )}
-                <button
-                  onClick={() => { setOpen(false); navigate('/notifications'); }}
-                  className="text-[11px] text-slate-500 hover:text-slate-700 font-medium"
-                >
-                  See all
-                </button>
-              </div>
-            </div>
-
-            {/* List */}
-            <div className="max-h-72 overflow-y-auto divide-y divide-slate-50">
-              {loading ? (
-                <p className="text-xs text-slate-400 py-6 text-center">Loading…</p>
-              ) : notifications.length === 0 ? (
-                <p className="text-xs text-slate-400 py-6 text-center">No notifications yet.</p>
+              {unreadCount > 0 ? (
+                <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-indigo-100 text-indigo-700">
+                  {unreadCount} unread
+                </span>
               ) : (
-                notifications.slice(0, 10).map((n) => (
-                  <button
-                    key={n.id}
-                    onClick={() => handleClick(n)}
-                    className={`w-full text-left px-4 py-3 hover:bg-slate-50 transition-colors flex items-start gap-2 ${
-                      !n.read ? 'bg-indigo-50/60' : ''
-                    }`}
-                  >
-                    <span className="text-base shrink-0">{typeIcon(n.type)}</span>
-                    <div className="flex-1 min-w-0">
-                      <p className={`text-xs leading-tight ${!n.read ? 'font-semibold text-slate-800' : 'text-slate-600'}`}>
-                        {n.title}
-                      </p>
-                      <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-2">
-                        {n.body || n.message}
-                      </p>
-                      {n.createdAt && (
-                        <p className="text-[10px] text-slate-300 mt-0.5">
-                          {new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </p>
-                      )}
-                    </div>
-                    {!n.read && (
-                      <span className="w-2 h-2 rounded-full bg-indigo-500 shrink-0 mt-1" />
-                    )}
-                  </button>
-                ))
+                <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-800">
+                  All caught up
+                </span>
               )}
             </div>
+
+            <div className="flex items-center gap-2">
+              {unreadCount > 0 && (
+                <button
+                  id="bell-mark-all-read-btn"
+                  onClick={markAllRead}
+                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
+                  title="Mark all notifications as read"
+                >
+                  <CheckCheck className="w-3.5 h-3.5" />
+                  <span>Mark all read</span>
+                </button>
+              )}
+              <button
+                onClick={() => setOpen(false)}
+                className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-200/60 rounded-lg transition-colors sm:hidden"
+                aria-label="Close notifications panel"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
-        )}
-      </div>
-    </>
+
+          {/* Notification Items List */}
+          <div className="flex-1 overflow-y-auto divide-y divide-slate-100 p-2 space-y-1.5 min-h-[140px]">
+            {loading && notifications.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12 text-slate-400">
+                <div className="w-6 h-6 border-2 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mb-2" />
+                <p className="text-xs">Loading notifications…</p>
+              </div>
+            ) : notifications.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+                <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400 mb-3">
+                  <Inbox className="w-6 h-6" />
+                </div>
+                <p className="text-sm font-semibold text-slate-700">No notifications yet</p>
+                <p className="text-xs text-slate-500 mt-1 max-w-[260px]">
+                  Real-time updates regarding your appointments, wait times, and queue calls will appear here.
+                </p>
+              </div>
+            ) : (
+              notifications.slice(0, 15).map((n) => {
+                const badge = getTypeBadge(n.type);
+                const tokenNumber = n.data?.tokenLabel || n.data?.tokenNumber;
+                const appointmentId = n.data?.displayId || n.data?.appointmentId;
+
+                return (
+                  <div
+                    key={n.id}
+                    id={`notif-item-${n.id}`}
+                    onClick={() => handleNotificationClick(n)}
+                    className={`group relative p-3 rounded-xl border transition-all cursor-pointer ${
+                      !n.read
+                        ? 'bg-indigo-50/70 hover:bg-indigo-100/60 border-indigo-200 shadow-sm border-l-4 border-l-indigo-600'
+                        : 'bg-white hover:bg-slate-50/90 border-slate-200/80'
+                    }`}
+                  >
+                    {/* Header line: Badges and Time */}
+                    <div className="flex items-center justify-between gap-2 mb-1.5 flex-wrap">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${badge.bg}`}>
+                          {badge.icon}
+                          <span>{badge.label}</span>
+                        </span>
+
+                        {tokenNumber && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                            Token: {tokenNumber}
+                          </span>
+                        )}
+
+                        {appointmentId && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-slate-100 text-slate-600">
+                            {appointmentId}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0 ml-auto">
+                        <span className="text-[11px] text-slate-400">
+                          {formatNotificationTime(n.createdAt)}
+                        </span>
+                        {!n.read && (
+                          <span className="w-2 h-2 rounded-full bg-indigo-600 shrink-0" title="Unread" />
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Title */}
+                    <h5 className={`text-sm font-semibold leading-snug break-words ${!n.read ? 'text-slate-900' : 'text-slate-700'}`}>
+                      {n.title}
+                    </h5>
+
+                    {/* Full, readable message body (never truncated with line-clamp) */}
+                    <p className="text-xs sm:text-sm text-slate-600 leading-relaxed mt-1 break-words">
+                      {n.body || n.message}
+                    </p>
+
+                    {/* Footer Actions on Item */}
+                    <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
+                      <span className="inline-flex items-center gap-1 font-semibold text-indigo-600 group-hover:text-indigo-800 transition-colors">
+                        <span>Open details</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </span>
+
+                      {!n.read && (
+                        <button
+                          type="button"
+                          onClick={(e) => handleMarkOne(e, n.id)}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-500 hover:text-indigo-700 hover:bg-white rounded-md border border-transparent hover:border-slate-200 transition-all cursor-pointer"
+                          title="Mark this notification as read"
+                        >
+                          <Check className="w-3 h-3" />
+                          <span>Mark read</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* Footer */}
+          <div className="px-4 py-2.5 bg-slate-50 border-t border-slate-200/80 flex items-center justify-between shrink-0 text-xs">
+            <span className="text-slate-500 text-[11px]">
+              {notifications.length > 0 && `Showing latest ${Math.min(notifications.length, 15)} of ${notifications.length}`}
+            </span>
+            <button
+              id="bell-see-all-btn"
+              onClick={() => {
+                setOpen(false);
+                navigate(allPageLink);
+              }}
+              className="font-bold text-indigo-600 hover:text-indigo-800 transition-colors cursor-pointer"
+            >
+              View all notifications →
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

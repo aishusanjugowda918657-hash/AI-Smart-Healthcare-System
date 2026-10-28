@@ -34,9 +34,18 @@ export const calculatePriorityScore = (category = 'STANDARD', staffVerified = fa
  */
 export const sortQueueTokens = (tokens = []) => {
   return [...tokens].sort((a, b) => {
-    if (b.priorityScore !== a.priorityScore) {
-      return b.priorityScore - a.priorityScore; // Higher score first
+    const scoreA = typeof a.priorityScore === 'number' ? a.priorityScore : 100;
+    const scoreB = typeof b.priorityScore === 'number' ? b.priorityScore : 100;
+    if (scoreB !== scoreA) {
+      return scoreB - scoreA; // Higher score first
     }
-    return a.sequenceNumber - b.sequenceNumber; // Earlier sequence first
+    const extractNum = (val) => {
+      if (typeof val === 'number') return val;
+      const match = String(val || '').match(/\d+/);
+      return match ? parseInt(match[0], 10) : 999;
+    };
+    const seqA = a.sequenceNumber !== undefined ? a.sequenceNumber : extractNum(a.tokenNumber || a.tokenLabel || a.id);
+    const seqB = b.sequenceNumber !== undefined ? b.sequenceNumber : extractNum(b.tokenNumber || b.tokenLabel || b.id);
+    return seqA - seqB; // Earlier sequence first
   });
 };

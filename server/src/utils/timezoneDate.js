@@ -23,6 +23,31 @@ export function getHospitalTimeStr(dateObj = clock.now()) {
 }
 
 /**
+ * Returns formatted 12-hour time ("hh:mm A") in Asia/Kolkata timezone
+ */
+export function formatHospitalTime(dateObj = clock.now()) {
+  if (!dateObj) return null;
+  return dayjs(dateObj).tz(HOSPITAL_TZ).format('hh:mm A');
+}
+
+/**
+ * Normalizes raw slot time string ("09:00", "09:00:00", "09:00 am") into "09:00 AM"
+ */
+export function formatSlotTimeDisplay(rawSlot) {
+  if (!rawSlot) return '';
+  const trimmed = String(rawSlot).trim();
+  const clean = trimmed.replace(/(am|pm)/i, '').trim();
+  const [hStr, mStr] = clean.split(':');
+  let h = parseInt(hStr, 10);
+  const m = parseInt(mStr || '0', 10);
+  if (isNaN(h)) return trimmed;
+  const isPM = /pm/i.test(trimmed) || (!/am/i.test(trimmed) && h >= 12);
+  const displayH = h % 12 || 12;
+  const ampm = isPM ? 'PM' : 'AM';
+  return `${String(displayH).padStart(2, '0')}:${String(m).padStart(2, '0')} ${ampm}`;
+}
+
+/**
  * Parse date string (YYYY-MM-DD) and time string ("09:00", "09:00 AM", "14:30")
  * into a Date object anchored in Asia/Kolkata.
  */

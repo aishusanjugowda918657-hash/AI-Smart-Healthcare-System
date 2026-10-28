@@ -285,7 +285,7 @@ describe('Notification Pipeline Comprehensive Regression Test Suite', () => {
       patientUid,
       patientName: 'Dev Sharma',
       status: 'booked',
-      date: '2026-10-24',
+      date: '2029-10-24',
       timeSlot: '14:00',
       doctorId: 'DOC-01'
     });

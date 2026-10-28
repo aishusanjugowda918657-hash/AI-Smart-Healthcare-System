@@ -352,8 +352,15 @@ export const adminGenerateSlots = async (req, res, next) => {
  */
 export const adminCreateLeave = async (req, res, next) => {
   try {
-    let { doctorId, fromAt, toAt, date, reason = '', status = 'planned' } = req.body;
+    let { doctorId, fromAt, toAt, date, startDate, endDate, reason = '', status = 'planned' } = req.body;
 
+    // Fallback doctorId from authenticated user if doctor
+    if (!doctorId) {
+      doctorId = req.user?.doctorId || req.user?.doctorUid || (req.user?.role === 'doctor' ? req.user.uid : null);
+    }
+
+    if (!fromAt && startDate) fromAt = `${startDate}T00:00:00Z`;
+    if (!toAt && endDate) toAt = `${endDate}T23:59:59Z`;
     if (!fromAt && date) fromAt = `${date}T00:00:00Z`;
     if (!toAt && date) toAt = `${date}T23:59:59Z`;
 
@@ -362,12 +369,30 @@ export const adminCreateLeave = async (req, res, next) => {
     }
 
     const leaveDate = date || fromAt.split('T')[0];
+    const leaveEndDate = toAt ? toAt.split('T')[0] : leaveDate;
     const db = assertDbConnected();
+
+    let doctorName = req.body.doctorName || '';
+    if (!doctorName) {
+      const docSnap = await db.collection('doctors').doc(doctorId).get();
+      if (docSnap.exists) {
+        doctorName = docSnap.data().fullName || docSnap.data().name;
+      } else {
+        const uSnap = await db.collection('users').doc(doctorId).get();
+        if (uSnap.exists) {
+          doctorName = uSnap.data().fullName || uSnap.data().name;
+        }
+      }
+    }
+
     const leaveId = `leave_${Date.now()}`;
     const leaveDoc = {
       id: leaveId,
       doctorId,
+      doctorName: doctorName || doctorId,
       date: leaveDate,
+      startDate: leaveDate,
+      endDate: leaveEndDate,
       fromAt,
       toAt,
       reason,

@@ -7,6 +7,7 @@ import { notify } from '../services/notify.js';
 import PDFDocument from 'pdfkit';
 import QRCode from 'qrcode';
 import { verifyRecordAccess } from './medicalController.js';
+import { getHospitalTodayStr } from '../utils/timezoneDate.js';
 
 /**
  * Generate PDF buffer helper using pdfkit
@@ -341,7 +342,7 @@ export const createDigitalPrescription = async (req, res, next) => {
     const prescriptionId = `RX-2026-${paddedSeq}`;
     const id = `rx-${Date.now().toString(36)}`;
     const now = new Date();
-    const dateStr = now.toISOString().split('T')[0];
+    const dateStr = getHospitalTodayStr(now);
     const verificationCode = `VCD-${prescriptionId}-${Date.now().toString(36).slice(-4).toUpperCase()}`;
 
     // Format & validate medicine items
@@ -590,7 +591,7 @@ export const updateDigitalPrescription = async (req, res, next) => {
 
     const oldData = rxDoc.data();
     const now = new Date();
-    const dateStr = now.toISOString().split('T')[0];
+    const dateStr = getHospitalTodayStr(now);
 
     const version = (oldData.version || 1) + 1;
     const editHistory = oldData.editHistory || [];

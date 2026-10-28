@@ -60,7 +60,15 @@ export const DoctorPatientsPage = () => {
     try {
       const res = await API.get(`/doctor/patients/search?query=${encodeURIComponent(searchQuery.trim())}`);
       if (res.data?.success) {
-        setSearchResults(res.data.data || []);
+        const raw = res.data.data || [];
+        const seen = new Set();
+        const unique = raw.filter((p) => {
+          const id = p.healthId || p.patientHealthId || p.id;
+          if (seen.has(id)) return false;
+          seen.add(id);
+          return true;
+        });
+        setSearchResults(unique);
       }
     } catch (err) {
       console.warn('Patient search notice:', err.message);

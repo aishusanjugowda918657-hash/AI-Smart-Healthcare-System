@@ -14,7 +14,8 @@ import timezone from 'dayjs/plugin/timezone.js';
 import { isTimeOverlapping } from '../utils/time.js';
 import clock from '../utils/clock.js';
 import { notify } from '../services/notify.js';
-import { parseSlotTimeToDate } from '../utils/timezoneDate.js';
+import { parseSlotTimeToDate, getHospitalTodayStr } from '../utils/timezoneDate.js';
+import { getOperatingSchedule } from '../config/operatingSchedule.js';
 import { getAppointmentDateCompact, formatAppointmentDisplayId } from '../services/appointmentIdService.js';
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -160,6 +161,26 @@ export const getDoctorOptions = async (req, res, next) => {
         fallbackMessage = `No active doctors in the requested department, falling back to General Medicine`;
       }
     }
+
+    // Deduplicate doctors: ensure each doctor appears at most once by doctorId, uid, email, or normalized name
+    const seenDoctorKeys = new Set();
+    const uniqueDoctors = [];
+    for (const doc of doctors) {
+      const primaryKey = doc.doctorId || doc.uid || doc.id;
+      const emailKey = (doc.email || '').trim().toLowerCase();
+      const nameKey = (doc.name || doc.fullName || '').trim().toLowerCase();
+
+      if (primaryKey && seenDoctorKeys.has(primaryKey)) continue;
+      if (emailKey && seenDoctorKeys.has(emailKey)) continue;
+      if (nameKey && seenDoctorKeys.has(nameKey)) continue;
+
+      if (primaryKey) seenDoctorKeys.add(primaryKey);
+      if (emailKey) seenDoctorKeys.add(emailKey);
+      if (nameKey) seenDoctorKeys.add(nameKey);
+
+      uniqueDoctors.push(doc);
+    }
+    doctors = uniqueDoctors;
 
     // If still no doctors, return departments with doctors
     if (doctors.length === 0) {
@@ -388,19 +409,7 @@ export const getBookingSuggestions = async (req, res, next) => {
 
     // Auto-generate slots on the fly if not in DB
     if (slots.length === 0) {
-      const schedule = doctorDoc?.schedule || {
-        slotMinutes: 15,
-        bufferEverySlots: 6,
-        weekly: [
-          { dayOfWeek: 1, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] },
-          { dayOfWeek: 2, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] },
-          { dayOfWeek: 3, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] },
-          { dayOfWeek: 4, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] },
-          { dayOfWeek: 5, sessions: [{ start: '09:00', end: '13:00' }, { start: '14:00', end: '17:00' }] },
-          { dayOfWeek: 6, sessions: [{ start: '09:00', end: '13:00' }] }
-        ],
-        lunch: { start: '13:00', end: '14:00' }
-      };
+      const schedule = doctorDoc?.schedule || getOperatingSchedule();
 
       const leavesSnap = await db.collection('leaves').where('doctorId', '==', resolvedDoctorId).get();
       const leaves = leavesSnap.docs.map((l) => l.data());
@@ -565,10 +574,39 @@ export const createAppointment = async (req, res, next) => {
       }
     }
 
-    // Read initial target slot to inspect proposed start time
-    const initialSlotSnap = await db.collection('slots').doc(targetSlotIds[0]).get();
-    const targetSlotStartAt = initialSlotSnap.exists ? initialSlotSnap.data().startAt : null;
+    let targetSlotStartAt = req.body.timeSlot || req.body.startAt || req.body.bookedStartAt || null;
+    if (targetSlotIds.length > 0) {
+      try {
+        const initialSlotSnap = await db.collection('slots').doc(targetSlotIds[0]).get();
+        if (initialSlotSnap && initialSlotSnap.exists) {
+          targetSlotStartAt = initialSlotSnap.data().startAt || targetSlotStartAt;
+        }
+      } catch (_) {}
+    }
     const targetDuration = targetSlotIds.length * 10;
+
+    // Resolve patient profile & UID
+    let resolvedPatientUid = userId;
+    let resolvedPatientName = patientName;
+    try {
+      const patientLookupSnap = await db.collection('patients').where('patientHealthId', '==', patientHealthId).limit(1).get();
+      if (!patientLookupSnap.empty) {
+        const pData = patientLookupSnap.docs[0].data();
+        resolvedPatientUid = pData.ownerUid || pData.patientUid || pData.primaryAccountUid || userId;
+        if (!resolvedPatientName || resolvedPatientName === 'Patient') {
+          resolvedPatientName = pData.fullName || pData.name || 'Patient';
+        }
+      } else {
+        const pDocDirect = await db.collection('patients').doc(patientHealthId).get();
+        if (pDocDirect.exists) {
+          const pData = pDocDirect.data();
+          resolvedPatientUid = pData.ownerUid || pData.patientUid || pData.primaryAccountUid || userId;
+          if (!resolvedPatientName || resolvedPatientName === 'Patient') {
+            resolvedPatientName = pData.fullName || pData.name || 'Patient';
+          }
+        }
+      }
+    } catch (_) {}
 
     // SAME-DAY BOOKING POLICY ENFORCEMENT
     // Active statuses: booked, confirmed, checked_in, waiting, called, in_room, on_the_way, nearby, in_consultation
@@ -602,7 +640,9 @@ export const createAppointment = async (req, res, next) => {
 
         // Rule (a): Block overlapping appointments for same patient on same date
         if (existingTime && targetSlotStartAt && isTimeOverlapping(existingTime, targetSlotStartAt, data.durationMin || 15, targetDuration)) {
-          throw new AppError('OVERLAPPING_APPOINTMENT', `You already have an overlapping appointment on this date at ${existingTime}.`, 409);
+          const docInfo = data.doctorName ? ` with ${data.doctorName}` : '';
+          const statusInfo = data.status ? ` (Status: ${data.status.replace(/_/g, ' ')})` : '';
+          throw new AppError('OVERLAPPING_APPOINTMENT', `You already have an overlapping appointment on this date at ${existingTime}${docInfo}${statusInfo}. Please choose another time slot.`, 409);
         }
 
         // Rule (b): Block second active appointment in same department on same date
@@ -775,13 +815,13 @@ export const createAppointment = async (req, res, next) => {
         appointmentId,
         displayId,
         patientHealthId,
-        patientName,
-        patientUid: userId,
-        patientId: userId,
+        patientName: resolvedPatientName || patientName,
+        patientUid: resolvedPatientUid,
+        patientId: resolvedPatientUid,
         bookedBy: userId,
-        ownerUid: userId,
+        ownerUid: resolvedPatientUid,
         bookedByUid: userId,
-        viewerUids: Array.from(new Set([userId, resolvedDoctorUid].filter(Boolean))),
+        viewerUids: Array.from(new Set([userId, resolvedPatientUid, resolvedDoctorUid].filter(Boolean))),
         doctorId: resolvedDoctorId,
         doctorUid: resolvedDoctorUid,
         doctorName: resolvedDoctorName,
@@ -868,7 +908,7 @@ export const createAppointment = async (req, res, next) => {
         tokenNumber: tokenLabel || String(tokenNumber),
         appointmentId,
         displayId,
-        patientUid: userId,
+        patientUid: resolvedPatientUid,
         patientHealthId,
         doctorUid: resolvedDoctorUid,
         doctorId,
@@ -908,21 +948,24 @@ export const createAppointment = async (req, res, next) => {
     // PRD F8: Appointment Confirmation Notification
     const finalStartAt = apptResult.bookedStartAt || '09:00';
     try {
-      await notify({
-        uids: [userId],
-        title: `${patientName}: Appointment confirmed`,
-        body: `Your appointment (${apptResult.displayId || apptResult.id}) with ${resolvedDoctorName} on ${date} at ${finalStartAt} is confirmed. Token: ${apptResult.tokenLabel || apptResult.tokenNumber}.`,
-        privacyBody: `${patientName}: Appointment confirmed`,
-        type: 'APPOINTMENT_CONFIRMED',
-        data: {
-          appointmentId: apptResult.id,
-          displayId: apptResult.displayId,
-          tokenLabel: apptResult.tokenLabel || String(apptResult.tokenNumber),
-          date,
-          timeSlot: finalStartAt,
-          doctorId: resolvedDoctorId
-        }
-      });
+      const recipientPatientUid = apptResult.ownerUid || apptResult.patientUid || resolvedPatientUid;
+      if (recipientPatientUid) {
+        await notify({
+          uids: [recipientPatientUid],
+          title: `${resolvedPatientName || patientName}: Appointment confirmed`,
+          body: `Your appointment (${apptResult.displayId || apptResult.id}) with ${resolvedDoctorName} on ${date} at ${finalStartAt} is confirmed. Token: ${apptResult.tokenLabel || apptResult.tokenNumber}.`,
+          privacyBody: `${resolvedPatientName || patientName}: Appointment confirmed`,
+          type: 'APPOINTMENT_CONFIRMED',
+          data: {
+            appointmentId: apptResult.id,
+            displayId: apptResult.displayId,
+            tokenLabel: apptResult.tokenLabel || String(apptResult.tokenNumber),
+            date,
+            timeSlot: finalStartAt,
+            doctorId: resolvedDoctorId
+          }
+        });
+      }
     } catch (notifErr) {
       console.warn('Booking confirmation notification warning:', notifErr.message);
     }
@@ -1105,8 +1148,7 @@ export const registerWalkin = async (req, res, next) => {
   try {
     const { patientHealthId, patientName, doctorId, departmentId = 'dept-gen' } = req.body;
     const db = assertDbConnected();
-
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = getHospitalTodayStr();
     const deptLetter = (departmentId.split('-')[1] || 'G').toUpperCase().substring(0, 1);
 
     const counterRef = db.collection('counters').doc(`token_${deptLetter}_${todayStr}`);

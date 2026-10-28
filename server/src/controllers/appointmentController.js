@@ -5,6 +5,7 @@ import { calculatePriorityScore } from '../services/tokenPriorityEngine.js';
 import { AppError } from '../utils/errors.js';
 import { formatDateYYYYMMDD, isTimeOverlapping } from '../utils/time.js';
 import { getAppointmentDateCompact, formatAppointmentDisplayId } from '../services/appointmentIdService.js';
+import { recalculateQueue } from '../services/queueService.js';
 
 /**
  * Atomically book an appointment with Firestore Transactional Double-Booking Lock
@@ -502,7 +503,7 @@ export const getMyAppointments = async (req, res, next) => {
 
     const CANCELLED_STATUSES = ['cancelled', 'cancelled_by_patient', 'cancelled_by_doctor', 'cancelled_by_clinic'];
     const COMPLETED_STATUSES = ['completed', 'no_show'];
-    const ACTIVE_STATUSES = ['booked', 'confirmed', 'checked_in', 'waiting', 'called', 'in_room', 'on_the_way', 'nearby', 'rejoined'];
+    const ACTIVE_STATUSES = ['booked', 'confirmed', 'checked_in', 'waiting', 'called', 'in_room', 'in_consultation', 'on_the_way', 'nearby', 'rejoined'];
 
     const appointments = await Promise.all(
       rawAppointments.map(async (appt) => {
@@ -717,15 +718,38 @@ export const updateAppointmentStatus = async (req, res, next) => {
       }
     }
 
-    await apptRef.update({
+    const apptData = apptDoc.data();
+    const targetApptId = apptData.appointmentId || apptData.id || id;
+    const nowIso = new Date().toISOString();
+
+    const updateFields = {
       status,
       updatedAt: new Date()
-    });
+    };
+    if (status === 'IN_CONSULTATION') {
+      updateFields.consultStartAt = apptData.consultStartAt || nowIso;
+      updateFields.graceEndAt = null;
+      updateFields.graceDurationMin = null;
+      updateFields.isMissed = false;
+      updateFields.missedTurnHandled = true;
+      updateFields.live = {
+        position: 1,
+        aheadCount: 0,
+        waitMinLow: 0,
+        waitMinHigh: 0,
+        predictedCallAt: null,
+        reasonText: 'Consultation in progress',
+        updatedAt: nowIso
+      };
+    } else if (status === 'COMPLETED') {
+      updateFields.consultEndAt = nowIso;
+      updateFields.live = null;
+    }
+
+    await apptRef.update(updateFields);
 
     if (status === 'CANCELLED') {
       try {
-        const apptData = apptDoc.data();
-        const targetApptId = apptData.appointmentId || apptData.id || id;
         const tokenDocRef = db.collection('tokens').doc(`tok-${targetApptId}`);
         const tokenDoc = await tokenDocRef.get();
         if (tokenDoc.exists) {
@@ -738,6 +762,44 @@ export const updateAppointmentStatus = async (req, res, next) => {
         }
       } catch (tErr) {
         console.warn('Error updating token status on cancellation in updateAppointmentStatus:', tErr.message);
+      }
+    } else if (status === 'IN_CONSULTATION') {
+      try {
+        const tokenDocRef = db.collection('tokens').doc(`tok-${targetApptId}`);
+        const tokenDoc = await tokenDocRef.get();
+        if (tokenDoc.exists) {
+          await tokenDocRef.update({ status: 'in_consultation', startedAt: updateFields.consultStartAt, graceEndAt: null, updatedAt: new Date() });
+        } else {
+          const tokenQuery = await db.collection('tokens').where('appointmentId', '==', targetApptId).get();
+          for (const doc of tokenQuery.docs) {
+            await doc.ref.update({ status: 'in_consultation', startedAt: updateFields.consultStartAt, graceEndAt: null, updatedAt: new Date() });
+          }
+        }
+      } catch (tErr) {
+        console.warn('Error updating token status on in_consultation in updateAppointmentStatus:', tErr.message);
+      }
+    } else if (status === 'COMPLETED') {
+      try {
+        const tokenDocRef = db.collection('tokens').doc(`tok-${targetApptId}`);
+        const tokenDoc = await tokenDocRef.get();
+        if (tokenDoc.exists) {
+          await tokenDocRef.update({ status: 'completed', consultEndAt: nowIso, graceEndAt: null, updatedAt: new Date() });
+        } else {
+          const tokenQuery = await db.collection('tokens').where('appointmentId', '==', targetApptId).get();
+          for (const doc of tokenQuery.docs) {
+            await doc.ref.update({ status: 'completed', consultEndAt: nowIso, graceEndAt: null, updatedAt: new Date() });
+          }
+        }
+      } catch (tErr) {
+        console.warn('Error updating token status on completion in updateAppointmentStatus:', tErr.message);
+      }
+    }
+
+    if (apptData.doctorId && apptData.date) {
+      try {
+        await recalculateQueue(apptData.doctorId, apptData.date);
+      } catch (qErr) {
+        console.warn('Recalculate queue warning in updateAppointmentStatus:', qErr.message);
       }
     }
 

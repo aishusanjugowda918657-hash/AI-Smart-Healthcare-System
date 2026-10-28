@@ -2,8 +2,10 @@ import { assertDbConnected } from '../config/firebase.js';
 import { calculatePriorityScore, sortQueueTokens } from '../services/tokenPriorityEngine.js';
 import { calculateWaitingTime, parseFirestoreDate } from '../services/waitingTimeCalculator.js';
 import { clock } from '../utils/clock.js';
-import { getHospitalTodayStr, parseSlotTimeToDate } from '../utils/timezoneDate.js';
+import { getHospitalTodayStr, parseSlotTimeToDate, formatHospitalTime, formatSlotTimeDisplay } from '../utils/timezoneDate.js';
 import { getGlobalSettings } from '../services/settingsService.js';
+import { computeQueueSnapshot } from '../services/queueService.js';
+import { callNextPatient as queueCallNextPatient, finishConsultation as queueFinishConsultation } from './queueController.js';
 
 /**
  * Check-in appointment & generate priority token
@@ -102,7 +104,7 @@ export const checkinAndGenerateToken = async (req, res, next) => {
 export const getDoctorQueue = async (req, res, next) => {
   try {
     const { doctorUid } = req.params;
-    const date = req.query.date || new Date().toISOString().split('T')[0];
+    const date = req.query.date || getHospitalTodayStr();
     const db = assertDbConnected();
 
     const snapshot = await db
@@ -131,7 +133,7 @@ export const getDoctorQueue = async (req, res, next) => {
 export const callNextPatient = async (req, res, next) => {
   try {
     const { uid: doctorUid } = req.user;
-    const date = req.body.date || new Date().toISOString().split('T')[0];
+    const date = req.body.date || getHospitalTodayStr();
     const { tokenId } = req.body;
     const db = assertDbConnected();
 
@@ -236,6 +238,10 @@ export const callNextPatient = async (req, res, next) => {
       });
     }
 
+    try {
+      await recalculateQueue(doctorUid, date);
+    } catch (_) {}
+
     res.status(200).json({
       success: true,
       message: `Calling patient ${nextToken.patientHealthId} (Token ${nextToken.tokenNumber}).`,
@@ -319,6 +325,13 @@ export const completeCurrentConsultation = async (req, res, next) => {
       });
     }
 
+    try {
+      const apptDoc = tokenData.appointmentId ? await db.collection('appointments').doc(tokenData.appointmentId).get() : null;
+      const targetDocId = apptDoc?.exists ? (apptDoc.data().doctorId || doctorUid) : doctorUid;
+      const targetDate = apptDoc?.exists ? (apptDoc.data().date || tokenData.date) : (tokenData.date || getHospitalTodayStr());
+      await recalculateQueue(targetDocId, targetDate);
+    } catch (_) {}
+
     res.status(200).json({
       success: true,
       message: `Consultation completed. Logged duration: ${actualDurationMinutes} mins.`,
@@ -347,7 +360,7 @@ export const getWaitingTimeEstimate = async (req, res, next) => {
     }
 
     const db = assertDbConnected();
-    const date = new Date().toISOString().split('T')[0];
+    const date = getHospitalTodayStr();
 
     // 1. Fetch Doctor info & schedule
     const docDoc = await db.collection('doctors').doc(doctorUid).get();
@@ -529,29 +542,8 @@ export const getMyQueueStatus = async (req, res, next) => {
         continue; // Discard from active appointments
       }
 
-      if (apptDate === todayStr) {
-        const isAttending = a.checkedInAt || ['checked_in', 'waiting', 'in_consultation', 'called', 'rejoined', 'completed'].includes((a.status || '').toLowerCase());
-        if (!isAttending) {
-          const apptTime = parseSlotTimeToDate(a.date, a.bookedStartAt || a.timeSlot);
-          if (apptTime && now.getTime() >= apptTime.getTime() + graceMin * 60 * 1000) {
-            // Grace period expired without checkin! Transition to no_show
-            try {
-              await db.collection('appointments').doc(a.id).update({
-                status: 'no_show',
-                noShowAt: now,
-                updatedAt: now
-              });
-              const targetApptId = a.appointmentId || a.id;
-              const tokRef = db.collection('tokens').doc(`tok-${targetApptId}`);
-              await tokRef.set({ status: 'no_show', noShowAt: now, updatedAt: now }, { merge: true });
-            } catch (e) {
-              console.warn('Error transitioning expired same-day appointment to no-show:', e.message);
-            }
-            continue; // Discard from active appointments
-          }
-        }
-      }
-
+      // Preserve active same-day appointment without premature silent cancellation.
+      // Silent no-show and grace timeouts are strictly handled by noShowSweepJob (Rule B5 & B8).
       activeAppts.push(a);
     }
 
@@ -595,233 +587,335 @@ export const getMyQueueStatus = async (req, res, next) => {
         return res.status(200).json({
           success: true,
           hasAppointment: false,
-          message: 'No active appointment found.'
+          hasToken: false,
+          message: 'No active appointment found for today.',
+          queueStatus: 'NO_APPOINTMENT',
+          queuePosition: 0,
+          patientsAhead: 0,
+          estimatedWaitMinutes: 0,
+          estimatedTurnTime: null,
+          currentlyServing: null
         });
       }
     }
-    // ─────────────────────────────────────────────────────────────────────────
 
     const doctorUid = activeAppt.doctorUid || 'doc-uid-001';
+    const targetDoctorId = activeAppt.doctorId || activeAppt.doctorUid || doctorUid;
     const apptDate = activeAppt.date || todayStr;
+    const targetApptId = activeAppt.appointmentId || activeAppt.id;
 
-    // 2. Fetch doctor info & doctor schedule
-    const docDoc = await db.collection('doctors').doc(doctorUid).get();
-    const docData = docDoc.exists ? docDoc.data() : {};
+    // 2. Fetch Authoritative Queue Snapshot from shared queueService engine
+    const snapshot = await computeQueueSnapshot(targetDoctorId, apptDate, { db, now });
+
+    // 3. Fetch doctor and department metadata
+    const docDoc = await db.collection('doctors').doc(activeAppt.doctorUid || targetDoctorId).get().catch(() => null);
+    let docData = (docDoc && docDoc.exists) ? docDoc.data() : {};
+    if (!docData.fullName && !docData.name && targetDoctorId) {
+      const docSnap2 = await db.collection('doctors').where('doctorId', '==', targetDoctorId).limit(1).get().catch(() => null);
+      if (docSnap2 && !docSnap2.empty) docData = docSnap2.docs[0].data();
+    }
     const doctorName = docData.fullName || docData.name || activeAppt.doctorName || 'Doctor';
 
-    const deptDoc = await db.collection('departments').doc(activeAppt.departmentId || 'dept-card').get();
-    const departmentName = deptDoc.exists ? deptDoc.data().name : 'Cardiology';
-
-    const schedDoc = await db.collection('doctorSchedules').doc(`sched-${doctorUid}`).get();
-    const breakTimes = schedDoc.exists ? (schedDoc.data().breakTimes || []) : [{ start: '13:00', end: '14:00' }];
-    let avgConsultationTimeMinutes = docData.avgConsultationTimeMinutes || 15;
-
-    // 3. Fetch tokens for this doctor on the appointment's actual date
-    // Using apptDate (not forced to todayStr) so future-dated appointments work.
-    const apptDateTokensSnap = await db
-      .collection('tokens')
-      .where('doctorUid', '==', doctorUid)
-      .where('date', '==', apptDate)
-      .get();
-
-    const apptDateTokens = apptDateTokensSnap.docs.map((d) => d.data());
-
-    // Compute rolling average from completed tokens on appointment date if available
-    let isHistoricalDataAvailable = false;
-    const completedTokens = apptDateTokens.filter((t) => t.status === 'completed' && t.actualDurationMinutes);
-    if (completedTokens.length > 0) {
-      const sum = completedTokens.reduce((acc, curr) => acc + curr.actualDurationMinutes, 0);
-      avgConsultationTimeMinutes = Math.max(5, Math.round(sum / completedTokens.length));
-      isHistoricalDataAvailable = true;
+    let departmentName = 'General OPD';
+    if (activeAppt.departmentName) {
+      departmentName = activeAppt.departmentName;
+    } else if (activeAppt.departmentId) {
+      const deptDoc = await db.collection('departments').doc(activeAppt.departmentId).get().catch(() => null);
+      departmentName = (deptDoc && deptDoc.exists) ? deptDoc.data().name : 'General OPD';
     }
 
-    // 4. Locate patient's token — STRICTLY by appointmentId relationship.
-    // The `|| t.patientUid === patientUid` fallback is intentionally removed.
-    // That fallback could accidentally match an older cancelled token from a
-    // different appointment on the same date (e.g. CARD-T-018 / cancelled).
+    // 4. Locate patient's token
     let myToken = null;
-
-    // Primary: scan apptDateTokens by appointmentId
-    myToken = apptDateTokens.find((t) => t.appointmentId === activeAppt.appointmentId) || null;
-
-    // Secondary: canonical document ID tok-<appointmentId>
-    if (!myToken) {
-      const tokenDoc = await db.collection('tokens').doc(`tok-${activeAppt.appointmentId}`).get();
-      if (tokenDoc.exists) {
-        myToken = tokenDoc.data();
+    if (targetApptId) {
+      const tokenDoc = await db.collection('tokens').doc(`tok-${targetApptId}`).get().catch(() => null);
+      if (tokenDoc && tokenDoc.exists) {
+        myToken = { id: tokenDoc.id, ...tokenDoc.data() };
+      } else if (activeAppt.tokenId) {
+        const tokenDoc2 = await db.collection('tokens').doc(activeAppt.tokenId).get().catch(() => null);
+        if (tokenDoc2 && tokenDoc2.exists) myToken = { id: tokenDoc2.id, ...tokenDoc2.data() };
+      }
+      if (!myToken) {
+        const tokenQuery = await db.collection('tokens').where('appointmentId', '==', targetApptId).limit(1).get().catch(() => null);
+        if (tokenQuery && !tokenQuery.empty) myToken = { id: tokenQuery.docs[0].id, ...tokenQuery.docs[0].data() };
       }
     }
 
-    // Tertiary: query by appointmentId field (handles doc-ID mismatch edge case)
-    if (!myToken) {
-      const tokenQuery = await db
-        .collection('tokens')
-        .where('appointmentId', '==', activeAppt.appointmentId)
-        .limit(1)
-        .get();
-      if (!tokenQuery.empty) {
-        myToken = tokenQuery.docs[0].data();
-      }
-    }
+    const tokenNumber = myToken?.tokenNumber || activeAppt.tokenNumber || activeAppt.tokenLabel || 'G-001';
 
-    // Security check: ensure token belongs to patient, patientHealthId, or active appointment
-    const isAuthorizedToken =
-      myToken &&
-      (myToken.patientUid === patientUid ||
-       myToken.patientUid === activeAppt.patientUid ||
-       myToken.patientHealthId === patientHealthId ||
-       myToken.appointmentId === activeAppt.appointmentId ||
-       activeAppt.bookedBy === patientUid);
+    // 5. Derive canonical lifecycle state
+    const apptStatusLower = (activeAppt.status || '').toLowerCase();
+    const tokenStatusLower = (myToken?.status || '').toLowerCase();
+    const isCancelled = apptStatusLower === 'cancelled' || tokenStatusLower === 'cancelled';
+    const isCompleted = apptStatusLower === 'completed' || tokenStatusLower === 'completed';
 
-    if (myToken && !isAuthorizedToken) {
-      myToken = null;
-    }
+    const isServing =
+      ['in_consultation', 'in_room', 'serving'].includes(apptStatusLower) ||
+      ['in_consultation', 'in_room', 'serving'].includes(tokenStatusLower) ||
+      (snapshot.currentConsultation?.id === targetApptId && ['in_consultation', 'in_room', 'serving'].includes(String(snapshot.currentConsultation?.status || '').toLowerCase()));
 
-    const tokenNumber = myToken?.tokenNumber || activeAppt.tokenNumber || null;
-
-    // isCancelled/isCompleted reflects only the token status — the appointment
-    // has already passed the INACTIVE_STATUSES filter above.
-    const isCancelled = myToken?.status === 'cancelled';
-    const isCompleted = activeAppt.status === 'COMPLETED' || myToken?.status === 'completed';
-
-    // 5. Build queue position & current room metrics
-    const currentlyServingToken = apptDateTokens.find((t) => t.status === 'serving') || null;
-    const waitingTokens = sortQueueTokens(
-      apptDateTokens.filter((t) =>
-        t.status === 'waiting' &&
-        !['cancelled', 'completed', 'no_show', 'expired'].includes(String(t.status).toLowerCase())
-      )
+    const isCalled = !isServing && (
+      apptStatusLower === 'called' ||
+      tokenStatusLower === 'called' ||
+      (snapshot.currentConsultation?.id === targetApptId && snapshot.currentConsultation?.status === 'called')
     );
-    const totalActiveQueue = waitingTokens.length + (currentlyServingToken ? 1 : 0);
+
+    const isFutureAppointment = !isServing && !isCalled && !isCompleted && apptDate > todayStr;
+
+    // 6. Look up position in authoritative readyCandidates and notCheckedIn
+    const readyIdx = snapshot.readyCandidates.findIndex(
+      (c) => c.id === targetApptId || (c.appointmentId && c.appointmentId === targetApptId)
+    );
+    const notCheckedIdx = snapshot.notCheckedIn.findIndex(
+      (c) => c.id === targetApptId || (c.appointmentId && c.appointmentId === targetApptId)
+    );
+
+    const totalActiveQueue = snapshot.readyCandidates.length + (snapshot.currentConsultation ? 1 : 0);
 
     let myPositionNum = -1;
     let positionText = 'WAITING';
     let patientsAhead = 0;
-    let patientsAheadTokens = [];
-
-    if (isCompleted) {
-      positionText = 'CONSULTATION COMPLETED';
-    } else if (isCancelled) {
-      positionText = 'APPOINTMENT CANCELLED';
-    } else if (currentlyServingToken && myToken && currentlyServingToken.id === myToken.id) {
-      positionText = 'NOW SERVING';
-      myPositionNum = 1;
-      patientsAhead = 0;
-    } else if (myToken) {
-      const idx = waitingTokens.findIndex((t) => t.id === myToken.id || t.tokenNumber === myToken.tokenNumber);
-      if (idx !== -1) {
-        myPositionNum = idx + 1;
-        patientsAhead = idx;
-        patientsAheadTokens = waitingTokens.slice(0, idx);
-        positionText = `Waiting (${idx + 1} of ${totalActiveQueue})`;
-      } else {
-        patientsAhead = waitingTokens.length;
-        patientsAheadTokens = waitingTokens;
-      }
-    }
-
-    // 6. Calculate waiting time and estimated turn
-    const nowDate = new Date();
-    const isFutureAppointment = apptDate > todayStr;
-    const rawSlotTime = activeAppt.timeSlot || activeAppt.bookedStartAt || activeAppt.time || '09:00';
-    let formattedSlotTime = rawSlotTime;
-    const cleanTime = String(rawSlotTime).replace(/(am|pm)/i, '').trim();
-    const [sH, sM] = cleanTime.split(':').map(Number);
-    if (!isNaN(sH)) {
-      const ampm = sH >= 12 ? 'PM' : 'AM';
-      const displayH = sH % 12 || 12;
-      formattedSlotTime = `${String(displayH).padStart(2, '0')}:${String(sM || 0).padStart(2, '0')} ${ampm}`;
-    }
-
     let waitResult = {
       estimatedWaitMinutes: null,
       estimatedTurnTime: 'Calculating...',
-      patientsAhead,
+      patientsAhead: 0,
       isEstimate: true,
       calculationBasis: 'Calculating...'
     };
+    let liveWait = null;
 
-    if (isFutureAppointment) {
+    const rawSlot = activeAppt.timeSlot || activeAppt.bookedStartAt || activeAppt.time || '09:00';
+    const scheduledSlotTime = formatSlotTimeDisplay(rawSlot);
+    const apptDateObj = parseSlotTimeToDate(apptDate, rawSlot);
+    const apptTimeMs = apptDateObj ? apptDateObj.getTime() : now.getTime();
+    const isCheckedIn = !!activeAppt.checkedInAt || ['checked_in', 'waiting', 'called', 'in_consultation', 'in_room', 'completed'].includes(apptStatusLower);
+    const checkinRequired = !isCheckedIn && ['booked', 'confirmed', 'not_arrived'].includes(apptStatusLower);
+    const isOverdue = checkinRequired && now.getTime() > apptTimeMs;
+    const overdueMinutes = isOverdue ? Math.max(0, Math.floor((now.getTime() - apptTimeMs) / 60000)) : 0;
+
+    if (isCompleted) {
+      positionText = 'CONSULTATION COMPLETED';
+      myPositionNum = 1;
+      patientsAhead = 0;
+      waitResult = {
+        estimatedWaitMinutes: 0,
+        estimatedTurnTime: 'Completed',
+        scheduledSlotTime,
+        patientsAhead: 0,
+        isEstimate: false,
+        calculationBasis: 'Consultation Completed'
+      };
+      liveWait = null;
+    } else if (isCancelled) {
+      positionText = 'APPOINTMENT CANCELLED';
+      myPositionNum = -1;
+      patientsAhead = 0;
       waitResult = {
         estimatedWaitMinutes: null,
-        estimatedTurnTime: formattedSlotTime,
-        patientsAhead,
+        estimatedTurnTime: 'Cancelled',
+        scheduledSlotTime,
+        patientsAhead: 0,
+        isEstimate: false,
+        calculationBasis: 'Appointment Cancelled'
+      };
+      liveWait = null;
+    } else if (isServing) {
+      const isServingExact = myToken?.status === 'serving' || apptStatusLower === 'serving';
+      positionText = isServingExact ? 'NOW SERVING' : 'Consultation in progress';
+      myPositionNum = 1;
+      patientsAhead = 0;
+      waitResult = {
+        estimatedWaitMinutes: 0,
+        estimatedTurnTime: isServingExact ? 'In Room Now' : 'In Consultation Now',
+        scheduledSlotTime,
+        patientsAhead: 0,
+        isEstimate: false,
+        calculationBasis: 'Consultation in progress'
+      };
+      liveWait = {
+        waitMinLow: null,
+        waitMinHigh: null,
+        predictedCallAt: null,
+        reasonText: 'Consultation in progress',
+        position: 1,
+        aheadCount: 0,
+        updatedAt: now.toISOString()
+      };
+    } else if (isCalled) {
+      positionText = 'NOW CALLED';
+      myPositionNum = 1;
+      patientsAhead = 0;
+      waitResult = {
+        estimatedWaitMinutes: 0,
+        estimatedTurnTime: 'Turn Called - Proceed to Room',
+        scheduledSlotTime,
+        patientsAhead: 0,
+        isEstimate: false,
+        calculationBasis: 'Called for Consultation'
+      };
+      liveWait = {
+        waitMinLow: null,
+        waitMinHigh: null,
+        predictedCallAt: null,
+        reasonText: 'Turn called - please proceed inside consultation room',
+        position: 1,
+        aheadCount: 0,
+        updatedAt: now.toISOString()
+      };
+    } else if (isFutureAppointment) {
+      positionText = 'SCHEDULED';
+      myPositionNum = -1;
+      patientsAhead = 0;
+      waitResult = {
+        estimatedWaitMinutes: null,
+        estimatedTurnTime: scheduledSlotTime,
+        scheduledSlotTime,
+        patientsAhead: 0,
         isEstimate: false,
         isFutureAppointment: true,
-        calculationBasis: `Scheduled for ${apptDate} at ${formattedSlotTime}`
+        calculationBasis: `Scheduled for ${apptDate} at ${scheduledSlotTime}`
       };
-    } else if (!isCompleted && !isCancelled) {
-      if (currentlyServingToken && myToken && currentlyServingToken.id === myToken.id) {
-        waitResult = {
-          estimatedWaitMinutes: 0,
-          estimatedTurnTime: 'In Room Now',
-          patientsAhead: 0,
-          isEstimate: false,
-          calculationBasis: 'Active Consultation'
-        };
-      } else if (myToken) {
-        waitResult = calculateWaitingTime({
-          currentServingToken: currentlyServingToken,
-          patientsAheadTokens,
-          avgConsultationTimeMinutes,
-          breakTimes,
-          nowDate,
-          isHistoricalDataAvailable
-        });
+      liveWait = null;
+    } else if (readyIdx !== -1) {
+      const cand = snapshot.readyCandidates[readyIdx];
+      myPositionNum = readyIdx + 1;
+      patientsAhead = readyIdx;
+      positionText = myPositionNum === 1
+        ? 'Next in Line (#1)'
+        : `Waiting (${myPositionNum} of ${totalActiveQueue})`;
+      liveWait = cand.live || {};
+      const waitMinLow = liveWait.waitMinLow != null ? liveWait.waitMinLow : 0;
+      const waitMinHigh = liveWait.waitMinHigh != null ? liveWait.waitMinHigh : 5;
+      const estWait = Math.round((waitMinLow + waitMinHigh) / 2);
+
+      let estTurn = 'Turn Imminent (In Progress)';
+      if (liveWait.predictedCallAt) {
+        const predMs = new Date(liveWait.predictedCallAt).getTime();
+        if (predMs > now.getTime()) {
+          estTurn = formatHospitalTime(liveWait.predictedCallAt);
+        } else {
+          estTurn = 'Turn Imminent (In Progress)';
+        }
+      } else if (estWait > 0) {
+        const projectedDate = new Date(now.getTime() + estWait * 60 * 1000);
+        estTurn = formatHospitalTime(projectedDate);
       }
+
+      waitResult = {
+        estimatedWaitMinutes: estWait,
+        estimatedTurnTime: estTurn,
+        scheduledSlotTime,
+        patientsAhead,
+        isEstimate: true,
+        calculationBasis: liveWait.reasonText || 'Authoritative Live Queue Engine'
+      };
+    } else if (notCheckedIdx !== -1) {
+      const cand = snapshot.notCheckedIn[notCheckedIdx];
+      myPositionNum = snapshot.readyCandidates.length + notCheckedIdx + 1;
+      patientsAhead = cand.live?.aheadCount ?? (snapshot.readyCandidates.length + notCheckedIdx);
+      positionText = isOverdue
+        ? `Appointment Time Passed — Check in now (${overdueMinutes}m late)`
+        : 'Scheduled (Awaiting Check-in)';
+      liveWait = cand.live || {};
+      const estWait = (liveWait.waitMinLow != null && liveWait.waitMinHigh != null)
+        ? Math.round((liveWait.waitMinLow + liveWait.waitMinHigh) / 2)
+        : null;
+
+      let estTurn = isOverdue ? 'Check-in Required to Join Queue' : scheduledSlotTime;
+      if (!isOverdue && liveWait.predictedCallAt && new Date(liveWait.predictedCallAt).getTime() > now.getTime()) {
+        estTurn = formatHospitalTime(liveWait.predictedCallAt);
+      }
+
+      waitResult = {
+        estimatedWaitMinutes: estWait,
+        estimatedTurnTime: estTurn,
+        scheduledSlotTime,
+        patientsAhead,
+        isEstimate: true,
+        calculationBasis: isOverdue ? 'Awaiting Late Check-in' : 'Awaiting Check-in'
+      };
+    } else {
+      myPositionNum = snapshot.readyCandidates.length + 1;
+      patientsAhead = snapshot.readyCandidates.length;
+      positionText = checkinRequired
+        ? (isOverdue ? `Appointment Time Passed — Check in now (${overdueMinutes}m late)` : 'Check-in Required')
+        : `Waiting (${myPositionNum} of ${totalActiveQueue || 1})`;
+
+      let estTurn = 'Turn Imminent (In Progress)';
+      if (checkinRequired) {
+        estTurn = isOverdue ? 'Check-in Required to Join Queue' : scheduledSlotTime;
+      } else {
+        const projected = new Date(now.getTime() + 10 * 60 * 1000);
+        estTurn = formatHospitalTime(projected);
+      }
+
+      waitResult = {
+        estimatedWaitMinutes: checkinRequired ? null : 10,
+        estimatedTurnTime: estTurn,
+        scheduledSlotTime,
+        patientsAhead,
+        isEstimate: true,
+        calculationBasis: checkinRequired ? 'Check-in Required' : 'Authoritative Live Queue Engine'
+      };
+      liveWait = activeAppt.live || null;
     }
 
     // 7. Format Currently Serving section data
     let currentlyServingData = null;
-    if (currentlyServingToken) {
-      const calledAtDate = parseFirestoreDate(currentlyServingToken.calledAt);
-      const elapsedMinutes = calledAtDate ? Math.max(0, Math.floor((nowDate.getTime() - calledAtDate.getTime()) / 60000)) : 0;
-
-      const hours = calledAtDate ? calledAtDate.getHours() : 9;
-      const mins = calledAtDate ? calledAtDate.getMinutes() : 0;
-      const ampm = hours >= 12 ? 'PM' : 'AM';
-      const displayHours = hours % 12 || 12;
-      const startedFormatted = `${String(displayHours).padStart(2, '0')}:${String(mins).padStart(2, '0')} ${ampm}`;
-
+    if (isServing && targetApptId) {
+      const startRef = activeAppt.consultStartAt || myToken?.startedAt || myToken?.consultStartAt;
+      const startDate = startRef ? new Date(startRef) : now;
+      const elapsedMinutes = Math.max(0, Math.floor((now.getTime() - startDate.getTime()) / 60000));
       currentlyServingData = {
-        tokenNumber: currentlyServingToken.tokenNumber,
+        tokenNumber: tokenNumber || 'Active',
         doctorName,
         departmentName,
         status: 'Consultation in progress',
-        startedAt: startedFormatted,
+        startedAt: formatHospitalTime(startDate),
+        elapsedMinutes
+      };
+    } else if (snapshot.currentConsultation) {
+      const c = snapshot.currentConsultation;
+      const startRef = c.consultStartAt || c.calledAt;
+      const startDate = startRef ? new Date(startRef) : now;
+      const elapsedMinutes = Math.max(0, Math.floor((now.getTime() - startDate.getTime()) / 60000));
+      currentlyServingData = {
+        tokenNumber: c.tokenLabel || c.tokenNumber || 'Active',
+        doctorName,
+        departmentName,
+        status: c.status === 'called' ? 'Called - Entering Room' : 'Consultation in progress',
+        startedAt: formatHospitalTime(startDate),
         elapsedMinutes
       };
     }
 
-    // 8. Construct nearby queue timeline
+    // 8. Construct authoritative queue timeline
     const queueTimeline = [];
-    const lastCompleted = apptDateTokens
-      .filter((t) => t.status === 'completed')
-      .slice(-2);
-    lastCompleted.forEach((t) => {
+    const lastCompleted = (snapshot.completedAppts || []).slice(-2);
+    lastCompleted.forEach((a) => {
       queueTimeline.push({
-        tokenNumber: t.tokenNumber,
+        tokenNumber: a.tokenLabel || a.tokenNumber || 'Done',
         status: 'completed',
         label: 'Completed',
-        isMe: myToken ? t.id === myToken.id : false
+        isMe: a.id === targetApptId
       });
     });
 
-    if (currentlyServingToken) {
+    if (snapshot.currentConsultation) {
+      const isCurMe = snapshot.currentConsultation.id === targetApptId;
       queueTimeline.push({
-        tokenNumber: currentlyServingToken.tokenNumber,
-        status: 'serving',
-        label: 'Currently Serving',
-        isMe: myToken ? currentlyServingToken.id === myToken.id : false
+        tokenNumber: snapshot.currentConsultation.tokenLabel || snapshot.currentConsultation.tokenNumber || 'Active',
+        status: snapshot.currentConsultation.status === 'called' ? 'called' : 'serving',
+        label: isServing ? 'Consultation in progress' : (snapshot.currentConsultation.status === 'called' ? 'Now Called' : 'Currently Serving'),
+        isMe: isServing || isCurMe
       });
     }
 
-    waitingTokens.forEach((t) => {
-      const isMe = myToken ? (t.id === myToken.id || t.tokenNumber === myToken.tokenNumber) : false;
+    snapshot.readyCandidates.forEach((c) => {
+      const isMe = c.id === targetApptId;
       queueTimeline.push({
-        tokenNumber: t.tokenNumber,
+        tokenNumber: c.tokenLabel || c.tokenNumber || 'Waiting',
         status: 'waiting',
-        label: isMe ? 'YOU ARE HERE' : 'Waiting',
+        label: isMe ? 'Your Token' : 'Waiting',
         isMe
       });
     });
@@ -834,8 +928,8 @@ export const getMyQueueStatus = async (req, res, next) => {
       isCompleted,
       isFutureAppointment: !!isFutureAppointment,
       appointment: {
-        id: activeAppt.id || activeAppt.appointmentId,
-        appointmentId: activeAppt.appointmentId || activeAppt.id,
+        id: activeAppt.id || targetApptId,
+        appointmentId: targetApptId,
         displayId: activeAppt.displayId || activeAppt.appointmentId || activeAppt.id,
         doctorUid,
         doctorName,
@@ -844,48 +938,39 @@ export const getMyQueueStatus = async (req, res, next) => {
         date: activeAppt.date,
         timeSlot: activeAppt.timeSlot || activeAppt.bookedStartAt || activeAppt.time || '',
         bookedStartAt: activeAppt.bookedStartAt || activeAppt.timeSlot || activeAppt.time || '',
-        priorityCategory: activeAppt.priorityCategory || 'STANDARD',
+        scheduledSlotTime,
+        priorityCategory: activeAppt.priorityCategory || (activeAppt.clinicalLevel === 3 ? 'EMERGENCY' : activeAppt.clinicalLevel === 2 ? 'HIGH' : 'STANDARD'),
+        clinicalLevel: activeAppt.clinicalLevel || 1,
+        urgencySuggested: activeAppt.urgencySuggested || activeAppt.urgency || 'routine',
         patientHealthId: activeAppt.patientHealthId,
         reason: activeAppt.reason,
-        status: activeAppt.status
+        status: isServing ? 'in_consultation' : activeAppt.status,
+        checkinRequired,
+        isOverdue,
+        overdueMinutes
       },
       token: {
         tokenNumber,
-        status: myToken?.status || (isCancelled ? 'cancelled' : isCompleted ? 'completed' : isFutureAppointment ? 'scheduled' : 'waiting'),
-        priorityCategory: activeAppt.priorityCategory || 'STANDARD'
+        status: isServing ? 'in_consultation' : (myToken?.status || (isCancelled ? 'cancelled' : isCompleted ? 'completed' : isFutureAppointment ? 'scheduled' : 'waiting')),
+        priorityCategory: activeAppt.priorityCategory || (activeAppt.clinicalLevel === 3 ? 'EMERGENCY' : activeAppt.clinicalLevel === 2 ? 'HIGH' : 'STANDARD')
       },
       queueSummary: {
-        positionText: isCompleted
-          ? 'CONSULTATION COMPLETED'
-          : isCancelled
-          ? 'APPOINTMENT CANCELLED'
-          : isFutureAppointment
-          ? 'SCHEDULED'
-          : (currentlyServingToken && myToken && currentlyServingToken.id === myToken.id)
-          ? 'NOW SERVING'
-          : `#${myPositionNum > 0 ? myPositionNum : 1} of ${totalActiveQueue}`,
-        positionNumber: myPositionNum,
+        positionText,
+        positionNumber: (isServing || isCalled) ? 1 : myPositionNum,
         patientsAhead,
         totalActiveQueue,
         estimatedWaitMinutes: isFutureAppointment ? null : waitResult.estimatedWaitMinutes,
         estimatedTurnTime: waitResult.estimatedTurnTime,
+        scheduledSlotTime,
+        checkinRequired,
+        isOverdue,
+        overdueMinutes,
         isEstimate: waitResult.isEstimate || false,
         isFutureAppointment: !!isFutureAppointment,
-        calculationBasis: waitResult.calculationBasis || 'Calculating...'
+        calculationBasis: waitResult.calculationBasis || 'Authoritative Live Queue Engine',
+        calculatedAt: now.toISOString()
       },
-      // Live wait-time engine range data (written by recalculateQueue)
-      liveWait: (activeAppt.live && !isFutureAppointment) ? {
-        waitMinLow: activeAppt.live.waitMinLow,
-        waitMinHigh: activeAppt.live.waitMinHigh,
-        predictedCallAt: activeAppt.live.predictedCallAt,
-        reasonText: activeAppt.live.reasonText,
-        timeFactor: activeAppt.live.timeFactor,
-        position: activeAppt.live.position,
-        aheadCount: activeAppt.live.aheadCount,
-        breakRemainingMin: activeAppt.live.breakRemainingMin,
-        lateStartDelayMin: activeAppt.live.lateStartDelayMin,
-        updatedAt: activeAppt.live.updatedAt
-      } : null,
+      liveWait,
       leaveHome: null,
       earlyOptIn: activeAppt.earlyOptIn || false,
       currentlyServing: currentlyServingData,

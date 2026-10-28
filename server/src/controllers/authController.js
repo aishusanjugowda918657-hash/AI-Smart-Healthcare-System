@@ -178,6 +178,7 @@ export const getMe = async (req, res, next) => {
       .get();
 
     let doctorDisplayId = userData.displayId || userData.doctorDisplayId || null;
+    let resolvedDoctorId = userData.doctorId || null;
     if (userData.role === 'doctor' || userData.doctorId) {
       const docLookupId = userData.doctorId || uid;
       let dSnap = await db.collection('doctors').doc(docLookupId).get();
@@ -187,6 +188,7 @@ export const getMe = async (req, res, next) => {
       }
       if (dSnap && dSnap.exists) {
         const dData = dSnap.data();
+        resolvedDoctorId = dData.doctorId || resolvedDoctorId;
         doctorDisplayId = dData.displayId || dData.doctorDisplayId || assignDoctorDisplayId(dData);
       }
     }
@@ -194,6 +196,7 @@ export const getMe = async (req, res, next) => {
     return res.status(200).json(formatSuccessResponse({
       uid,
       ...userData,
+      doctorId: resolvedDoctorId,
       displayId: doctorDisplayId,
       doctorDisplayId: doctorDisplayId,
       patient: selfPatient

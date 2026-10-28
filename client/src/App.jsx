@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
-import { NotificationProvider } from './context/NotificationContext';
+import { NotificationProvider, GlobalNotificationToast } from './context/NotificationContext';
 import { LanguageProvider } from './context/LanguageContext';
 
 import Navbar from './components/common/Navbar';
@@ -89,6 +89,7 @@ export const App = () => {
           <HealthBanner />
           <PwaInstallPrompt />
           <Router>
+            <GlobalNotificationToast />
             <Routes>
               {/* Public Entry Routes — OUTSIDE Dashboard Layout (No Sidebar, No Navbar with user info) */}
               <Route path="/" element={<LandingPage />} />

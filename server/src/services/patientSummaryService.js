@@ -158,8 +158,13 @@ export async function preparePatientSummary({ appointmentId, doctorUid, doctorRo
     let canonicalDoctorId = doctorId;
     if (!canonicalDoctorId && doctorUid) {
       const uDoc = await db.collection('users').doc(doctorUid).get().catch(() => null);
-      if (uDoc && uDoc.exists) {
-        canonicalDoctorId = uDoc.data().doctorId || null;
+      if (uDoc && uDoc.exists && uDoc.data().doctorId) {
+        canonicalDoctorId = uDoc.data().doctorId;
+      } else {
+        const dDoc = await db.collection('doctors').doc(doctorUid).get().catch(() => null);
+        if (dDoc && dDoc.exists) {
+          canonicalDoctorId = dDoc.data().doctorId || dDoc.data().id || null;
+        }
       }
     }
 
@@ -210,6 +215,9 @@ export async function preparePatientSummary({ appointmentId, doctorUid, doctorRo
   if (!forceRefresh && appt.summary && appt.summary.text) {
     return {
       appointmentId,
+      status: appt.status,
+      consultStartAt: appt.consultStartAt || null,
+      appointment: { id: appt.id || appointmentId, status: appt.status, consultStartAt: appt.consultStartAt || null },
       healthId: appt.patientHealthId || appt.patientId || 'HID-UNKNOWN',
       patient: {
         name: appt.patientName || appt.patient?.name || 'Patient',
@@ -527,6 +535,9 @@ SUMMARY:`;
 
   return {
     appointmentId,
+    status: appt.status,
+    consultStartAt: appt.consultStartAt || null,
+    appointment: { id: appt.id || appointmentId, status: appt.status, consultStartAt: appt.consultStartAt || null },
     healthId: healthId || 'HID-UNKNOWN',
     patient: {
       name: patient.name,

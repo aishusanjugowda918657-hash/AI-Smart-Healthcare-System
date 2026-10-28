@@ -24,8 +24,10 @@ API.interceptors.request.use(
         const token = await auth.currentUser.getIdToken();
         config.headers.Authorization = `Bearer ${token}`;
       } else {
-        // Fallback for local testing / demo mode state stored in localStorage
-        const demoUser = JSON.parse(localStorage.getItem('healthcare_demo_user') || 'null');
+        // Fallback for local testing / demo mode state stored in sessionStorage (tab-isolated)
+        const demoUserRaw = (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('healthcare_demo_user') : null) ||
+                            (typeof localStorage !== 'undefined' ? localStorage.getItem('healthcare_demo_user') : null);
+        const demoUser = JSON.parse(demoUserRaw || 'null');
         if (demoUser) {
           config.headers['x-demo-uid'] = demoUser.uid;
           config.headers['x-demo-email'] = demoUser.email;

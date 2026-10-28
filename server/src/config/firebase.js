@@ -51,6 +51,16 @@ export const getActiveProjectId = () => {
 };
 
 try {
+  if (process.env.LOCAL_DEMO === 'true' || process.env.DEMO_MODE === 'true') {
+    if (!isEmulator || !process.env.FIREBASE_AUTH_EMULATOR_HOST) {
+      throw new Error(
+        'CRITICAL SAFETY VIOLATION: LOCAL_DEMO is enabled, but emulator configuration ' +
+        '(FIRESTORE_EMULATOR_HOST and/or FIREBASE_AUTH_EMULATOR_HOST) is missing! ' +
+        'Refusing to connect or fall back to production Firebase.'
+      );
+    }
+  }
+
   if (admin.apps.length === 0) {
     if (isEmulator) {
       // When running against the local emulator, use a plain project-ID init.
@@ -64,6 +74,13 @@ try {
         projectId: emulatorProjectId,
       });
       firebaseInitialized = true;
+      console.log('==================================================');
+      console.log('   LOCAL DEMO ENVIRONMENT (ISOLATED EMULATOR)');
+      console.log('   Auth Emulator: http://' + (process.env.FIREBASE_AUTH_EMULATOR_HOST || 'localhost:9099'));
+      console.log('   Firestore Emulator: http://' + (process.env.FIRESTORE_EMULATOR_HOST || 'localhost:8080'));
+      console.log('   Project: ' + emulatorProjectId);
+      console.log('   PRODUCTION CLOUD DATA IS PROTECTED AND UNTOUCHED');
+      console.log('==================================================');
     } else {
       const serviceAccount = getServiceAccount();
       if (serviceAccount) {

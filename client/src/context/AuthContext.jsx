@@ -3,7 +3,9 @@ import { auth } from '../config/firebase';
 import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
-  signOut
+  signOut,
+  setPersistence,
+  browserSessionPersistence
 } from 'firebase/auth';
 import API from '../services/api';
 import { mapAuthError } from '../utils/errorMapper';
@@ -56,10 +58,13 @@ export const AuthProvider = ({ children }) => {
     checkEnvironment();
   }, []);
 
-  // Clear all stored auth, role, and session data
+  // Clear stored auth, role, and session data for this browser tab only
   const clearStaleSession = () => {
-    localStorage.clear();
-    sessionStorage.clear();
+    try {
+      sessionStorage.clear();
+      sessionStorage.removeItem('healthcare_demo_user');
+      localStorage.removeItem('healthcare_demo_user');
+    } catch (_) {}
     setCurrentUser(null);
     setUserRole(null);
     setLoginSynced(false);
@@ -175,6 +180,12 @@ export const AuthProvider = ({ children }) => {
 
     if (!auth) {
       throw new Error('Firebase Auth unavailable.');
+    }
+
+    try {
+      await setPersistence(auth, browserSessionPersistence);
+    } catch (e) {
+      console.warn('⚠️ Could not set browserSessionPersistence in login:', e.message);
     }
 
     clearStaleSession();

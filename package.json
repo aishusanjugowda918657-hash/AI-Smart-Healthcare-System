@@ -20,6 +20,11 @@
     "realtest": "npm run realtest --prefix server --",
     "doctor": "npm run doctor --prefix server",
     "demo:prep": "npm run demo:prep --prefix server",
+    "demo:seed": "npm run seed:demo16 --prefix server",
+    "demo:server": "npm run demo:emulator:server --prefix server",
+    "demo:client": "npm run dev:emulator --prefix client",
+    "demo:sessions": "npm run demo:sessions --prefix server",
+    "emulators:start": "firebase emulators:start --only firestore,auth --project demo-project",
     "quota:check": "npm run quota:check --prefix server"
   }
 }

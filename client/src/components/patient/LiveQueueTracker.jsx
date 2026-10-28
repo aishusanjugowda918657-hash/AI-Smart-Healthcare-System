@@ -19,7 +19,9 @@ import {
   Bell,
   Sparkles,
   Zap,
-  Navigation
+  Navigation,
+  Pill,
+  FileText
 } from 'lucide-react';
 
 import { db } from '../../config/firebase';
@@ -134,10 +136,62 @@ export const LiveQueueTracker = () => {
       );
     }
 
-    const isCalled = token?.status === 'called' || appointment?.status === 'called';
-    const isMissed = appointment?.status === 'missed' || appointment?.isMissed;
-    const isServing = token?.status === 'serving' || token?.status === 'in_consultation' || appointment?.status === 'in_consultation' || queueSummary.positionText === 'NOW SERVING';
-    const isNext = queueSummary.patientsAhead === 0 || queueSummary.positionNumber === 1 || queueSummary.calculationBasis === 'Turn Soon';
+    const isServing =
+      token?.status === 'serving' ||
+      token?.status === 'in_consultation' ||
+      token?.status === 'in_room' ||
+      appointment?.status === 'in_consultation' ||
+      appointment?.status === 'in_room' ||
+      queueSummary?.positionText === 'NOW SERVING' ||
+      queueSummary?.positionText === 'Consultation in progress';
+
+    const isCalled =
+      !isServing &&
+      (token?.status === 'called' || appointment?.status === 'called' || queueSummary?.positionText === 'NOW CALLED');
+    const isMissed = !isServing && (appointment?.status === 'missed' || appointment?.isMissed);
+
+    const isCheckedIn =
+      !!appointment?.checkedInAt ||
+      ['checked_in', 'waiting', 'rejoined'].includes((appointment?.status || '').toLowerCase()) ||
+      ['waiting', 'serving', 'in_consultation'].includes((token?.status || '').toLowerCase());
+
+    const checkinRequired =
+      (queueSummary?.checkinRequired ?? appointment?.checkinRequired) ||
+      (!isCheckedIn && ['booked', 'confirmed', 'not_arrived'].includes((appointment?.status || '').toLowerCase()));
+
+    const isOverdue =
+      (queueSummary?.isOverdue ?? appointment?.isOverdue) ||
+      (checkinRequired && appointment?.timeSlot && false); // checked via backend queueSummary
+
+    const overdueMinutes = queueSummary?.overdueMinutes || appointment?.overdueMinutes || 15;
+    const slotTimeFormatted = formatTime(appointment?.timeSlot || appointment?.bookedStartAt) || 'scheduled time';
+
+    const isEmergency =
+      appointment?.clinicalLevel === 3 ||
+      appointment?.priorityCategory === 'EMERGENCY' ||
+      token?.priorityCategory === 'EMERGENCY';
+
+    const isNext =
+      !isServing &&
+      !isCalled &&
+      !isMissed &&
+      !checkinRequired &&
+      isCheckedIn &&
+      (queueSummary?.patientsAhead === 0 || queueSummary?.positionNumber === 1 || queueSummary?.calculationBasis === 'Turn Soon');
+
+    if (isServing) {
+      return (
+        <div className="p-4 bg-emerald-50 border-2 border-emerald-500/30 rounded-2xl flex items-center space-x-3 text-emerald-900 shadow-md animate-pulse">
+          <div className="p-2 bg-emerald-500 text-white rounded-xl shrink-0">
+            <Zap className="w-6 h-6" />
+          </div>
+          <div>
+            <h4 className="font-extrabold text-sm uppercase tracking-wide text-emerald-800">CONSULTATION IN PROGRESS</h4>
+            <p className="text-xs font-semibold text-emerald-700">You are currently in the Consultation Room with the doctor.</p>
+          </div>
+        </div>
+      );
+    }
 
     if (isCalled) {
       return (
@@ -171,15 +225,61 @@ export const LiveQueueTracker = () => {
       );
     }
 
-    if (isServing) {
+    // Overdue Check-in Banner
+    if (checkinRequired && (queueSummary?.isOverdue || isOverdue)) {
       return (
-        <div className="p-4 bg-emerald-50 border-2 border-emerald-500/30 rounded-2xl flex items-center space-x-3 text-emerald-900 shadow-md animate-pulse">
-          <div className="p-2 bg-emerald-500 text-white rounded-xl shrink-0">
-            <Zap className="w-6 h-6" />
+        <div className="p-4 bg-amber-50 border-2 border-amber-500/50 rounded-2xl flex items-center space-x-3 text-amber-950 shadow-md">
+          <div className="p-2 bg-amber-600 text-white rounded-xl shrink-0">
+            <Clock className="w-6 h-6 animate-pulse" />
           </div>
-          <div>
-            <h4 className="font-extrabold text-sm uppercase tracking-wide text-emerald-800">CONSULTATION IN PROGRESS</h4>
-            <p className="text-xs font-semibold text-emerald-700">You are currently in the Consultation Room with the doctor.</p>
+          <div className="flex-1">
+            <h4 className="font-extrabold text-sm uppercase tracking-wide text-amber-900 flex items-center gap-2">
+              <span>APPOINTMENT TIME PASSED — PLEASE CHECK IN NOW</span>
+              <span className="text-[10px] px-2 py-0.5 bg-amber-200 text-amber-900 rounded-full font-bold">~{overdueMinutes}M PAST DUE</span>
+            </h4>
+            <p className="text-xs font-semibold text-amber-800 mt-0.5">
+              Your appointment was scheduled for <strong>{slotTimeFormatted}</strong>. You remain fully eligible to check in. Please present your QR code or Health ID at reception to join the active queue.
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    // Standard Check-in Required Banner
+    if (checkinRequired) {
+      return (
+        <div className="p-4 bg-sky-50 border-2 border-sky-500/40 rounded-2xl flex items-center space-x-3 text-sky-950 shadow-md">
+          <div className="p-2 bg-sky-600 text-white rounded-xl shrink-0">
+            <UserCheck className="w-6 h-6" />
+          </div>
+          <div className="flex-1">
+            <h4 className="font-extrabold text-sm uppercase tracking-wide text-sky-900 flex items-center gap-2">
+              <span>CHECK-IN REQUIRED</span>
+              <span className="text-[10px] px-2 py-0.5 bg-sky-200 text-sky-900 rounded-full font-bold">ARRIVAL REQUIRED</span>
+            </h4>
+            <p className="text-xs font-semibold text-sky-800 mt-0.5">
+              Your appointment is at <strong>{slotTimeFormatted}</strong>. Please check in at reception or present your QR pass upon arrival.
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    // Emergency Clinical Urgency Notice
+    if (isEmergency && isCheckedIn) {
+      return (
+        <div className="p-4 bg-rose-50 border-2 border-rose-500/30 rounded-2xl flex items-center space-x-3 text-rose-950 shadow-md">
+          <div className="p-2 bg-rose-600 text-white rounded-xl shrink-0">
+            <Activity className="w-6 h-6 animate-pulse" />
+          </div>
+          <div className="flex-1">
+            <h4 className="font-extrabold text-sm uppercase tracking-wide text-rose-900 flex items-center gap-2">
+              <span>EMERGENCY PRIORITY ACTIVE</span>
+              <span className="text-[10px] px-2 py-0.5 bg-rose-200 text-rose-900 rounded-full font-bold">TRIAGE LEVEL 3</span>
+            </h4>
+            <p className="text-xs font-semibold text-rose-800 mt-0.5">
+              You are prioritized as an Emergency case. Doctor will call you next as soon as the current room consultation concludes.
+            </p>
           </div>
         </div>
       );
@@ -257,6 +357,19 @@ export const LiveQueueTracker = () => {
     liveWait,
     earlyOptIn
   } = queueData;
+
+  const isServing =
+    token?.status === 'serving' ||
+    token?.status === 'in_consultation' ||
+    token?.status === 'in_room' ||
+    appointment?.status === 'in_consultation' ||
+    appointment?.status === 'in_room' ||
+    queueSummary?.positionText === 'NOW SERVING' ||
+    queueSummary?.positionText === 'Consultation in progress';
+
+  const isCalled =
+    !isServing &&
+    (token?.status === 'called' || appointment?.status === 'called' || queueSummary?.positionText === 'NOW CALLED');
 
   const activeApptId = appointment?.id || appointment?.appointmentId;
 
@@ -340,313 +453,422 @@ export const LiveQueueTracker = () => {
       {/* Turn Alert Banner */}
       {renderTurnAlert()}
 
-      {/* 2. Main Token & Position Card */}
-      <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-5">
-          <div>
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Your Assigned Queue Token</span>
-            <div className="flex items-baseline space-x-3 mt-1">
-              <h2 className="text-4xl font-extrabold font-mono text-indigo-600 tracking-tight">
-                {token?.tokenNumber || 'NO-TOKEN'}
-              </h2>
-              <span className={`text-xs px-3 py-1 rounded-full font-bold border ${priorityColorClass}`}>
-                {appointment?.priorityCategory || 'STANDARD'} PRIORITY
+      {/* 2. Main Token & Queue Card OR Completed State */}
+      {isCompleted ? (
+        <div className="bg-white rounded-3xl border border-emerald-200 p-8 sm:p-10 shadow-sm text-center space-y-6">
+          <div className="w-16 h-16 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-xs border border-emerald-100">
+            <CheckCircle className="w-8 h-8" />
+          </div>
+
+          <div className="space-y-2 max-w-lg mx-auto">
+            <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-bold uppercase tracking-wider">
+              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              <span>Consultation Completed</span>
+            </div>
+            <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+              Your Consultation is Complete
+            </h2>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              Your consultation with <strong>Dr. {appointment?.doctorName || 'your doctor'}</strong> ({appointment?.departmentName || 'General OPD'}) has concluded. You are no longer in the active waiting queue.
+            </p>
+          </div>
+
+          {/* Quick Summary Badges */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs max-w-xl mx-auto text-left">
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+              <span className="text-[10px] text-slate-400 font-bold uppercase block">Token Number</span>
+              <span className="font-mono text-xl font-extrabold text-slate-900">#{token?.tokenNumber || '1'}</span>
+            </div>
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+              <span className="text-[10px] text-slate-400 font-bold uppercase block">Department</span>
+              <span className="font-bold text-slate-800 text-sm">{appointment?.departmentName || 'General OPD'}</span>
+            </div>
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+              <span className="text-[10px] text-slate-400 font-bold uppercase block">Consultation Status</span>
+              <span className="font-bold text-emerald-700 text-sm flex items-center space-x-1">
+                <CheckCircle className="w-3.5 h-3.5 text-emerald-500" />
+                <span>Finished & Saved</span>
               </span>
             </div>
           </div>
 
-          <div className="flex items-center space-x-2">
-            <span className="relative flex h-3 w-3">
-              <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
-                isCompleted ? 'bg-emerald-400' : isCancelled ? 'bg-rose-400' : 'bg-indigo-400'
-              }`} />
-              <span className={`relative inline-flex rounded-full h-3 w-3 ${
-                isCompleted ? 'bg-emerald-500' : isCancelled ? 'bg-rose-500' : 'bg-indigo-600'
-              }`} />
-            </span>
-            <span className="text-xs font-extrabold uppercase tracking-wide text-slate-700">
-              {isCompleted ? 'CONSULTATION COMPLETED' : isCancelled ? 'APPOINTMENT CANCELLED' : (token?.status || 'ACTIVE IN QUEUE').toUpperCase()}
-            </span>
-          </div>
-        </div>
-
-        {/* 4-Metric Grid */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-indigo-50/60 border border-indigo-100 p-4 rounded-2xl">
-            <div className="flex items-center space-x-2 text-indigo-600 mb-1">
-              <UserCheck className="w-4 h-4" />
-              <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-800">Queue Position</span>
-            </div>
-            <p className="text-2xl font-extrabold text-indigo-950">
-              {queueSummary?.positionNumber > 0 ? `#${queueSummary.positionNumber}` : '-'}
-            </p>
-            <p className="text-[10px] font-medium text-indigo-600/80 mt-1">
-              Of {queueSummary?.totalActiveQueue || 0} active tokens
-            </p>
-          </div>
-
-          <div className="bg-amber-50/60 border border-amber-100 p-4 rounded-2xl">
-            <div className="flex items-center space-x-2 text-amber-600 mb-1">
-              <Users className="w-4 h-4" />
-              <span className="text-[11px] font-bold uppercase tracking-wider text-amber-800">Patients Ahead</span>
-            </div>
-            <p className="text-2xl font-extrabold text-amber-950">
-              {queueSummary?.patientsAhead ?? 0} {queueSummary?.patientsAhead === 1 ? 'Patient' : 'Patients'}
-            </p>
-            <p className="text-[10px] font-medium text-amber-600/80 mt-1">
-              {queueData?.isFutureAppointment ? 'Ahead on scheduled date' : 'Waiting in line before you'}
-            </p>
-          </div>
-
-          <div className="bg-teal-50/60 border border-teal-100 p-4 rounded-2xl">
-            <div className="flex items-center space-x-2 text-teal-600 mb-1">
-              <Clock className="w-4 h-4" />
-              <span className="text-[11px] font-bold uppercase tracking-wider text-teal-800">Estimated Wait</span>
-            </div>
-            <p className="text-2xl font-extrabold text-teal-950">
-              {queueData?.isFutureAppointment
-                ? 'Opens on Visit'
-                : liveWait?.waitMinLow != null && liveWait?.waitMinHigh != null
-                ? `${liveWait.waitMinLow}–${liveWait.waitMinHigh} mins`
-                : queueSummary?.estimatedWaitMinutes !== null && queueSummary?.estimatedWaitMinutes !== undefined
-                ? `~${queueSummary.estimatedWaitMinutes} mins`
-                : 'Calculating...'}
-            </p>
-            <p className="text-[10px] font-medium text-teal-600/80 mt-1">
-              {queueData?.isFutureAppointment
-                ? 'Queue opens on appointment day'
-                : liveWait?.timeFactor
-                ? `Pace Factor: ${Number(liveWait.timeFactor).toFixed(2)}x`
-                : queueSummary?.isEstimate ? '★ Dynamic Rolling Average' : 'Live Pace Estimate'}
-            </p>
-          </div>
-
-          <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl">
-            <div className="flex items-center space-x-2 text-slate-600 mb-1">
-              <Sparkles className="w-4 h-4 text-indigo-600" />
-              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700">Estimated Turn</span>
-            </div>
-            <p className="text-2xl font-extrabold text-slate-900">
-              {queueSummary?.estimatedTurnTime || formatTime(appointment?.timeSlot || appointment?.bookedStartAt) || 'Calculating...'}
-            </p>
-            <p className="text-[10px] font-medium text-slate-500 mt-1">
-              {queueData?.isFutureAppointment ? 'Scheduled Slot Time' : 'Target Call Time'}
-            </p>
-          </div>
-        </div>
-
-        {/* Dynamic Calculation Basis Note */}
-        {(liveWait?.reasonText || queueSummary?.calculationBasis) && (
-          <div className="bg-slate-50 rounded-xl p-3 border border-slate-100 text-xs text-slate-500 flex items-center justify-between">
-            <span className="flex items-center gap-1.5">
-              <Activity className="w-3.5 h-3.5 text-indigo-500" />
-              {liveWait?.reasonText
-                ? <><strong>Queue Info:</strong> {liveWait.reasonText}</>
-                : <><strong>Calculation Method:</strong> {queueSummary.calculationBasis}</>}
-            </span>
-            {(queueSummary?.isEstimate || liveWait?.timeFactor) && (
-              <span className="text-[10px] bg-slate-200 text-slate-700 px-2 py-0.5 rounded-full font-bold">
-                {liveWait?.timeFactor ? `${Number(liveWait.timeFactor).toFixed(2)}x pace` : 'Estimating'}
-              </span>
-            )}
-          </div>
-        )}
-
-        {/* Action feedback message */}
-        {actionFeedback && (
-          <div className={`p-3 rounded-xl text-xs font-semibold flex items-center gap-2 ${
-            actionFeedback.type === 'success' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-rose-50 text-rose-800 border border-rose-200'
-          }`}>
-            {actionFeedback.type === 'success' ? <CheckCircle className="w-4 h-4 text-emerald-600" /> : <AlertTriangle className="w-4 h-4 text-rose-600" />}
-            <span>{actionFeedback.msg}</span>
-          </div>
-        )}
-
-        {/* M8 Action Buttons */}
-        <div className="pt-2 border-t border-slate-100 flex flex-wrap gap-2.5">
-          <button
-            onClick={() => fetchQueueStatus(true)}
-            disabled={refreshing}
-            className="px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl border border-indigo-200 transition-all flex items-center gap-1.5"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-            <span>Check My Wait</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setNotifyBeforeTurn(!notifyBeforeTurn);
-              setActionFeedback({
-                type: 'success',
-                msg: !notifyBeforeTurn ? 'Turn alerts enabled: You will be notified 10 minutes before your consultation' : 'Turn alerts disabled'
-              });
-            }}
-            className={`px-3.5 py-2 text-xs font-bold rounded-xl border transition-all flex items-center gap-1.5 ${
-              notifyBeforeTurn
-                ? 'bg-amber-100 text-amber-900 border-amber-300'
-                : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
-            }`}
-          >
-            <Bell className="w-3.5 h-3.5" />
-            <span>{notifyBeforeTurn ? 'Alert Active: 10m Prior' : 'Notify Me Before My Turn'}</span>
-          </button>
-
-          {['booked', 'confirmed'].includes(appointment?.status) && (
+          {/* Post-Consultation Action Buttons */}
+          <div className="pt-4 border-t border-slate-100 flex flex-wrap justify-center gap-3">
             <button
-              onClick={() => handleAction(`/appointments/${activeApptId}/on-the-way`)}
-              disabled={actionLoading}
-              className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl shadow transition-all flex items-center gap-1.5 disabled:opacity-50"
+              onClick={() => navigate('/prescriptions')}
+              className="px-5 py-2.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold rounded-xl transition shadow flex items-center space-x-2"
             >
-              <Navigation className="w-3.5 h-3.5" />
-              <span>I'm on My Way</span>
+              <Pill className="w-4 h-4" />
+              <span>View Prescriptions</span>
             </button>
-          )}
-
-          {['booked', 'confirmed', 'on_the_way', 'nearby', 'not_arrived', 'checked_in', 'waiting', 'called'].includes(appointment?.status) && !appointment?.lateReported && !['missed', 'no_show', 'completed'].includes(appointment?.status) && (
             <button
-              onClick={() => handleAction(`/appointments/${activeApptId}/late`, { lateReason: 'Traffic / Running late' })}
-              disabled={actionLoading}
-              className="px-3.5 py-2 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-xl shadow transition-all flex items-center gap-1.5 disabled:opacity-50"
+              onClick={() => navigate('/medical-history')}
+              className="px-5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-xl transition shadow flex items-center space-x-2"
             >
-              <Clock className="w-3.5 h-3.5" />
-              <span>I'll Be Late</span>
+              <FileText className="w-4 h-4" />
+              <span>View Medical History</span>
             </button>
-          )}
-
-          <button
-            onClick={() => navigate('/book-appointment')}
-            className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-200 transition-all flex items-center gap-1.5"
-          >
-            <span>Find Shorter Wait</span>
-          </button>
-
-          {(['missed', 'not_arrived', 'late'].includes(appointment?.status) || appointment?.isMissed) && (
             <button
-              onClick={() => handleAction(`/appointments/${activeApptId}/rejoin`)}
-              disabled={actionLoading}
-              className="px-3.5 py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold rounded-xl shadow transition-all flex items-center gap-1.5 disabled:opacity-50"
+              onClick={() => navigate('/patient-dashboard')}
+              className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-200 transition"
             >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>Rejoin Queue</span>
+              <span>Back to Dashboard</span>
             </button>
-          )}
-
-          {/* Early Slot Opt-In Controls */}
-          {activeApptId && (
-            <div className="flex items-center gap-1.5 ml-auto">
-              <span className="text-[11px] font-semibold text-slate-500">Early Slot:</span>
-              <button
-                onClick={() => handleAction(`/queue/appointments/${activeApptId}/early-optin`, { earlyOptIn: true })}
-                disabled={actionLoading}
-                className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg shadow transition-all disabled:opacity-50"
-              >
-                Accept Early Slot
-              </button>
-              <button
-                onClick={() => handleAction(`/queue/appointments/${activeApptId}/early-optin`, { earlyOptIn: false })}
-                disabled={actionLoading}
-                className="px-2.5 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold rounded-lg transition-all disabled:opacity-50"
-              >
-                Keep My Time
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* 3. Currently Serving Consultation Room */}
-      {currentlyServing ? (
-        <div className="bg-gradient-to-r from-emerald-500/10 via-emerald-500/5 to-teal-500/10 border-2 border-emerald-500/30 rounded-3xl p-6 shadow-sm">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center space-x-2">
-              <span className="w-3 h-3 rounded-full bg-emerald-500 animate-ping" />
-              <h3 className="font-extrabold text-sm text-emerald-950 uppercase tracking-wider">
-                Currently Serving Room Status
-              </h3>
-            </div>
-            <span className="text-xs font-extrabold bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full border border-emerald-200">
-              DOCTOR ACTIVE
-            </span>
-          </div>
-
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
-            <div className="bg-white/80 backdrop-blur-md p-3 rounded-2xl border border-emerald-100">
-              <p className="text-slate-400 font-semibold text-[10px] uppercase">Token In Room</p>
-              <p className="text-lg font-mono font-extrabold text-emerald-700 mt-0.5">{currentlyServing.tokenNumber}</p>
-            </div>
-
-            <div className="bg-white/80 backdrop-blur-md p-3 rounded-2xl border border-emerald-100">
-              <p className="text-slate-400 font-semibold text-[10px] uppercase">Consultation Started</p>
-              <p className="text-sm font-bold text-slate-800 mt-1">{currentlyServing.startedAt}</p>
-            </div>
-
-            <div className="bg-white/80 backdrop-blur-md p-3 rounded-2xl border border-emerald-100">
-              <p className="text-slate-400 font-semibold text-[10px] uppercase">Elapsed Time</p>
-              <p className="text-sm font-bold text-emerald-800 mt-1">{currentlyServing.elapsedMinutes} mins</p>
-            </div>
-
-            <div className="bg-white/80 backdrop-blur-md p-3 rounded-2xl border border-emerald-100">
-              <p className="text-slate-400 font-semibold text-[10px] uppercase">Current Status</p>
-              <p className="text-xs font-bold text-emerald-700 mt-1">In Consultation</p>
-            </div>
           </div>
         </div>
       ) : (
-        <div className="bg-slate-50 border border-slate-200 rounded-3xl p-5 text-center text-xs text-slate-500">
-          <p className="font-semibold text-slate-700">No token currently being served in doctor's cabin.</p>
-          <p className="text-[11px] mt-0.5">Doctor will call the next queued token shortly.</p>
-        </div>
-      )}
-
-      {/* 4. Live OPD Queue Sequence Timeline */}
-      <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-4">
-        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-          <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
-            <Activity className="w-4 h-4 text-indigo-600" />
-            <span>OPD Queue Sequence Timeline</span>
-          </h3>
-          <span className="text-xs font-semibold text-slate-500">
-            {queueTimeline.length} Tokens Displayed
-          </span>
-        </div>
-
-        {queueTimeline.length > 0 ? (
-          <div className="flex flex-wrap gap-2.5 pt-2">
-            {queueTimeline.map((t, idx) => {
-              const isServing = t.status === 'serving';
-              const isCompletedItem = t.status === 'completed';
-              const isMe = t.isMe;
-
-              let styleClasses = 'bg-slate-50 text-slate-700 border-slate-200';
-              if (isMe) {
-                styleClasses = 'bg-indigo-600 text-white border-indigo-700 font-bold ring-4 ring-indigo-100 shadow-md';
-              } else if (isServing) {
-                styleClasses = 'bg-emerald-50 text-emerald-800 border-emerald-300 font-bold ring-2 ring-emerald-300';
-              } else if (isCompletedItem) {
-                styleClasses = 'bg-slate-100 text-slate-400 border-slate-200 line-through opacity-75';
-              }
-
-              return (
-                <div
-                  key={idx}
-                  className={`px-3.5 py-2 rounded-2xl text-xs border flex items-center space-x-2 transition-all ${styleClasses}`}
-                >
-                  {isCompletedItem && <CheckCircle className="w-3.5 h-3.5 text-slate-400" />}
-                  {isServing && <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />}
-                  <div>
-                    <span className="font-mono text-sm">{t.tokenNumber}</span>
-                    <span className="text-[10px] block opacity-80 uppercase tracking-tight">
-                      {isMe ? '★ YOU ARE HERE' : t.label}
-                    </span>
-                  </div>
+        <>
+          {/* 2. Main Token & Position Card */}
+          <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-5">
+              <div>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Your Assigned Queue Token</span>
+                <div className="flex items-baseline space-x-3 mt-1">
+                  <h2 className="text-4xl font-extrabold font-mono text-indigo-600 tracking-tight">
+                    {token?.tokenNumber || 'NO-TOKEN'}
+                  </h2>
+                  <span className={`text-xs px-3 py-1 rounded-full font-bold border ${priorityColorClass}`}>
+                    {appointment?.priorityCategory || 'STANDARD'} PRIORITY
+                  </span>
                 </div>
-              );
-            })}
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <span className="relative flex h-3 w-3">
+                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                    isCancelled ? 'bg-rose-400' : isServing ? 'bg-emerald-400' : 'bg-indigo-400'
+                  }`} />
+                  <span className={`relative inline-flex rounded-full h-3 w-3 ${
+                    isCancelled ? 'bg-rose-500' : isServing ? 'bg-emerald-500' : 'bg-indigo-600'
+                  }`} />
+                </span>
+                <span className={`text-xs font-extrabold uppercase tracking-wide ${isServing ? 'text-emerald-700' : 'text-slate-700'}`}>
+                  {isCancelled
+                    ? 'APPOINTMENT CANCELLED'
+                    : isServing
+                    ? 'CONSULTATION IN PROGRESS'
+                    : isCalled
+                    ? 'TURN CALLED'
+                    : (token?.status || 'ACTIVE IN QUEUE').toUpperCase()}
+                </span>
+              </div>
+            </div>
+
+            {/* 4-Metric Grid */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="bg-indigo-50/60 border border-indigo-100 p-4 rounded-2xl">
+                <div className="flex items-center space-x-2 text-indigo-600 mb-1">
+                  <UserCheck className="w-4 h-4" />
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-800">Queue Position</span>
+                </div>
+                <p className="text-2xl font-extrabold text-indigo-950">
+                  {isServing
+                    ? 'In Room'
+                    : isCalled
+                    ? 'Called'
+                    : queueSummary?.positionNumber > 0
+                    ? `#${queueSummary.positionNumber}`
+                    : '-'}
+                </p>
+                <p className="text-[10px] font-medium text-indigo-600/80 mt-1">
+                  {isServing
+                    ? 'Consultation active'
+                    : isCalled
+                    ? 'Please proceed inside'
+                    : `Of ${queueSummary?.totalActiveQueue || 0} active tokens`}
+                </p>
+              </div>
+
+              <div className="bg-amber-50/60 border border-amber-100 p-4 rounded-2xl">
+                <div className="flex items-center space-x-2 text-amber-600 mb-1">
+                  <Users className="w-4 h-4" />
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-amber-800">Patients Ahead</span>
+                </div>
+                <p className="text-2xl font-extrabold text-amber-950">
+                  {isServing || isCalled
+                    ? '0 Patients'
+                    : `${queueSummary?.patientsAhead ?? 0} ${queueSummary?.patientsAhead === 1 ? 'Patient' : 'Patients'}`}
+                </p>
+                <p className="text-[10px] font-medium text-amber-600/80 mt-1">
+                  {isServing
+                    ? 'Currently with doctor'
+                    : isCalled
+                    ? 'Your turn now'
+                    : queueData?.isFutureAppointment
+                    ? 'Ahead on scheduled date'
+                    : 'Waiting in line before you'}
+                </p>
+              </div>
+
+              <div className="bg-teal-50/60 border border-teal-100 p-4 rounded-2xl">
+                <div className="flex items-center space-x-2 text-teal-600 mb-1">
+                  <Clock className="w-4 h-4" />
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-teal-800">Estimated Wait</span>
+                </div>
+                <p className="text-2xl font-extrabold text-teal-950">
+                  {isServing
+                    ? 'Active Now'
+                    : isCalled
+                    ? '0 mins'
+                    : queueData?.isFutureAppointment
+                    ? 'Opens on Visit'
+                    : liveWait?.waitMinLow != null && liveWait?.waitMinHigh != null
+                    ? `${liveWait.waitMinLow}–${liveWait.waitMinHigh} mins`
+                    : queueSummary?.estimatedWaitMinutes !== null && queueSummary?.estimatedWaitMinutes !== undefined
+                    ? `~${queueSummary.estimatedWaitMinutes} mins`
+                    : 'Calculating...'}
+                </p>
+                <p className="text-[10px] font-medium text-teal-600/80 mt-1">
+                  {isServing
+                    ? 'Consultation in progress'
+                    : isCalled
+                    ? 'Proceed to room'
+                    : queueData?.isFutureAppointment
+                    ? 'Queue opens on appointment day'
+                    : liveWait?.timeFactor
+                    ? `Pace Factor: ${Number(liveWait.timeFactor).toFixed(2)}x`
+                    : queueSummary?.isEstimate ? '★ Dynamic Rolling Average' : 'Live Pace Estimate'}
+                </p>
+              </div>
+
+              <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl">
+                <div className="flex items-center space-x-2 text-slate-600 mb-1">
+                  <Sparkles className="w-4 h-4 text-indigo-600" />
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700">Estimated Turn</span>
+                </div>
+                <p className="text-2xl font-extrabold text-slate-900">
+                  {isServing
+                    ? 'In Room Now'
+                    : isCalled
+                    ? 'Proceed Now'
+                    : queueSummary?.estimatedTurnTime || 'Imminent'}
+                </p>
+                <p className="text-[10px] font-medium text-slate-500 mt-1">
+                  {isServing
+                    ? 'Consultation in progress'
+                    : isCalled
+                    ? 'Doctor waiting in room'
+                    : queueData?.isFutureAppointment
+                    ? `Slot: ${formatTime(appointment?.timeSlot || appointment?.bookedStartAt)}`
+                    : `Slot: ${formatTime(appointment?.timeSlot || appointment?.bookedStartAt) || 'Scheduled'}`}
+                </p>
+              </div>
+            </div>
+
+            {/* Dynamic Calculation Basis Note */}
+            {(liveWait?.reasonText || queueSummary?.calculationBasis) && (
+              <div className="bg-slate-50 rounded-xl p-3 border border-slate-100 text-xs text-slate-500 flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <Activity className="w-3.5 h-3.5 text-indigo-500" />
+                  {liveWait?.reasonText
+                    ? <><strong>Queue Info:</strong> {liveWait.reasonText}</>
+                    : <><strong>Calculation Method:</strong> {queueSummary.calculationBasis}</>}
+                </span>
+                {(queueSummary?.isEstimate || liveWait?.timeFactor) && (
+                  <span className="text-[10px] bg-slate-200 text-slate-700 px-2 py-0.5 rounded-full font-bold">
+                    {liveWait?.timeFactor ? `${Number(liveWait.timeFactor).toFixed(2)}x pace` : 'Estimating'}
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* Action feedback message */}
+            {actionFeedback && (
+              <div className={`p-3 rounded-xl text-xs font-semibold flex items-center gap-2 ${
+                actionFeedback.type === 'success' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-rose-50 text-rose-800 border border-rose-200'
+              }`}>
+                {actionFeedback.type === 'success' ? <CheckCircle className="w-4 h-4 text-emerald-600" /> : <AlertTriangle className="w-4 h-4 text-rose-600" />}
+                <span>{actionFeedback.msg}</span>
+              </div>
+            )}
+
+            {/* M8 Action Buttons */}
+            <div className="pt-2 border-t border-slate-100 flex flex-wrap gap-2.5">
+              <button
+                onClick={() => fetchQueueStatus(true)}
+                disabled={refreshing}
+                className="px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl border border-indigo-200 transition-all flex items-center gap-1.5"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+                <span>Check My Wait</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setNotifyBeforeTurn(!notifyBeforeTurn);
+                  setActionFeedback({
+                    type: 'success',
+                    msg: !notifyBeforeTurn ? 'Turn alerts enabled: You will be notified 10 minutes before your consultation' : 'Turn alerts disabled'
+                  });
+                }}
+                className={`px-3.5 py-2 text-xs font-bold rounded-xl border transition-all flex items-center gap-1.5 ${
+                  notifyBeforeTurn
+                    ? 'bg-amber-100 text-amber-900 border-amber-300'
+                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
+                }`}
+              >
+                <Bell className="w-3.5 h-3.5" />
+                <span>{notifyBeforeTurn ? 'Alert Active: 10m Prior' : 'Notify Me Before My Turn'}</span>
+              </button>
+
+              {['booked', 'confirmed'].includes(appointment?.status) && (
+                <button
+                  onClick={() => handleAction(`/appointments/${activeApptId}/on-the-way`)}
+                  disabled={actionLoading}
+                  className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl shadow transition-all flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  <Navigation className="w-3.5 h-3.5" />
+                  <span>I'm on My Way</span>
+                </button>
+              )}
+
+              {['booked', 'confirmed', 'on_the_way', 'nearby', 'not_arrived', 'checked_in', 'waiting', 'called'].includes(appointment?.status) && !appointment?.lateReported && !['missed', 'no_show', 'completed'].includes(appointment?.status) && (
+                <button
+                  onClick={() => handleAction(`/appointments/${activeApptId}/late`, { lateReason: 'Traffic / Running late' })}
+                  disabled={actionLoading}
+                  className="px-3.5 py-2 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-xl shadow transition-all flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>I'll Be Late</span>
+                </button>
+              )}
+
+              <button
+                onClick={() => navigate('/book-appointment')}
+                className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-200 transition-all flex items-center gap-1.5"
+              >
+                <span>Find Shorter Wait</span>
+              </button>
+
+              {(['missed', 'not_arrived', 'late'].includes(appointment?.status) || appointment?.isMissed) && (
+                <button
+                  onClick={() => handleAction(`/appointments/${activeApptId}/rejoin`)}
+                  disabled={actionLoading}
+                  className="px-3.5 py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold rounded-xl shadow transition-all flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Rejoin Queue</span>
+                </button>
+              )}
+
+              {/* Early Slot Opt-In Controls */}
+              {activeApptId && (
+                <div className="flex items-center gap-1.5 ml-auto">
+                  <span className="text-[11px] font-semibold text-slate-500">Early Slot:</span>
+                  <button
+                    onClick={() => handleAction(`/queue/appointments/${activeApptId}/early-optin`, { earlyOptIn: true })}
+                    disabled={actionLoading}
+                    className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg shadow transition-all disabled:opacity-50"
+                  >
+                    Accept Early Slot
+                  </button>
+                  <button
+                    onClick={() => handleAction(`/queue/appointments/${activeApptId}/early-optin`, { earlyOptIn: false })}
+                    disabled={actionLoading}
+                    className="px-2.5 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold rounded-lg transition-all disabled:opacity-50"
+                  >
+                    Keep My Time
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
-        ) : (
-          <p className="text-xs text-slate-400 text-center py-4">No tokens in queue timeline yet.</p>
-        )}
-      </div>
+
+          {/* 3. Currently Serving Consultation Room */}
+          {currentlyServing ? (
+            <div className="bg-gradient-to-r from-emerald-500/10 via-emerald-500/5 to-teal-500/10 border-2 border-emerald-500/30 rounded-3xl p-6 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center space-x-2">
+                  <span className="w-3 h-3 rounded-full bg-emerald-500 animate-ping" />
+                  <h3 className="font-extrabold text-sm text-emerald-950 uppercase tracking-wider">
+                    Currently Serving Room Status
+                  </h3>
+                </div>
+                <span className="text-xs font-extrabold bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full border border-emerald-200">
+                  DOCTOR ACTIVE
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
+                <div className="bg-white/80 backdrop-blur-md p-3 rounded-2xl border border-emerald-100">
+                  <p className="text-slate-400 font-semibold text-[10px] uppercase">Token In Room</p>
+                  <p className="text-lg font-mono font-extrabold text-emerald-700 mt-0.5">{currentlyServing.tokenNumber}</p>
+                </div>
+
+                <div className="bg-white/80 backdrop-blur-md p-3 rounded-2xl border border-emerald-100">
+                  <p className="text-slate-400 font-semibold text-[10px] uppercase">Consultation Started</p>
+                  <p className="text-sm font-bold text-slate-800 mt-1">{currentlyServing.startedAt}</p>
+                </div>
+
+                <div className="bg-white/80 backdrop-blur-md p-3 rounded-2xl border border-emerald-100">
+                  <p className="text-slate-400 font-semibold text-[10px] uppercase">Elapsed Time</p>
+                  <p className="text-sm font-bold text-emerald-800 mt-1">{currentlyServing.elapsedMinutes} mins</p>
+                </div>
+
+                <div className="bg-white/80 backdrop-blur-md p-3 rounded-2xl border border-emerald-100">
+                  <p className="text-slate-400 font-semibold text-[10px] uppercase">Current Status</p>
+                  <p className="text-xs font-bold text-emerald-700 mt-1">In Consultation</p>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-slate-50 border border-slate-200 rounded-3xl p-5 text-center text-xs text-slate-500">
+              <p className="font-semibold text-slate-700">No token currently being served in doctor's cabin.</p>
+              <p className="text-[11px] mt-0.5">Doctor will call the next queued token shortly.</p>
+            </div>
+          )}
+
+          {/* 4. Live OPD Queue Sequence Timeline */}
+          <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                <Activity className="w-4 h-4 text-indigo-600" />
+                <span>OPD Queue Sequence Timeline</span>
+              </h3>
+              <span className="text-xs font-semibold text-slate-500">
+                {queueTimeline.length} Tokens Displayed
+              </span>
+            </div>
+
+            {queueTimeline.length > 0 ? (
+              <div className="flex flex-wrap gap-2.5 pt-2">
+                {queueTimeline.map((t, idx) => {
+                  const isServing = t.status === 'serving';
+                  const isCompletedItem = t.status === 'completed';
+                  const isMe = t.isMe;
+
+                  let styleClasses = 'bg-slate-50 text-slate-700 border-slate-200';
+                  if (isMe) {
+                    styleClasses = 'bg-indigo-600 text-white border-indigo-700 font-bold ring-4 ring-indigo-100 shadow-md';
+                  } else if (isServing) {
+                    styleClasses = 'bg-emerald-50 text-emerald-800 border-emerald-300 font-bold ring-2 ring-emerald-300';
+                  } else if (isCompletedItem) {
+                    styleClasses = 'bg-slate-100 text-slate-400 border-slate-200 line-through opacity-75';
+                  }
+
+                  return (
+                    <div
+                      key={idx}
+                      className={`px-3.5 py-2 rounded-2xl text-xs border flex items-center space-x-2 transition-all ${styleClasses}`}
+                    >
+                      {isCompletedItem && <CheckCircle className="w-3.5 h-3.5 text-slate-400" />}
+                      {isServing && <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />}
+                      <div>
+                        <span className="font-mono text-sm">{t.tokenNumber}</span>
+                        <span className="text-[10px] block opacity-80 uppercase tracking-tight">
+                          {isMe ? '★ YOU ARE HERE' : t.label}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-xs text-slate-400 text-center py-4">No tokens in queue timeline yet.</p>
+            )}
+          </div>
+        </>
+      )}
     </section>
   );
 };

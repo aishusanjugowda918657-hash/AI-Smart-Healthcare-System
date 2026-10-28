@@ -105,10 +105,10 @@ export function compareForCalling(a, b, now, cfg = { fairnessBumpMin: 30 }) {
 }
 
 /**
- * Filters and sorts ready candidates for calling (checked_in and rejoined ONLY)
+ * Filters and sorts ready candidates for calling (checked_in, waiting, and rejoined)
  */
 export function getReadyCandidates(appointments, now, cfg = { fairnessBumpMin: 30 }) {
-  const readyStatuses = ['checked_in', 'rejoined'];
-  const candidates = appointments.filter((apt) => readyStatuses.includes(apt.status));
+  const readyStatuses = ['checked_in', 'waiting', 'rejoined'];
+  const candidates = appointments.filter((apt) => readyStatuses.includes((apt.status || '').toLowerCase()));
   return candidates.sort((a, b) => compareForCalling(a, b, now, cfg));
 }

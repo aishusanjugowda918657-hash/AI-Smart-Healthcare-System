@@ -58,11 +58,46 @@ function parseTimeToMinutes(timeVal) {
  * Reads appointments and queue metadata to compute order and waiting-time estimates.
  * Pure read-only computation: NEVER performs database writes or triggers background tasks.
  */
-async function computeQueueSnapshot(doctorId, date, { db, now }) {
+export async function computeQueueSnapshot(doctorId, date, { db = assertDbConnected(), now = clock.now() } = {}) {
   const nowIso = now.toISOString();
 
+  // Resolve canonical doctor identifiers
+  const candidateDocIds = new Set([doctorId]);
+  try {
+    const directDocSnap = await db.collection('doctors').doc(doctorId).get();
+    if (directDocSnap.exists) {
+      const d = directDocSnap.data();
+      if (d.doctorId) candidateDocIds.add(d.doctorId);
+      if (d.uid) candidateDocIds.add(d.uid);
+      if (d.doctorUid) candidateDocIds.add(d.doctorUid);
+      if (d.displayId) candidateDocIds.add(d.displayId);
+    } else {
+      const qSnap = await db.collection('doctors').where('doctorId', '==', doctorId).limit(1).get();
+      if (!qSnap.empty) {
+        candidateDocIds.add(qSnap.docs[0].id);
+        const d = qSnap.docs[0].data();
+        if (d.doctorId) candidateDocIds.add(d.doctorId);
+        if (d.uid) candidateDocIds.add(d.uid);
+        if (d.doctorUid) candidateDocIds.add(d.doctorUid);
+        if (d.displayId) candidateDocIds.add(d.displayId);
+      } else {
+        const qDisp = await db.collection('doctors').where('displayId', '==', doctorId).limit(1).get();
+        if (!qDisp.empty) {
+          candidateDocIds.add(qDisp.docs[0].id);
+          const d = qDisp.docs[0].data();
+          if (d.doctorId) candidateDocIds.add(d.doctorId);
+          if (d.uid) candidateDocIds.add(d.uid);
+          if (d.doctorUid) candidateDocIds.add(d.doctorUid);
+        }
+      }
+    }
+  } catch (_) {}
+
+  const docIdList = Array.from(candidateDocIds).filter(Boolean);
+  const canonicalDoctorId = docIdList.find((id) => id.startsWith('DOC-')) || doctorId;
+
   // 1. Fetch Queue document
-  const queueDocId = `${doctorId}_${date}`;
+  const queueDocId = `${canonicalDoctorId}_${date}`;
   const queueRef = db.collection('queues').doc(queueDocId);
   const queueSnap = await queueRef.get();
   const queueData = queueSnap.exists ? queueSnap.data() : {};
@@ -78,13 +113,13 @@ async function computeQueueSnapshot(doctorId, date, { db, now }) {
   const isPastDate = date < todayIST;
 
   const activeStatuses = [
-    'booked', 'confirmed', 'on_the_way', 'nearby', 'checked_in',
+    'booked', 'confirmed', 'on_the_way', 'nearby', 'checked_in', 'waiting',
     'called', 'in_consultation', 'not_arrived', 'late', 'rejoined'
   ];
 
   const apptsSnap = await db
     .collection('appointments')
-    .where('doctorId', '==', doctorId)
+    .where('doctorId', 'in', docIdList.slice(0, 10))
     .where('date', '==', date)
     .get();
 
@@ -169,6 +204,51 @@ async function computeQueueSnapshot(doctorId, date, { db, now }) {
   });
 
   const readyCandidateUpdates = [];
+
+  // Active in-room consultation live payload synchronization
+  if (activeInRoom) {
+    const curLive = activeInRoom.live || {};
+    if (curLive.reasonText !== 'Consultation in progress' || curLive.waitMinLow !== 0 || curLive.waitMinHigh !== 0 || curLive.aheadCount !== 0) {
+      const activeLive = {
+        position: 1,
+        aheadCount: 0,
+        waitMinLow: 0,
+        waitMinHigh: 0,
+        predictedCallAt: null,
+        reasonText: 'Consultation in progress',
+        timeFactor,
+        updatedAt: nowIso
+      };
+      readyCandidateUpdates.push({
+        apptRef: db.collection('appointments').doc(activeInRoom.id),
+        updateObj: { live: activeLive, updatedAt: now }
+      });
+      activeInRoom.live = activeLive;
+    }
+  }
+
+  // Called patient live payload synchronization (they are proceeding to room, ahead count must be 0)
+  if (calledPatient && !activeInRoom) {
+    const curLive = calledPatient.live || {};
+    if (curLive.aheadCount !== 0 || curLive.position !== 1) {
+      const calledLive = {
+        ...curLive,
+        position: 1,
+        aheadCount: 0,
+        waitMinLow: 0,
+        waitMinHigh: 0,
+        predictedCallAt: null,
+        reasonText: 'Turn called - please proceed inside consultation room',
+        timeFactor,
+        updatedAt: nowIso
+      };
+      readyCandidateUpdates.push({
+        apptRef: db.collection('appointments').doc(calledPatient.id),
+        updateObj: { live: calledLive, updatedAt: now }
+      });
+      calledPatient.live = calledLive;
+    }
+  }
 
   // Calculate position & wait for each ready candidate
   const enrichedReadyCandidates = readyCandidates.map((candidate, idx) => {
@@ -297,7 +377,7 @@ async function computeQueueSnapshot(doctorId, date, { db, now }) {
   const enrichedNotCheckedIn = notCheckedIn.map((apt) => {
     const notCheckedInAhead = allAppts
       .filter((a) =>
-        ['checked_in', 'rejoined'].includes(a.status) ||
+        ['checked_in', 'waiting', 'rejoined'].includes(a.status) ||
         (['booked', 'confirmed', 'on_the_way', 'nearby'].includes(a.status) && a.bookedStartAt < apt.bookedStartAt)
       )
       .map(a => ({ ...a, expectedDurationMin: getExpectedForAppt(a) }));

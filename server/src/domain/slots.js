@@ -130,26 +130,41 @@ export function generateSlotsForDoctorDate({
     if (!session.start || !session.end) continue;
 
     const sessionStartMin = HHmmToMinutes(session.start);
-    const sessionEndMin = HHmmToMinutes(session.end);
+    let sessionEndMin = HHmmToMinutes(session.end);
+
+    const isOvernight = sessionEndMin < sessionStartMin;
+    if (isOvernight) {
+      sessionEndMin += 24 * 60; // Extend past midnight (e.g. 05:00 becomes 1740 min)
+    }
 
     let slotCounterInSession = 0;
 
     for (let currentMin = sessionStartMin; currentMin + slotMinutes <= sessionEndMin; currentMin += slotMinutes) {
       // Check if slot falls inside lunch break
       if (lunchStartMin !== null && lunchEndMin !== null) {
-        if (currentMin >= lunchStartMin && currentMin < lunchEndMin) {
+        const checkMin = currentMin % (24 * 60);
+        if (checkMin >= lunchStartMin && checkMin < lunchEndMin) {
           continue; // Skip slot generation during lunch
         }
       }
 
       slotCounterInSession++;
-      const timeHHmm = minutesToHHmm(currentMin);
+
+      const isAfterMidnight = currentMin >= 24 * 60;
+      const normalizedMin = currentMin % (24 * 60);
+      const timeHHmm = minutesToHHmm(normalizedMin);
       const timeIdStr = formatHHmmId(timeHHmm);
-      const slotId = `${doctorId}_${date}_${timeIdStr}`;
+
+      // If slot is after midnight, assign it to the next calendar date in Asia/Kolkata
+      const slotDate = isAfterMidnight
+        ? dayjs(date).tz('Asia/Kolkata').add(1, 'day').format('YYYY-MM-DD')
+        : date;
+
+      const slotId = `${doctorId}_${slotDate}_${timeIdStr}`;
 
       // Slot start and end timestamps
-      const [year, month, day] = date.split('-').map(Number);
-      const slotStartMs = Date.UTC(year, month - 1, day, Math.floor(currentMin / 60), currentMin % 60);
+      const [year, month, day] = slotDate.split('-').map(Number);
+      const slotStartMs = Date.UTC(year, month - 1, day, Math.floor(normalizedMin / 60), normalizedMin % 60);
       const slotEndMs = slotStartMs + slotMinutes * 60 * 1000;
 
       // Determine default status: buffer slot vs free slot
@@ -186,12 +201,13 @@ export function generateSlotsForDoctorDate({
       }
 
       // Create or update slot object
+      const endNormalizedMin = (currentMin + slotMinutes) % (24 * 60);
       generatedSlots.push({
         id: slotId,
         doctorId,
-        date,
+        date: slotDate,
         startAt: timeHHmm,
-        endAt: existing?.endAt || minutesToHHmm(currentMin + slotMinutes),
+        endAt: existing?.endAt || minutesToHHmm(endNormalizedMin),
         status: defaultStatus,
         heldUntil: null,
         heldBy: null,

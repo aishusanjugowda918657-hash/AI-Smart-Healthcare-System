@@ -5,6 +5,7 @@ import { notify } from '../services/notify.js';
 import { clock } from '../utils/clock.js';
 import { writeAuditLog } from '../utils/audit.js';
 import { assignBatchDoctorDisplayIds, assignDoctorDisplayId } from '../services/doctorDisplayIdService.js';
+import { parseSlotTimeToDate, getHospitalTodayStr } from '../utils/timezoneDate.js';
 
 // 60-second in-memory cache for doctor dashboard totals
 export const dashboardSummaryCache = new Map();
@@ -145,7 +146,7 @@ export const getDoctors = async (req, res, next) => {
     const doctors = assignBatchDoctorDisplayIds(rawDoctors);
 
     if (includeSlotStatus === 'true') {
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = getHospitalTodayStr();
       for (const doc of doctors) {
         const targetId = doc.doctorId || doc.id;
         const slotsSnap = await db.collection('slots')
@@ -221,7 +222,35 @@ export const getLeaves = async (req, res, next) => {
     }
 
     const snap = await query.get();
-    const leaves = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const leaves = snap.docs.map((d) => {
+      const data = d.data();
+      const sDate = data.startDate || data.date || (data.fromAt ? data.fromAt.split('T')[0] : '');
+      const eDate = data.endDate || (data.toAt ? data.toAt.split('T')[0] : sDate);
+      return {
+        id: d.id,
+        ...data,
+        startDate: sDate,
+        endDate: eDate
+      };
+    });
+
+    // Populate doctorName if missing
+    for (const l of leaves) {
+      if (!l.doctorName && l.doctorId) {
+        try {
+          const docSnap = await db.collection('doctors').doc(l.doctorId).get();
+          if (docSnap.exists) {
+            l.doctorName = docSnap.data().fullName || docSnap.data().name;
+          } else {
+            const uSnap = await db.collection('users').doc(l.doctorId).get();
+            if (uSnap.exists) {
+              l.doctorName = uSnap.data().fullName || uSnap.data().name;
+            }
+          }
+        } catch (_) {}
+      }
+      if (!l.doctorName) l.doctorName = 'Doctor';
+    }
 
     res.status(200).json(formatSuccessResponse(leaves));
   } catch (error) {
@@ -570,7 +599,7 @@ export const getDoctorDashboardSummary = async (req, res, next) => {
       targetDoctorId = docSnap.exists ? docSnap.data().doctorId : doctorUid;
     }
 
-    const date = req.query.date || clock.now().toISOString().split('T')[0];
+    const date = req.query.date || getHospitalTodayStr(clock.now());
     const cacheKey = `${targetDoctorId}_${date}`;
 
     if (req.query.nocache !== 'true' && dashboardSummaryCache.has(cacheKey)) {
@@ -578,6 +607,45 @@ export const getDoctorDashboardSummary = async (req, res, next) => {
       if (Date.now() - cached.timestamp < 60000) {
         return res.status(200).json(formatSuccessResponse({ ...cached.data, cached: true }));
       }
+    }
+
+    const now = clock.now();
+    const nowMs = now.getTime();
+
+    // Sweep unattended appointments on this date past the 60m threshold to no_show
+    try {
+      const apptsOnDateSnap = await db.collection('appointments')
+        .where('doctorId', '==', targetDoctorId)
+        .where('date', '==', date)
+        .get();
+
+      const batch = db.batch();
+      let sweepCount = 0;
+      for (const d of apptsOnDateSnap.docs) {
+        const apt = d.data();
+        const statusLower = (apt.status || '').toLowerCase();
+        if (['booked', 'confirmed', 'on_the_way', 'nearby', 'not_arrived'].includes(statusLower) && !apt.checkedInAt) {
+          const slotTimeStr = apt.timeSlot || apt.bookedStartAt;
+          if (slotTimeStr) {
+            const apptDateObj = parseSlotTimeToDate(date, slotTimeStr);
+            if (apptDateObj && nowMs > apptDateObj.getTime() + 60 * 60 * 1000) {
+              batch.update(d.ref, {
+                status: 'no_show',
+                noShowAt: now,
+                updatedAt: now
+              });
+              const tokRef = db.collection('tokens').doc(`tok-${apt.id}`);
+              batch.set(tokRef, { status: 'no_show', noShowAt: now, updatedAt: now }, { merge: true });
+              sweepCount++;
+            }
+          }
+        }
+      }
+      if (sweepCount > 0) {
+        await batch.commit();
+      }
+    } catch (e) {
+      console.warn('Dashboard summary unattended sweep warning:', e.message);
     }
 
     // 1. Total appointments today (using native count())
@@ -795,9 +863,21 @@ export const doctorSearchPatients = async (req, res, next) => {
       }
     }
 
+    // Deduplicate patients by canonical healthId and exclude migrated pointers
+    const seenHealthIds = new Set();
+    const uniquePatients = [];
+    for (const p of patientsFound) {
+      if (p.migratedTo) continue;
+      const hid = p.healthId || p.patientHealthId || p.id;
+      if (!seenHealthIds.has(hid)) {
+        seenHealthIds.add(hid);
+        uniquePatients.push(p);
+      }
+    }
+
     // Map each patient to formatted response with computed age and last visit date
     const results = await Promise.all(
-      patientsFound.map(async (p) => {
+      uniquePatients.map(async (p) => {
         const healthId = p.healthId || p.patientHealthId || p.id;
         const computedYears = calculateAge(p.dob);
         const age = computedYears !== null ? `${computedYears} years` : (p.age ? `${p.age} years` : 'N/A');

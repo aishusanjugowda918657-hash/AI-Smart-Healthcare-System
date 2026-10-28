@@ -3,6 +3,7 @@ import { assertDbConnected } from '../config/firebase.js';
 import { assertTransition } from '../domain/status.js';
 import { AppError, formatSuccessResponse } from '../utils/errors.js';
 import { clock } from '../utils/clock.js';
+import { getHospitalTodayStr } from '../utils/timezoneDate.js';
 import { writeAuditLog } from '../utils/audit.js';
 import { recalculateQueue } from '../services/queueService.js';
 
@@ -22,7 +23,7 @@ export const scanCheckIn = async (req, res, next) => {
 
     const db = assertDbConnected();
     const now = clock.now();
-    const todayStr = now.toISOString().split('T')[0];
+    const todayStr = getHospitalTodayStr(now);
 
     // Check if qrPayload contains a Health ID (e.g. SCAI-... or PHI-... or URL like /e-records/SCAI-...)
     const healthIdMatch = qrPayload && typeof qrPayload === 'string'
@@ -151,8 +152,36 @@ export const scanCheckIn = async (req, res, next) => {
       status: 'checked_in',
       checkedInAt: now,
       predictedWaitAtCheckin,
+      checkinReminderSent: true,
+      checkinAtTimeReminderSent: true,
+      checkinOverdueReminderSent: true,
       updatedAt: now
     });
+
+    try {
+      const tokRef = db.collection('tokens').doc(`tok-${apt.appointmentId || apt.id}`);
+      await tokRef.set({
+        status: 'waiting',
+        checkedInAt: now,
+        updatedAt: now
+      }, { merge: true });
+    } catch (_) {}
+
+    // Rule: Cancel and reconcile pending reminders on check-in
+    try {
+      const apptIdsToCancel = [appointmentId, apt.id, apt.appointmentId, apt.displayId].filter(Boolean);
+      const remSnap = await db.collection('reminders')
+        .where('appointmentId', 'in', apptIdsToCancel.slice(0, 10))
+        .where('status', '==', 'pending')
+        .get();
+      if (!remSnap.empty) {
+        const remBatch = db.batch();
+        remSnap.docs.forEach((d) => remBatch.update(d.ref, { status: 'cancelled', cancelledReason: 'checked_in', updatedAt: now }));
+        await remBatch.commit();
+      }
+    } catch (remErr) {
+      console.warn('Checkin reminder cancellation warning:', remErr.message);
+    }
 
     if (apt.doctorId && apt.date) {
       await recalculateQueue(apt.doctorId, apt.date);
@@ -198,7 +227,7 @@ export const manualCheckIn = async (req, res, next) => {
 
     const db = assertDbConnected();
     const now = clock.now();
-    const todayStr = appointmentDate || now.toISOString().split('T')[0];
+    const todayStr = appointmentDate || getHospitalTodayStr(now);
 
     let targetDoc = null;
 
@@ -274,8 +303,36 @@ export const manualCheckIn = async (req, res, next) => {
       status: 'checked_in',
       checkedInAt: now,
       predictedWaitAtCheckin,
+      checkinReminderSent: true,
+      checkinAtTimeReminderSent: true,
+      checkinOverdueReminderSent: true,
       updatedAt: now
     });
+
+    try {
+      const tokRef = db.collection('tokens').doc(`tok-${targetDoc.appointmentId || targetDoc.id}`);
+      await tokRef.set({
+        status: 'waiting',
+        checkedInAt: now,
+        updatedAt: now
+      }, { merge: true });
+    } catch (_) {}
+
+    // Rule: Cancel and reconcile pending reminders on manual check-in
+    try {
+      const apptIdsToCancel = [targetDoc.id, targetDoc.appointmentId, targetDoc.displayId].filter(Boolean);
+      const remSnap = await db.collection('reminders')
+        .where('appointmentId', 'in', apptIdsToCancel.slice(0, 10))
+        .where('status', '==', 'pending')
+        .get();
+      if (!remSnap.empty) {
+        const remBatch = db.batch();
+        remSnap.docs.forEach((d) => remBatch.update(d.ref, { status: 'cancelled', cancelledReason: 'checked_in', updatedAt: now }));
+        await remBatch.commit();
+      }
+    } catch (remErr) {
+      console.warn('Manual checkin reminder cancellation warning:', remErr.message);
+    }
 
     if (targetDoc.doctorId && targetDoc.date) {
       await recalculateQueue(targetDoc.doctorId, targetDoc.date);

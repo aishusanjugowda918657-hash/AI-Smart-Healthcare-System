@@ -7,8 +7,8 @@ function clamp(val, min, max) {
 }
 
 export function roundTo5(num) {
-  if (num <= 0) return 0;
-  return Math.max(5, Math.round(num / 5) * 5);
+  if (num <= 2.5) return 0;
+  return Math.round(num / 5) * 5;
 }
 
 /**

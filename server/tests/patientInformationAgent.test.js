@@ -190,4 +190,18 @@ describe('Phase 17 - Natural-Language Patient Information Agent API', () => {
     expect(res.body.status).toBe('answered');
     expect(res.body.answer).toMatch(/No upcoming follow-up|No information|No record/i);
   });
+
+  it('POST /api/patient-agent/query successfully answers generic example question when uniqueId is provided', async () => {
+    const res = await request(app)
+      .post('/api/patient-agent/query')
+      .set('x-demo-uid', 'doc-uid-001')
+      .set('x-demo-role', 'doctor')
+      .send({ question: 'What medicines is the patient taking?', uniqueId: 'test-kavita-patel-001' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.status).toBe('answered');
+    expect(res.body.patient.fullName || res.body.patient.name).toBe('Kavita Unique Patel');
+    expect(res.body.intent).toBe('CURRENT_MEDICATIONS');
+  });
 });
