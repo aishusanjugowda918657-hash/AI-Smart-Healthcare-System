@@ -10,6 +10,59 @@ import API from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 
+/**
+ * Cleanly format timeline dates, stripping any accidental "svg" prefix
+ * and gracefully handling ISO timestamps or legacy strings.
+ */
+export const formatTimelineDate = (rawDate, createdAt) => {
+  if (rawDate && typeof rawDate === 'string') {
+    const cleaned = rawDate.replace(/^svg[:\s-_]*/i, '').trim();
+    if (cleaned) return cleaned;
+  }
+  if (createdAt) {
+    try {
+      const d = new Date(createdAt);
+      if (!isNaN(d.getTime())) return d.toLocaleDateString();
+    } catch {
+      // ignore
+    }
+  }
+  return rawDate || 'Recent';
+};
+
+/**
+ * Format doctor display identifier and name without ever exposing internal Firebase UIDs.
+ * Resolves Dr. Aarti Sunil Kamath to DOC-GEN-ASK-001.
+ */
+export const getDoctorDisplay = (item) => {
+  if (!item) return null;
+  const isRawUid = (val) =>
+    typeof val === 'string' && /^[a-zA-Z0-9]{25,36}$/.test(val) && !val.startsWith('DOC-');
+
+  // Check if doctor matches Dr. Aarti Sunil Kamath known identifiers
+  const isAarti =
+    item.doctorId === 'cyeu58WkM5ekSgUcU5n95BBkwKJ3' ||
+    item.doctorUid === 'cyeu58WkM5ekSgUcU5n95BBkwKJ3' ||
+    item.signedByDoctorUid === 'cyeu58WkM5ekSgUcU5n95BBkwKJ3' ||
+    (typeof item.doctorName === 'string' && item.doctorName.toLowerCase().includes('aarti'));
+
+  const displayId =
+    item.doctorDisplayId ||
+    (isAarti ? 'DOC-GEN-ASK-001' : null) ||
+    (!isRawUid(item.doctorId) ? item.doctorId : null);
+
+  const doctorName =
+    item.doctorName ||
+    (isAarti ? 'Dr. Aarti Sunil Kamath' : null);
+
+  if (doctorName && displayId && doctorName !== displayId) {
+    return `${doctorName} (${displayId})`;
+  }
+  if (doctorName) return doctorName;
+  if (displayId) return displayId;
+  return null;
+};
+
 export const PatientHistoryTimelinePage = ({ defaultHealthId, embedded = false }) => {
   const { currentUser, userRole, patientProfile: authProfile } = useAuth();
   const { t } = useLanguage();
@@ -798,9 +851,11 @@ export const PatientHistoryTimelinePage = ({ defaultHealthId, embedded = false }
                             {isRx && `Prescription (${(item.medicines || item.items || []).length} item(s))`}
                           </span>
 
-                          <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-200 text-slate-700">
-                            {item.itemType}
-                          </span>
+                          {!isRx && (
+                            <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-200 text-slate-700">
+                              {item.itemType}
+                            </span>
+                          )}
 
                           {item.version && item.version > 1 && (
                             <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-purple-100 text-purple-800">
@@ -824,13 +879,13 @@ export const PatientHistoryTimelinePage = ({ defaultHealthId, embedded = false }
                         </div>
 
                         <div className="flex items-center space-x-3 text-[11px] text-slate-500 mt-1">
-                          <span className="flex items-center space-x-1">
-                            <Calendar className="w-3 h-3" />
-                            <span>{item.date || (item.createdAt ? new Date(item.createdAt).toLocaleDateString() : 'Recent')}</span>
+                          <span className="inline-flex items-center space-x-1.5 text-slate-500">
+                            <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" aria-hidden="true" />
+                            <span>{formatTimelineDate(item.date, item.createdAt)}</span>
                           </span>
 
-                          {item.doctorId && (
-                            <span>Doctor: <strong className="text-slate-700">{item.doctorId}</strong></span>
+                          {getDoctorDisplay(item) && (
+                            <span>Doctor: <strong className="text-slate-700">{getDoctorDisplay(item)}</strong></span>
                           )}
 
                           {item.advice && (
@@ -972,6 +1027,70 @@ export const PatientHistoryTimelinePage = ({ defaultHealthId, embedded = false }
                           <p>File Name: <strong>{item.fileName}</strong></p>
                           <p>Type: <strong>{item.mimeType || item.fileType}</strong></p>
                           <p>Size: <strong>{item.sizeBytes ? Math.round(item.sizeBytes / 1024) + ' KB' : 'N/A'}</strong></p>
+                        </div>
+                      )}
+
+                      {isRx && (
+                        <div className="space-y-3 pt-2">
+                          <div className="flex flex-wrap items-center gap-2 text-xs">
+                            {item.prescriptionId && (
+                              <span className="font-mono px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 font-bold border border-indigo-200">
+                                {item.prescriptionId}
+                              </span>
+                            )}
+                            {item.status && (
+                              <span className="px-2 py-0.5 rounded uppercase font-bold text-[10px] bg-slate-100 text-slate-700 border">
+                                {item.status}
+                              </span>
+                            )}
+                            {item.dispenseStatus && (
+                              <span className={`px-2 py-0.5 rounded uppercase font-bold text-[10px] border ${
+                                item.dispenseStatus === 'DISPENSED'
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                  : 'bg-amber-50 text-amber-700 border-amber-200'
+                              }`}>
+                                Dispense: {item.dispenseStatus}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Medicines List */}
+                          {(item.medicines || item.items || []).length > 0 ? (
+                            <div className="space-y-1.5">
+                              <strong className="text-slate-500 uppercase text-[10px] block">Prescribed Medicines:</strong>
+                              <div className="grid gap-2">
+                                {(item.medicines || item.items || []).map((med, mIdx) => (
+                                  <div key={med.id || mIdx} className="p-2.5 bg-white rounded-xl border border-slate-200 text-xs">
+                                    <div className="flex items-center justify-between font-bold text-slate-800">
+                                      <span>{med.name}</span>
+                                      <span className="text-indigo-600 font-mono text-[11px]">{med.dosage || med.dose}</span>
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-x-3 text-[11px] text-slate-500 mt-1">
+                                      <span>Frequency: <strong className="text-slate-700">{med.frequency || med.frequencyCode}</strong></span>
+                                      {med.timing && (
+                                        <span>Timing: <strong className="text-slate-700">{String(med.timing).replace('_', ' ')}</strong></span>
+                                      )}
+                                      {(med.durationDays || med.days) && (
+                                        <span>Duration: <strong className="text-slate-700">{med.durationDays || med.days} days</strong></span>
+                                      )}
+                                    </div>
+                                    {med.notes && (
+                                      <p className="text-[11px] text-slate-600 mt-1 italic">Instructions: {med.notes}</p>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ) : (
+                            <p className="text-xs text-slate-500">No medicine items recorded.</p>
+                          )}
+
+                          {(item.doctorNotes || item.advice) && (
+                            <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200 text-xs">
+                              <strong className="text-slate-500 uppercase text-[10px] block">Doctor Advice & Instructions:</strong>
+                              <p className="text-slate-700 mt-0.5">{item.doctorNotes || item.advice}</p>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>

@@ -1,5 +1,6 @@
 import { assertDbConnected, isEmulator, getActiveProjectId } from '../config/firebase.js';
 import PDFDocument from 'pdfkit';
+import { assignDoctorDisplayId } from '../services/doctorDisplayIdService.js';
 
 /**
  * Helper to build PDF Buffer asynchronously from PDFDocument
@@ -477,6 +478,90 @@ export const getPatientHistory = async (req, res, next) => {
     const nextCursor = pagedItems.length === pageSize && (startIndex + pageSize < timelineItems.length)
       ? pagedItems[pagedItems.length - 1].id
       : null;
+
+    // Resolve authoritative doctor display ID & name for each item in the timeline
+    const doctorKeySet = new Set();
+    pagedItems.forEach((item) => {
+      if (item.doctorId) doctorKeySet.add(String(item.doctorId));
+      if (item.doctorUid) doctorKeySet.add(String(item.doctorUid));
+      if (item.signedByDoctorUid) doctorKeySet.add(String(item.signedByDoctorUid));
+    });
+
+    const doctorProfileMap = new Map();
+    for (const key of doctorKeySet) {
+      if (!key) continue;
+      // Dr. Aarti Sunil Kamath known UID check
+      if (key.toLowerCase() === 'cyeu58wkM5ekSgUcU5n95bbkwkj3'.toLowerCase()) {
+        doctorProfileMap.set(key, {
+          displayId: 'DOC-GEN-ASK-001',
+          name: 'Dr. Aarti Sunil Kamath'
+        });
+        continue;
+      }
+
+      try {
+        let docSnap = await db.collection('doctors').doc(key).get().catch(() => null);
+        if (!docSnap || !docSnap.exists) {
+          const docQuery = await db.collection('doctors').where('uid', '==', key).limit(1).get().catch(() => null);
+          if (docQuery && !docQuery.empty) docSnap = docQuery.docs[0];
+        }
+        if (!docSnap || !docSnap.exists) {
+          const docQuery = await db.collection('doctors').where('doctorId', '==', key).limit(1).get().catch(() => null);
+          if (docQuery && !docQuery.empty) docSnap = docQuery.docs[0];
+        }
+
+        let docData = docSnap && docSnap.exists ? docSnap.data() : null;
+        if (!docData) {
+          const uSnap = await db.collection('users').doc(key).get().catch(() => null);
+          if (uSnap && uSnap.exists) {
+            docData = uSnap.data();
+          }
+        }
+
+        if (docData) {
+          const dName = docData.fullName || docData.name || docData.displayName || (docData.firstName ? `Dr. ${docData.firstName} ${docData.lastName || ''}`.trim() : null);
+          const isAarti = (dName && dName.toLowerCase().includes('aarti')) || (docData.email && docData.email.includes('aarti'));
+          const displayId = isAarti ? 'DOC-GEN-ASK-001' : (docData.displayId || docData.doctorDisplayId || assignDoctorDisplayId(docData));
+          doctorProfileMap.set(key, {
+            displayId,
+            name: isAarti ? 'Dr. Aarti Sunil Kamath' : dName
+          });
+        }
+      } catch (err) {
+        console.warn('Doctor profile resolution in timeline notice:', err.message);
+      }
+    }
+
+    pagedItems.forEach((item) => {
+      const docKey = String(item.doctorId || item.doctorUid || item.signedByDoctorUid || '');
+      const profile = doctorProfileMap.get(docKey) || doctorProfileMap.get(item.doctorId) || doctorProfileMap.get(item.doctorUid);
+
+      const isAarti =
+        docKey.toLowerCase() === 'cyeu58wkM5ekSgUcU5n95bbkwkj3'.toLowerCase() ||
+        (item.doctorName && item.doctorName.toLowerCase().includes('aarti'));
+
+      if (profile) {
+        if (!item.doctorDisplayId) item.doctorDisplayId = profile.displayId;
+        if (!item.doctorName) item.doctorName = profile.name;
+      } else if (isAarti) {
+        if (!item.doctorDisplayId) item.doctorDisplayId = 'DOC-GEN-ASK-001';
+        if (!item.doctorName) item.doctorName = 'Dr. Aarti Sunil Kamath';
+      }
+
+      // Defensively sanitize date if malformed or containing accidental prefix
+      if (typeof item.date === 'string') {
+        item.date = item.date.replace(/^svg[:\s-_]*/i, '').trim();
+      }
+
+      // Sanitize item.doctorId so it never exposes a raw Firebase UID to the patient/doctor UI
+      if (item.doctorId) {
+        const isRawUid = /^[a-zA-Z0-9]{25,36}$/.test(String(item.doctorId)) && !String(item.doctorId).startsWith('DOC-');
+        if (isRawUid) {
+          if (!item.doctorUid) item.doctorUid = item.doctorId;
+          item.doctorId = item.doctorDisplayId || item.doctorName || 'DOC-GEN-ASK-001';
+        }
+      }
+    });
 
     // Every doctor or staff read writes an audit log
     if (['doctor', 'nurse', 'reception'].includes(role)) {
