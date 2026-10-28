@@ -65,7 +65,7 @@ export function calculateTimeFactor(completedConsultations = []) {
  * Remaining time of current ongoing consultation (PRD Section 5.2)
  * Auto-extends in 5-minute steps if elapsed > expected (never shows 0 while running)
  */
-export function calculateRemainingCurrentTime(currentConsultation, now) {
+export function calculateRemainingCurrentTime(currentConsultation, now, extendMin = 0) {
   if (!currentConsultation || !currentConsultation.consultStartAt) {
     return 0;
   }
@@ -79,7 +79,8 @@ export function calculateRemainingCurrentTime(currentConsultation, now) {
     : (now?.toMillis ? now.toMillis() : new Date(now).getTime());
 
   const elapsedMin = Math.max(0, Math.floor((nowTime - startTime) / (60 * 1000)));
-  const expectedMin = currentConsultation.expectedDurationMin || 15;
+  const manualExt = Math.max(0, parseInt(extendMin || currentConsultation.extendMin || 0, 10));
+  const expectedMin = (currentConsultation.expectedDurationMin || 15) + manualExt;
 
   if (elapsedMin < expectedMin) {
     return expectedMin - elapsedMin;
@@ -153,6 +154,7 @@ export function selectReasonText(flags = {}) {
   if (flags.hasEmergencyAdded) return 'An emergency case was prioritized ahead of you.';
   if (flags.hasDoctorBreak) return 'Doctor is currently taking a scheduled break.';
   if (flags.hasLateStart) return 'Clinic started slightly later than scheduled today.';
+  if (flags.hasConsultationExtended) return 'Current consultation has been extended by doctor.';
   if (flags.consultationsRunningLong) return 'Consultations before you are taking slightly longer today.';
   if (flags.consultationsRunningShort) return 'Queue is moving faster than estimated today.';
   if (flags.hasNoShowRemoved) return 'An earlier appointment was cancelled or missed.';

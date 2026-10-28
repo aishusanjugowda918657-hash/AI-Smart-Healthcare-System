@@ -2,7 +2,7 @@ import { assertDbConnected } from '../config/firebase.js';
 import { clock } from '../utils/clock.js';
 import { getHospitalTodayStr } from '../utils/timezoneDate.js';
 import { AppError, formatSuccessResponse } from '../utils/errors.js';
-import { recalculateQueue, calculateQueueReadOnly } from '../services/queueService.js';
+import { recalculateQueue, calculateQueueReadOnly, resolveDoctorIds } from '../services/queueService.js';
 import { getReadyCandidates } from '../domain/priority.js';
 import { writeAuditLog } from '../utils/audit.js';
 import { verifyRecordAccess } from './medicalController.js';
@@ -253,6 +253,15 @@ export const callNextPatient = async (req, res, next) => {
         console.warn('Call next patient notify warning:', notifErr.message);
       }
     }
+
+    // Reset extendMin on queue documents when next patient is called
+    try {
+      const { docIdList, canonicalDoctorId } = await resolveDoctorIds(targetDoctorId, db);
+      const targetDocIds = Array.from(new Set([targetDoctorId, canonicalDoctorId, ...docIdList])).filter(Boolean);
+      for (const dId of targetDocIds) {
+        await db.collection('queues').doc(`${dId}_${date}`).set({ extendMin: 0 }, { merge: true });
+      }
+    } catch (_) {}
 
     // Recalculate queue after call
     await recalculateQueue(targetDoctorId, date);
@@ -551,10 +560,14 @@ export const finishConsultation = async (req, res, next) => {
         await lockRef.update({ currentApptId: null, lastCompletedAt: nowIso });
       }
 
-      const queueRef = db.collection('queues').doc(`${apt.doctorId}_${apt.date}`);
-      const qSnap = await queueRef.get();
-      if (qSnap.exists && qSnap.data().currentAppointmentId === apt.id) {
-        await queueRef.update({ currentAppointmentId: null, lastRecalcAt: now });
+      const { docIdList, canonicalDoctorId } = await resolveDoctorIds(apt.doctorId, db);
+      const targetDocIds = Array.from(new Set([apt.doctorId, canonicalDoctorId, ...docIdList])).filter(Boolean);
+      for (const dId of targetDocIds) {
+        const queueRef = db.collection('queues').doc(`${dId}_${apt.date}`);
+        const qSnap = await queueRef.get();
+        if (qSnap.exists) {
+          await queueRef.set({ currentAppointmentId: null, extendMin: 0, lastRecalcAt: now }, { merge: true });
+        }
       }
     } catch (lockErr) {
       console.warn('Queue lock clear warning on finish:', lockErr.message);
@@ -656,14 +669,43 @@ export const extendConsultation = async (req, res, next) => {
     const now = clock.now();
     const date = getHospitalTodayStr(now);
 
-    const queueRef = db.collection('queues').doc(`${doctorId}_${date}`);
-    const queueSnap = await queueRef.get();
-    const currentExt = (queueSnap.exists && queueSnap.data().extendMin) || 0;
+    const { docIdList, canonicalDoctorId } = await resolveDoctorIds(doctorId, db);
+    const targetDocIds = Array.from(new Set([doctorId, canonicalDoctorId, ...docIdList])).filter(Boolean);
+
+    let currentExt = 0;
+    for (const dId of targetDocIds) {
+      const snap = await db.collection('queues').doc(`${dId}_${date}`).get().catch(() => null);
+      if (snap && snap.exists && typeof snap.data().extendMin === 'number') {
+        currentExt = Math.max(currentExt, snap.data().extendMin);
+      }
+    }
 
     const newExt = currentExt + parseInt(minutes, 10);
-    await queueRef.set({ extendMin: newExt, lastExtendAt: now.toISOString() }, { merge: true });
+    const batch = db.batch();
+    for (const dId of targetDocIds) {
+      const queueRef = db.collection('queues').doc(`${dId}_${date}`);
+      batch.set(queueRef, { extendMin: newExt, lastExtendAt: now.toISOString(), doctorId: dId, date }, { merge: true });
+    }
 
-    await recalculateQueue(doctorId, date);
+    // Also mark extendMin on any active in-room consultation appointment
+    try {
+      const activeAppts = await db
+        .collection('appointments')
+        .where('doctorId', 'in', targetDocIds.slice(0, 10))
+        .where('date', '==', date)
+        .get();
+
+      if (!activeAppts.empty) {
+        const inRoom = activeAppts.docs.find(d => ['in_consultation', 'in_room'].includes(d.data().status));
+        if (inRoom) {
+          batch.update(inRoom.ref, { extendMin: newExt, updatedAt: now });
+        }
+      }
+    } catch (_) {}
+
+    await batch.commit();
+
+    await recalculateQueue(canonicalDoctorId, date);
 
     res.status(200).json(formatSuccessResponse({ doctorId, extendMin: newExt, extendedBy: minutes }));
   } catch (error) {
@@ -677,12 +719,36 @@ export const undoExtendConsultation = async (req, res, next) => {
     await assertDoctorOwnership(req, doctorId);
 
     const db = assertDbConnected();
-    const date = getHospitalTodayStr(clock.now());
+    const now = clock.now();
+    const date = getHospitalTodayStr(now);
 
-    const queueRef = db.collection('queues').doc(`${doctorId}_${date}`);
-    await queueRef.set({ extendMin: 0 }, { merge: true });
+    const { docIdList, canonicalDoctorId } = await resolveDoctorIds(doctorId, db);
+    const targetDocIds = Array.from(new Set([doctorId, canonicalDoctorId, ...docIdList])).filter(Boolean);
 
-    await recalculateQueue(doctorId, date);
+    const batch = db.batch();
+    for (const dId of targetDocIds) {
+      const queueRef = db.collection('queues').doc(`${dId}_${date}`);
+      batch.set(queueRef, { extendMin: 0, lastExtendAt: now.toISOString() }, { merge: true });
+    }
+
+    try {
+      const activeAppts = await db
+        .collection('appointments')
+        .where('doctorId', 'in', targetDocIds.slice(0, 10))
+        .where('date', '==', date)
+        .get();
+
+      if (!activeAppts.empty) {
+        const inRoom = activeAppts.docs.find(d => ['in_consultation', 'in_room'].includes(d.data().status));
+        if (inRoom) {
+          batch.update(inRoom.ref, { extendMin: 0, updatedAt: now });
+        }
+      }
+    } catch (_) {}
+
+    await batch.commit();
+
+    await recalculateQueue(canonicalDoctorId, date);
 
     res.status(200).json(formatSuccessResponse({ doctorId, extendMin: 0 }));
   } catch (error) {

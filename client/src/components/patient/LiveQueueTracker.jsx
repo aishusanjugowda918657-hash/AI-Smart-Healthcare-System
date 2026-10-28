@@ -807,7 +807,14 @@ export const LiveQueueTracker = () => {
 
                 <div className="bg-white/80 backdrop-blur-md p-3 rounded-2xl border border-emerald-100">
                   <p className="text-slate-400 font-semibold text-[10px] uppercase">Current Status</p>
-                  <p className="text-xs font-bold text-emerald-700 mt-1">In Consultation</p>
+                  <div className="text-xs font-bold text-emerald-700 mt-1 flex items-center flex-wrap gap-1">
+                    <span>{currentlyServing.status || 'In Consultation'}</span>
+                    {currentlyServing.extendMin > 0 && (
+                      <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 text-[9px] font-extrabold rounded border border-amber-300">
+                        +{currentlyServing.extendMin}m
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>

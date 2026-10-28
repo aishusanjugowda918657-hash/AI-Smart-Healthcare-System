@@ -112,6 +112,11 @@ describe('Phase 6 - Feature F6 & F7 Queue Engine & Doctor Controls Integration T
   it('Doctor controls: POST /api/queue/extend and POST /api/queue/finish update queue state', async () => {
     const doctorId = `DOC_CTRL_${Date.now()}`;
     const apptId = `apt_ctrl_${Date.now()}`;
+    const waitingApptId = `apt_waiting_${Date.now()}`;
+
+    // Active in-room consultation (expected 15 min, started 12 min ago)
+    const nowTime = new Date();
+    const startTimeIso = new Date(nowTime.getTime() - 12 * 60 * 1000).toISOString();
 
     await db.collection('appointments').doc(apptId).set({
       id: apptId,
@@ -119,11 +124,35 @@ describe('Phase 6 - Feature F6 & F7 Queue Engine & Doctor Controls Integration T
       departmentId: 'dept-card',
       date: todayStr,
       status: 'in_consultation',
-      consultStartAt: new Date().toISOString(),
+      consultStartAt: startTimeIso,
       expectedDurationMin: 15,
       visitType: 'new',
       complexity: 'moderate'
     });
+
+    // Waiting patient #1 in queue
+    await db.collection('appointments').doc(waitingApptId).set({
+      id: waitingApptId,
+      doctorId,
+      departmentId: 'dept-card',
+      date: todayStr,
+      status: 'checked_in',
+      checkedInAt: startTimeIso,
+      bookedStartAt: '12:15',
+      timeSlot: '12:15',
+      expectedDurationMin: 15,
+      visitType: 'new',
+      complexity: 'moderate'
+    });
+
+    // Initial recalculation without extension
+    const { recalculateQueue } = await import('../src/services/queueService.js');
+    await recalculateQueue(doctorId, todayStr);
+
+    const initialWaitingSnap = await db.collection('appointments').doc(waitingApptId).get();
+    const initialWait = initialWaitingSnap.data().live;
+    expect(initialWait).toBeDefined();
+    const initialPredMs = new Date(initialWait.predictedCallAt).getTime();
 
     // Extend consultation by +10 min
     const extRes = await request(app)
@@ -134,6 +163,32 @@ describe('Phase 6 - Feature F6 & F7 Queue Engine & Doctor Controls Integration T
 
     expect(extRes.statusCode).toBe(200);
     expect(extRes.body.data.extendMin).toBe(10);
+
+    // Verify waiting patient live data has been pushed by 10 minutes
+    const extendedWaitingSnap = await db.collection('appointments').doc(waitingApptId).get();
+    const extendedWait = extendedWaitingSnap.data().live;
+    expect(extendedWait).toBeDefined();
+    const extendedPredMs = new Date(extendedWait.predictedCallAt).getTime();
+
+    // The predicted call time should have increased by 10 minutes (600,000 ms)
+    const diffMinutes = Math.round((extendedPredMs - initialPredMs) / (60 * 1000));
+    expect(diffMinutes).toBe(10);
+    expect(extendedWait.reasonText).toBe('Current consultation has been extended by doctor.');
+
+    // Test Undo Extend
+    const undoRes = await request(app)
+      .post('/api/queue/undo-extend')
+      .set('x-demo-uid', 'doc-ctrl-001')
+      .set('x-demo-role', 'doctor')
+      .send({ doctorId });
+
+    expect(undoRes.statusCode).toBe(200);
+    expect(undoRes.body.data.extendMin).toBe(0);
+
+    const revertedWaitingSnap = await db.collection('appointments').doc(waitingApptId).get();
+    const revertedWait = revertedWaitingSnap.data().live;
+    const revertedPredMs = new Date(revertedWait.predictedCallAt).getTime();
+    expect(Math.round((revertedPredMs - initialPredMs) / (60 * 1000))).toBe(0);
 
     // Finish consultation
     const finishRes = await request(app)

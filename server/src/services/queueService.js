@@ -54,14 +54,10 @@ function parseTimeToMinutes(timeVal) {
 }
 
 /**
- * Shared in-memory queue state and wait-time computation engine.
- * Reads appointments and queue metadata to compute order and waiting-time estimates.
- * Pure read-only computation: NEVER performs database writes or triggers background tasks.
+ * Resolves all candidate doctor IDs (Firebase Auth UID, doctorId, displayId)
+ * to ensure queue documents and queries stay in sync across doctor identifiers.
  */
-export async function computeQueueSnapshot(doctorId, date, { db = assertDbConnected(), now = clock.now() } = {}) {
-  const nowIso = now.toISOString();
-
-  // Resolve canonical doctor identifiers
+export async function resolveDoctorIds(doctorId, db = assertDbConnected()) {
   const candidateDocIds = new Set([doctorId]);
   try {
     const directDocSnap = await db.collection('doctors').doc(doctorId).get();
@@ -95,14 +91,47 @@ export async function computeQueueSnapshot(doctorId, date, { db = assertDbConnec
 
   const docIdList = Array.from(candidateDocIds).filter(Boolean);
   const canonicalDoctorId = docIdList.find((id) => id.startsWith('DOC-')) || doctorId;
+  return { docIdList, canonicalDoctorId };
+}
+
+/**
+ * Shared in-memory queue state and wait-time computation engine.
+ * Reads appointments and queue metadata to compute order and waiting-time estimates.
+ * Pure read-only computation: NEVER performs database writes or triggers background tasks.
+ */
+export async function computeQueueSnapshot(doctorId, date, { db = assertDbConnected(), now = clock.now() } = {}) {
+  const nowIso = now.toISOString();
+
+  // Resolve canonical doctor identifiers
+  const { docIdList, canonicalDoctorId } = await resolveDoctorIds(doctorId, db);
 
   // 1. Fetch Queue document
   const queueDocId = `${canonicalDoctorId}_${date}`;
   const queueRef = db.collection('queues').doc(queueDocId);
   const queueSnap = await queueRef.get();
-  const queueData = queueSnap.exists ? queueSnap.data() : {};
+  let queueData = queueSnap.exists ? queueSnap.data() : {};
+
+  // Inspect candidate ID documents in case extendMin, delayMin, or breakUntil were saved under an alias
+  for (const altId of docIdList) {
+    if (altId === canonicalDoctorId) continue;
+    try {
+      const altSnap = await db.collection('queues').doc(`${altId}_${date}`).get();
+      if (altSnap.exists) {
+        const altData = altSnap.data();
+        queueData = {
+          ...altData,
+          ...queueData,
+          extendMin: Math.max(queueData.extendMin || 0, altData.extendMin || 0),
+          delayMin: Math.max(queueData.delayMin || 0, altData.delayMin || 0),
+          breakUntil: queueData.breakUntil || altData.breakUntil || null,
+          runningLateMsg: queueData.runningLateMsg || altData.runningLateMsg || null
+        };
+      }
+    } catch (_) {}
+  }
 
   const delayMin = queueData.delayMin || 0;
+  const extendMin = queueData.extendMin || 0;
   const breakUntil = queueData.breakUntil ? new Date(queueData.breakUntil) : null;
   const breakRemainingMin = (breakUntil && breakUntil.getTime() > now.getTime())
     ? Math.ceil((breakUntil.getTime() - now.getTime()) / (60 * 1000))
@@ -187,7 +216,9 @@ export async function computeQueueSnapshot(doctorId, date, { db = assertDbConnec
   if (activeConsultationForWait && !activeConsultationForWait.expectedDurationMin) {
     activeConsultationForWait.expectedDurationMin = getExpectedForAppt(activeConsultationForWait);
   }
-  const remainingCurrentMin = activeConsultationForWait ? calculateRemainingCurrentTime(activeConsultationForWait, now) : 0;
+  const remainingCurrentMin = activeConsultationForWait
+    ? calculateRemainingCurrentTime(activeConsultationForWait, now, extendMin)
+    : (extendMin > 0 ? extendMin : 0);
 
   // 5. Separate ready candidates (checked_in & rejoined) vs others,
   //    enriched with per-visitType expectedDurationMin
@@ -199,6 +230,7 @@ export async function computeQueueSnapshot(doctorId, date, { db = assertDbConnec
     hasEmergencyAdded: readyCandidates.some((c) => c.clinicalLevel === 3),
     hasDoctorBreak: breakRemainingMin > 0,
     hasLateStart: delayMin > 0,
+    hasConsultationExtended: extendMin > 0,
     consultationsRunningLong: timeFactor > 1.15,
     consultationsRunningShort: timeFactor < 0.85
   });
@@ -300,11 +332,16 @@ export async function computeQueueSnapshot(doctorId, date, { db = assertDbConnec
 
     // Compare with existing live object (IDEMPOTENT CHECK)
     const oldLive = candidate.live || {};
+    const isPredChanged = oldLive.predictedCallAt && newLive.predictedCallAt
+      ? Math.abs(new Date(oldLive.predictedCallAt).getTime() - new Date(newLive.predictedCallAt).getTime()) >= 60000
+      : Boolean(oldLive.predictedCallAt) !== Boolean(newLive.predictedCallAt);
+
     const hasChanged =
       oldLive.position !== newLive.position ||
       oldLive.aheadCount !== newLive.aheadCount ||
       oldLive.waitMinLow !== newLive.waitMinLow ||
       oldLive.waitMinHigh !== newLive.waitMinHigh ||
+      isPredChanged ||
       oldLive.reasonText !== newLive.reasonText;
 
     if (hasChanged) {
@@ -405,10 +442,15 @@ export async function computeQueueSnapshot(doctorId, date, { db = assertDbConnec
     };
 
     const oldLive = apt.live || {};
+    const isPredChanged = oldLive.predictedCallAt && newLive.predictedCallAt
+      ? Math.abs(new Date(oldLive.predictedCallAt).getTime() - new Date(newLive.predictedCallAt).getTime()) >= 60000
+      : Boolean(oldLive.predictedCallAt) !== Boolean(newLive.predictedCallAt);
+
     const hasChanged =
       oldLive.position !== newLive.position ||
       oldLive.waitMinLow !== newLive.waitMinLow ||
-      oldLive.waitMinHigh !== newLive.waitMinHigh;
+      oldLive.waitMinHigh !== newLive.waitMinHigh ||
+      isPredChanged;
 
     if (hasChanged) {
       const apptRef = db.collection('appointments').doc(apt.id);
@@ -435,6 +477,7 @@ export async function computeQueueSnapshot(doctorId, date, { db = assertDbConnec
     timeFactor,
     completedCount: completedAppts.length,
     delayMin,
+    extendMin,
     breakUntil: queueData.breakUntil || null,
     breakRemainingMin,
     lastRecalcAt: queueData.lastRecalcAt || null,
@@ -443,6 +486,7 @@ export async function computeQueueSnapshot(doctorId, date, { db = assertDbConnec
 
   return {
     queueRef,
+    queueDocId,
     queueData: computedQueueData,
     currentConsultation,
     currentAppointmentId,
@@ -451,6 +495,9 @@ export async function computeQueueSnapshot(doctorId, date, { db = assertDbConnec
     totalActive: allAppts.length,
     timeFactor,
     delayMin,
+    extendMin,
+    docIdList,
+    canonicalDoctorId,
     breakRemainingMin,
     completedAppts,
     readyCandidateUpdates,
@@ -526,20 +573,32 @@ export async function recalculateQueue(doctorId, date) {
   }
 
   // 8. Update Queue Document
-  await snapshot.queueRef.set(
-    {
-      doctorId,
-      date,
-      currentAppointmentId: snapshot.currentAppointmentId,
-      timeFactor: snapshot.timeFactor,
-      completedCount: snapshot.completedAppts.length,
-      delayMin: snapshot.delayMin,
-      breakUntil: snapshot.queueData.breakUntil || null,
-      lastRecalcAt: now,
-      runningLateMsg: snapshot.queueData.runningLateMsg
-    },
-    { merge: true }
-  );
+  const queueUpdateData = {
+    doctorId: snapshot.canonicalDoctorId || doctorId,
+    date,
+    currentAppointmentId: snapshot.currentAppointmentId,
+    timeFactor: snapshot.timeFactor,
+    completedCount: snapshot.completedAppts.length,
+    delayMin: snapshot.delayMin,
+    extendMin: snapshot.extendMin || 0,
+    breakUntil: snapshot.queueData.breakUntil || null,
+    lastRecalcAt: now,
+    runningLateMsg: snapshot.queueData.runningLateMsg
+  };
+
+  await snapshot.queueRef.set(queueUpdateData, { merge: true });
+
+  // Sync to alias doctor IDs so listeners on queues/${aliasId}_${date} receive updates immediately
+  const aliasIds = snapshot.docIdList || [doctorId];
+  for (const aId of aliasIds) {
+    if (aId === snapshot.canonicalDoctorId) continue;
+    try {
+      await db.collection('queues').doc(`${aId}_${date}`).set({
+        ...queueUpdateData,
+        doctorId: aId
+      }, { merge: true });
+    } catch (_) {}
+  }
 
   // Pre-generate summary for next ready candidate so it's ready before call
   if (snapshot.readyCandidates.length > 0) {

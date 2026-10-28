@@ -898,9 +898,12 @@ export const getMyQueueStatus = async (req, res, next) => {
         tokenNumber: c.tokenLabel || c.tokenNumber || 'Active',
         doctorName,
         departmentName,
-        status: c.status === 'called' ? 'Called - Entering Room' : 'Consultation in progress',
+        status: c.status === 'called'
+          ? 'Called - Entering Room'
+          : (snapshot.extendMin > 0 ? `In Consultation (+${snapshot.extendMin}m extended)` : 'In Consultation'),
         startedAt: formatHospitalTime(startDate),
-        elapsedMinutes
+        elapsedMinutes,
+        extendMin: snapshot.extendMin || 0
       };
     }
 
