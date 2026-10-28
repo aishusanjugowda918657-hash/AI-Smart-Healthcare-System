@@ -3,6 +3,7 @@ import { Bot, Send, ShieldAlert, Sparkles, User, RefreshCw, Mic, MicOff, Volume2
 import { AI_DISCLAIMER_TEXT } from '../utils/constants';
 import { useSpeech } from '../hooks/useSpeech';
 import API from '../services/api';
+import MarkdownRenderer from '../components/common/MarkdownRenderer';
 
 export const ChatbotPage = () => {
   const [messages, setMessages] = useState([
@@ -211,7 +212,11 @@ export const ChatbotPage = () => {
                   : 'bg-slate-100 text-slate-800 border border-slate-200/80'
               }`}
             >
-              {m.text}
+              {m.sender === 'ai' ? (
+                <MarkdownRenderer content={m.text} className={m.isEmergency ? 'text-rose-900 font-medium' : 'text-slate-800'} />
+              ) : (
+                m.text
+              )}
               {m.sender === 'ai' && (
                 <div className="mt-2 pt-2 border-t border-slate-200/60 flex items-center justify-between text-[10px] text-slate-400">
                   <span>Non-clinical informational reply</span>

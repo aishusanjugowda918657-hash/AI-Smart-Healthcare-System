@@ -23,6 +23,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import API from '../../services/api';
+import MarkdownRenderer from '../common/MarkdownRenderer';
 
 // ─── Shared input style ───────────────────────────────────────────────────────
 const INPUT_CLS =
@@ -663,9 +664,9 @@ const PatientLookup = ({ onPatientFound, currentPatient = null }) => {
             )}
           </div>
 
-          {/* Answer Text Output */}
-          <div className="text-xs text-slate-800 leading-relaxed font-normal whitespace-pre-line bg-white rounded-xl p-3.5 border border-slate-100 shadow-2xs">
-            {answerData.answer}
+          {/* Answer Text Output with Safe Markdown Rendering */}
+          <div className="bg-white rounded-xl p-3.5 border border-slate-100 shadow-2xs">
+            <MarkdownRenderer content={answerData.answer} />
           </div>
 
           {/* Sources Badge */}

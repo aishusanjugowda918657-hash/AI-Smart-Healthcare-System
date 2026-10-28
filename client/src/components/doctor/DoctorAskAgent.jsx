@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Stethoscope, Send, RefreshCw, Sparkles, User, FileText, Mic, MicOff, AlertCircle } from 'lucide-react';
 import { useSpeech } from '../../hooks/useSpeech';
 import API from '../../services/api';
+import MarkdownRenderer from '../common/MarkdownRenderer';
 
 export const DoctorAskAgent = ({ defaultHealthId = null, onClose = null }) => {
   const [messages, setMessages] = useState([
@@ -163,7 +164,11 @@ export const DoctorAskAgent = ({ defaultHealthId = null, onClose = null }) => {
             </div>
 
             <div className={`max-w-[85%] rounded-2xl p-3 text-xs leading-relaxed ${m.sender === 'doctor' ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-800'}`}>
-              <div>{m.text}</div>
+              {m.sender === 'ai' ? (
+                <MarkdownRenderer content={m.text} className="text-slate-800" />
+              ) : (
+                <div>{m.text}</div>
+              )}
 
               {/* Source Chips */}
               {m.sources && m.sources.length > 0 && (
