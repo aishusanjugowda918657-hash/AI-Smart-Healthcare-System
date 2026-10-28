@@ -2,13 +2,10 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Sparkles,
   AlertTriangle,
-  ChevronDown,
-  ChevronUp,
   Edit3,
   PlusCircle,
   Clock,
   User,
-  Bot,
   RefreshCw,
   FileText,
   CheckCircle2,
@@ -23,7 +20,7 @@ import API from '../../services/api';
  * - Shows: Patient Name, Age, Health ID, Token
  * - Rule-based safety badges: Allergy, Urgent, Follow-up overdue, Low adherence, First visit, Caregiver
  * - Traceable source chips
- * - Doctor actions: Prepare Me, Show More, Ask Agent, Correct Summary, Add Note, Change Complexity
+ * - Doctor actions: Correct Summary, Add Note, Change Complexity
  */
 export const PreConsultationSummaryCard = ({
   appointmentId,
@@ -36,7 +33,6 @@ export const PreConsultationSummaryCard = ({
 }) => {
   const [summaryData, setSummaryData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [showMore, setShowMore] = useState(false);
   const [editing, setEditing] = useState(false);
   const [correctedText, setCorrectedText] = useState('');
   const [correctReason, setCorrectReason] = useState('');
@@ -354,82 +350,35 @@ export const PreConsultationSummaryCard = ({
         </div>
       )}
 
-      {/* Show More Authorized History Accordion */}
-      {showMore && (
-        <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-2">
-          <div className="flex items-center justify-between border-b border-slate-200 pb-1">
-            <span className="font-bold text-slate-700 text-[11px] uppercase tracking-wider">Verified Medical Timeline</span>
-            <span className="text-[10px] text-slate-400">Authorized Doctor Access</span>
-          </div>
-          <div className="space-y-1 text-slate-600 text-[11px]">
-            <p>• <strong>Patient Health ID:</strong> {pHealthId}</p>
-            <p>• <strong>Allergies:</strong> {summaryData?.patient?.allergies?.join(', ') || 'No known allergies'}</p>
-            <p>• <strong>Blood Group:</strong> {summaryData?.patient?.bloodGroup || 'Not recorded'}</p>
-            <p>• <strong>Booking Reason:</strong> {displayText}</p>
-          </div>
-        </div>
-      )}
-
       {/* Doctor Action Toolbar */}
-      <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => fetchSummary(true)}
-            className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded text-[11px] transition"
-            title="Refresh pre-consultation summary"
-          >
-            Prepare Me
-          </button>
+      <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-end gap-3 text-xs">
+        <button
+          onClick={() => {
+            setCorrectedText(displayText);
+            setEditing(!editing);
+          }}
+          className="text-slate-600 hover:text-slate-900 font-semibold text-[11px] flex items-center gap-1 transition"
+        >
+          <Edit3 className="w-3 h-3 text-slate-500" />
+          <span>Correct</span>
+        </button>
 
-          <button
-            onClick={() => setShowMore(!showMore)}
-            className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded text-[11px] flex items-center gap-1 transition"
-          >
-            <span>{showMore ? 'Hide History' : 'Show More'}</span>
-            {showMore ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-          </button>
+        <button
+          onClick={() => setShowAddNote(!showAddNote)}
+          className="text-teal-700 hover:text-teal-900 font-bold text-[11px] flex items-center gap-1 transition"
+        >
+          <PlusCircle className="w-3 h-3" />
+          <span>Note</span>
+        </button>
 
-          {onAskAgent && (
-            <button
-              onClick={() => onAskAgent(pHealthId)}
-              className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded text-[11px] flex items-center gap-1 border border-indigo-200 transition"
-              title="Open Doctor AI Agent for this patient"
-            >
-              <Bot className="w-3 h-3 text-indigo-600" />
-              <span>Ask Agent</span>
-            </button>
-          )}
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => {
-              setCorrectedText(displayText);
-              setEditing(!editing);
-            }}
-            className="text-slate-500 hover:text-slate-800 font-semibold text-[11px] flex items-center gap-1"
-          >
-            <Edit3 className="w-3 h-3" />
-            <span>Correct</span>
-          </button>
-
-          <button
-            onClick={() => setShowAddNote(!showAddNote)}
-            className="text-teal-700 hover:text-teal-900 font-bold text-[11px] flex items-center gap-1"
-          >
-            <PlusCircle className="w-3 h-3" />
-            <span>Note</span>
-          </button>
-
-          <button
-            onClick={() => setShowComplexity(!showComplexity)}
-            className="text-amber-700 hover:text-amber-900 font-bold text-[11px] flex items-center gap-1"
-            title="Change consultation complexity for queue prediction"
-          >
-            <Clock className="w-3 h-3" />
-            <span>Complexity</span>
-          </button>
-        </div>
+        <button
+          onClick={() => setShowComplexity(!showComplexity)}
+          className="text-amber-700 hover:text-amber-900 font-bold text-[11px] flex items-center gap-1 transition"
+          title="Change consultation complexity for queue prediction"
+        >
+          <Clock className="w-3 h-3" />
+          <span>Complexity</span>
+        </button>
       </div>
     </div>
   );
