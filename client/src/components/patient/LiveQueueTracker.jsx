@@ -111,7 +111,14 @@ export const LiveQueueTracker = () => {
 
   // Turn Alert Banner Logic
   const renderTurnAlert = () => {
-    if (!queueData?.hasAppointment || queueData?.isCompleted || queueData?.isCancelled) return null;
+    if (
+      !queueData?.hasAppointment ||
+      queueData?.isCompleted ||
+      queueData?.isCancelled ||
+      queueData?.sessionEnded ||
+      queueData?.appointment?.sessionEnded ||
+      queueData?.queueSummary?.queueStatus === 'SESSION_ENDED'
+    ) return null;
 
     const { queueSummary, token, appointment, isFutureAppointment } = queueData;
     if (!queueSummary) return null;
@@ -355,8 +362,17 @@ export const LiveQueueTracker = () => {
     isCancelled,
     isCompleted,
     liveWait,
-    earlyOptIn
+    earlyOptIn,
+    sessionEnded
   } = queueData;
+
+  const isSessionEnded =
+    sessionEnded === true ||
+    queueData.sessionEnded === true ||
+    appointment?.sessionEnded === true ||
+    token?.sessionEnded === true ||
+    queueSummary?.queueStatus === 'SESSION_ENDED' ||
+    (appointment?.status === 'no_show' && (appointment?.reason === 'Doctor session ended' || appointment?.displayStatus === 'OPD Session Ended'));
 
   const isServing =
     token?.status === 'serving' ||
@@ -507,6 +523,60 @@ export const LiveQueueTracker = () => {
             >
               <FileText className="w-4 h-4" />
               <span>View Medical History</span>
+            </button>
+            <button
+              onClick={() => navigate('/patient-dashboard')}
+              className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-200 transition"
+            >
+              <span>Back to Dashboard</span>
+            </button>
+          </div>
+        </div>
+      ) : isSessionEnded ? (
+        <div className="bg-white rounded-3xl border border-amber-200 p-8 sm:p-10 shadow-sm text-center space-y-6">
+          <div className="w-16 h-16 bg-amber-50 text-amber-600 rounded-full flex items-center justify-center mx-auto shadow-xs border border-amber-200">
+            <Clock className="w-8 h-8" />
+          </div>
+
+          <div className="space-y-2 max-w-lg mx-auto">
+            <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-amber-100 text-amber-800 border border-amber-300 text-xs font-bold uppercase tracking-wider">
+              <span className="w-2 h-2 rounded-full bg-amber-500" />
+              <span>OPD Session Concluded</span>
+            </div>
+            <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+              Doctor's OPD Session Has Ended
+            </h2>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Dr. <strong>{appointment?.doctorName || 'your doctor'}</strong> ({appointment?.departmentName || 'General OPD'}) has completed their consultation hours for today. Your token is no longer in the active waiting queue.
+            </p>
+          </div>
+
+          {/* Quick Summary Badges */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs max-w-xl mx-auto text-left">
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+              <span className="text-[10px] text-slate-400 font-bold uppercase block">Token Number</span>
+              <span className="font-mono text-xl font-extrabold text-slate-900">#{token?.tokenNumber || 'G-001'}</span>
+            </div>
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+              <span className="text-[10px] text-slate-400 font-bold uppercase block">Attending Doctor</span>
+              <span className="font-bold text-slate-800 text-sm">{appointment?.doctorName || 'Doctor'}</span>
+            </div>
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+              <span className="text-[10px] text-slate-400 font-bold uppercase block">Queue Status</span>
+              <span className="font-bold text-amber-700 text-sm flex items-center space-x-1">
+                <span>Session Closed</span>
+              </span>
+            </div>
+          </div>
+
+          {/* Post-Session Action Buttons */}
+          <div className="pt-4 border-t border-slate-100 flex flex-wrap justify-center gap-3">
+            <button
+              onClick={() => navigate('/book-appointment')}
+              className="px-5 py-2.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold rounded-xl transition shadow flex items-center space-x-2"
+            >
+              <Calendar className="w-4 h-4" />
+              <span>Reschedule Appointment</span>
             </button>
             <button
               onClick={() => navigate('/patient-dashboard')}

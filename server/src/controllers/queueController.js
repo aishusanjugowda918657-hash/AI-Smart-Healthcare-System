@@ -1216,36 +1216,45 @@ export const endDoctorSession = async (req, res, next) => {
 
     await assertDoctorOwnership(req, targetDoctorId);
 
+    const { docIdList, canonicalDoctorId } = await resolveDoctorIds(targetDoctorId, db);
+    const targetDocIds = Array.from(new Set([targetDoctorId, canonicalDoctorId, doctorUid, ...docIdList])).filter(Boolean);
+
     const date = requestedDate || nowIso.split('T')[0];
 
-    // Mark the queue session as ended
-    const queueDocRef = db.collection('queues').doc(`${targetDoctorId}_${date}`);
-    await queueDocRef.set({
-      doctorId: targetDoctorId,
-      date,
-      status: 'completed',
-      sessionEnded: true,
-      sessionEndedAt: nowIso,
-      updatedAt: now
-    }, { merge: true });
+    // Mark the queue session as ended on all doctor ID aliases so listeners receive updates
+    for (const dId of targetDocIds) {
+      const queueDocRef = db.collection('queues').doc(`${dId}_${date}`);
+      await queueDocRef.set({
+        doctorId: dId,
+        date,
+        status: 'completed',
+        sessionEnded: true,
+        sessionEndedAt: nowIso,
+        updatedAt: now
+      }, { merge: true });
+    }
 
-    // Sweep all remaining unfinished appointments for this doctor & date
+    // Sweep all remaining unfinished appointments for this doctor & date across all aliases
     const apptsSnap = await db
       .collection('appointments')
-      .where('doctorId', '==', targetDoctorId)
+      .where('doctorId', 'in', targetDocIds.slice(0, 10))
       .where('date', '==', date)
       .get();
 
     const batch = db.batch();
     const affectedAppts = [];
+    const sweepStatuses = [
+      'missed', 'called', 'not_arrived', 'late', 'checked_in', 'waiting', 'booked', 'confirmed', 'rejoined'
+    ];
 
     for (const doc of apptsSnap.docs) {
       const apt = doc.data();
-      if (['missed', 'called', 'not_arrived', 'late', 'checked_in', 'waiting', 'booked', 'confirmed'].includes(apt.status)) {
+      if (sweepStatuses.includes(apt.status)) {
         batch.update(doc.ref, {
           status: 'no_show',
-          displayStatus: 'No Show',
+          displayStatus: 'OPD Session Ended',
           sessionEnded: true,
+          sessionEndedAt: nowIso,
           missedTurnHandled: true,
           statusHistory: [
             ...(apt.statusHistory || []),
@@ -1253,15 +1262,47 @@ export const endDoctorSession = async (req, res, next) => {
           ],
           updatedAt: now
         });
-        affectedAppts.push(doc.id);
+        affectedAppts.push({ id: doc.id, ...apt });
 
         const tokRef = db.collection('tokens').doc(`tok-${doc.id}`);
-        batch.set(tokRef, { status: 'no_show', updatedAt: now }, { merge: true });
+        batch.set(tokRef, {
+          status: 'no_show',
+          sessionEnded: true,
+          displayStatus: 'Session Ended',
+          updatedAt: now
+        }, { merge: true });
       }
     }
 
     if (affectedAppts.length > 0) {
       await batch.commit();
+    }
+
+    // Resolve doctor display name for personalized patient notifications
+    let doctorDisplayName = 'your doctor';
+    try {
+      const dSnap = await db.collection('doctors').doc(doctorUid).get();
+      if (dSnap.exists) {
+        doctorDisplayName = dSnap.data().fullName || dSnap.data().name || doctorDisplayName;
+      }
+    } catch (_) {}
+
+    // Dispatch in-app and push notification to all affected waiting patients
+    for (const apt of affectedAppts) {
+      const recipientUid = apt.patientUid || apt.ownerUid || apt.bookedBy || apt.patientId;
+      if (recipientUid) {
+        try {
+          await notify({
+            uids: [recipientUid],
+            title: 'OPD Session Concluded for Today',
+            body: `Dr. ${doctorDisplayName}'s consultation session for today has concluded. Your appointment has been recorded as closed. Please reschedule online or contact reception.`,
+            type: 'SESSION_ENDED',
+            data: { appointmentId: apt.id, doctorId: targetDoctorId }
+          });
+        } catch (notifErr) {
+          console.warn(`[endDoctorSession] Failed to notify patient ${recipientUid}:`, notifErr.message);
+        }
+      }
     }
 
     await writeAuditLog({
@@ -1273,7 +1314,10 @@ export const endDoctorSession = async (req, res, next) => {
       details: { affectedCount: affectedAppts.length }
     });
 
-    await recalculateQueue(targetDoctorId, date);
+    await recalculateQueue(canonicalDoctorId, date);
+    if (targetDoctorId !== canonicalDoctorId) {
+      await recalculateQueue(targetDoctorId, date);
+    }
 
     res.status(200).json(formatSuccessResponse({
       doctorId: targetDoctorId,

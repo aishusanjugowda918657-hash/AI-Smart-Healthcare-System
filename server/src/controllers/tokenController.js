@@ -574,6 +574,10 @@ export const getMyQueueStatus = async (req, res, next) => {
       const completedAppts = allAppts.filter(
         (a) => a.status && a.status.toUpperCase() === 'COMPLETED'
       );
+      const sessionEndedAppts = allAppts.filter(
+        (a) => a.sessionEnded === true || (a.status === 'no_show' && (a.reason === 'Doctor session ended' || a.displayStatus === 'OPD Session Ended'))
+      );
+
       if (completedAppts.length > 0) {
         // Show the most-recently completed appointment
         completedAppts.sort((a, b) => {
@@ -584,6 +588,15 @@ export const getMyQueueStatus = async (req, res, next) => {
           return 0;
         });
         activeAppt = completedAppts[0];
+      } else if (sessionEndedAppts.length > 0) {
+        sessionEndedAppts.sort((a, b) => {
+          const idA = a.appointmentId || a.id || '';
+          const idB = b.appointmentId || b.id || '';
+          if (idB > idA) return 1;
+          if (idA > idB) return -1;
+          return 0;
+        });
+        activeAppt = sessionEndedAppts[0];
       } else {
         return res.status(200).json({
           success: true,
@@ -708,6 +721,13 @@ export const getMyQueueStatus = async (req, res, next) => {
       }
     }
 
+    const isSessionEnded =
+      activeAppt.sessionEnded === true ||
+      myToken?.sessionEnded === true ||
+      snapshot.queueData.sessionEnded === true ||
+      snapshot.queueData.status === 'completed' ||
+      (activeAppt.status === 'no_show' && (activeAppt.reason === 'Doctor session ended' || activeAppt.displayStatus === 'OPD Session Ended'));
+
     if (isCompleted) {
       positionText = 'CONSULTATION COMPLETED';
       myPositionNum = 1;
@@ -719,6 +739,19 @@ export const getMyQueueStatus = async (req, res, next) => {
         patientsAhead: 0,
         isEstimate: false,
         calculationBasis: 'Consultation Completed'
+      };
+      liveWait = null;
+    } else if (isSessionEnded) {
+      positionText = 'OPD SESSION CONCLUDED';
+      myPositionNum = -1;
+      patientsAhead = 0;
+      waitResult = {
+        estimatedWaitMinutes: 0,
+        estimatedTurnTime: 'Session Concluded',
+        scheduledSlotTime,
+        patientsAhead: 0,
+        isEstimate: false,
+        calculationBasis: 'Doctor session ended for today'
       };
       liveWait = null;
     } else if (isCancelled) {
@@ -945,6 +978,7 @@ export const getMyQueueStatus = async (req, res, next) => {
       hasToken: !!tokenNumber,
       isCancelled,
       isCompleted,
+      sessionEnded: isSessionEnded,
       isFutureAppointment: !!isFutureAppointment,
       appointment: {
         id: activeAppt.id || targetApptId,
@@ -973,7 +1007,9 @@ export const getMyQueueStatus = async (req, res, next) => {
         status: isServing ? 'in_consultation' : (myToken?.status || (isCancelled ? 'cancelled' : isCompleted ? 'completed' : isFutureAppointment ? 'scheduled' : 'waiting')),
         priorityCategory: activeAppt.priorityCategory || (activeAppt.clinicalLevel === 3 ? 'EMERGENCY' : activeAppt.clinicalLevel === 2 ? 'HIGH' : 'STANDARD')
       },
+      queueStatus: isSessionEnded ? 'SESSION_ENDED' : (isCompleted ? 'COMPLETED' : isCancelled ? 'CANCELLED' : isServing ? 'SERVING' : isCalled ? 'CALLED' : 'WAITING'),
       queueSummary: {
+        queueStatus: isSessionEnded ? 'SESSION_ENDED' : (isCompleted ? 'COMPLETED' : isCancelled ? 'CANCELLED' : isServing ? 'SERVING' : isCalled ? 'CALLED' : 'WAITING'),
         positionText,
         positionNumber: (isServing || isCalled) ? 1 : myPositionNum,
         patientsAhead,

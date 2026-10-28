@@ -152,12 +152,14 @@ export async function computeQueueSnapshot(doctorId, date, { db = assertDbConnec
     .where('date', '==', date)
     .get();
 
-  // If date is in the past, uncompleted appointments are not active in today's live queue
-  const allAppts = isPastDate
+  // If date is in the past or doctor's OPD session has ended, uncompleted appointments are not active in today's live queue
+  const isSessionEnded = queueData.sessionEnded === true || queueData.status === 'completed';
+
+  const allAppts = (isPastDate || isSessionEnded)
     ? []
     : apptsSnap.docs
         .map((d) => ({ id: d.id, ...d.data() }))
-        .filter((a) => activeStatuses.includes(a.status));
+        .filter((a) => activeStatuses.includes(a.status) && !a.sessionEnded);
 
   const completedAppts = apptsSnap.docs
     .map((d) => d.data())
