@@ -203,20 +203,6 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
     }
   };
 
-  const handleCheckInPatient = async (appointmentId, patientName) => {
-    try {
-      setActionMessage('');
-      const res = await API.post('/checkin/manual', { appointmentId });
-      if (res.data?.success) {
-        setActionMessage(`Checked in ${patientName || 'patient'}. Patient is now in the Ready Queue!`);
-        fetchQueue();
-      } else {
-        setError(res.data?.error?.message || 'Failed to check in patient');
-      }
-    } catch (err) {
-      setError(err.response?.data?.message || err.message || 'Check-in failed');
-    }
-  };
 
   const handleExtend = async (minutes) => {
     try {
@@ -835,24 +821,21 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
               ) : (
                 <div className="divide-y divide-slate-100">
                   {notCheckedIn.filter(p => p.status !== 'late').map((pt) => {
-                    const tokenText = pt.tokenLabel || (pt.tokenNumber ? `Token #${pt.tokenNumber}` : pt.id);
-                    const patientDisplayName = pt.patientName || pt.patientHealthId || 'Patient';
+                    const tokenText = pt.tokenLabel || (pt.tokenNumber ? (String(pt.tokenNumber).startsWith('G-') || String(pt.tokenNumber).startsWith('OPT-') ? pt.tokenNumber : `G-${String(pt.tokenNumber).padStart(3, '0')}`) : pt.id);
+                    const patientDisplayName = pt.patientName || 'Patient';
+                    const patientId = pt.patientHealthId || pt.healthId || pt.displayId || pt.appointmentId;
                     const scheduledTime = pt.timeSlot || pt.bookedStartAt || 'Scheduled';
                     return (
                       <div key={pt.id} className="py-2.5 flex items-center justify-between text-xs hover:bg-slate-50 px-2 rounded-lg transition-colors border border-transparent hover:border-slate-100">
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold text-slate-800 font-mono bg-slate-100 px-1.5 py-0.5 rounded">{tokenText}</span>
-                          <span className="text-slate-700 font-medium ml-1">{patientDisplayName}</span>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="font-semibold text-slate-800 font-mono bg-slate-100 px-1.5 py-0.5 rounded text-[11px] shrink-0">{tokenText}</span>
+                          <span className="text-slate-900 font-medium truncate">{patientDisplayName}</span>
+                          {patientId && (
+                            <span className="text-slate-400 font-mono text-[11px] shrink-0">({patientId})</span>
+                          )}
                         </div>
-                        <div className="flex items-center gap-2.5">
-                          <span className="text-slate-400 font-mono text-[11px]">🕒 {scheduledTime}</span>
-                          <button
-                            onClick={() => handleCheckInPatient(pt.id, pt.patientName)}
-                            className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 font-bold text-[11px] rounded-lg transition flex items-center gap-1 shadow-xs"
-                            title="Mark patient as checked-in to move them to the Ready Queue"
-                          >
-                            <span>✓ Check In</span>
-                          </button>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-slate-500 font-mono text-xs">🕒 {scheduledTime}</span>
                         </div>
                       </div>
                     );
@@ -874,25 +857,24 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
               ) : (
                 <div className="divide-y divide-slate-100">
                   {notCheckedIn.filter(p => p.status === 'late').map((pt) => {
-                    const tokenText = pt.tokenLabel || (pt.tokenNumber ? `Token #${pt.tokenNumber}` : pt.id);
-                    const patientDisplayName = pt.patientName || pt.patientHealthId || 'Patient';
+                    const tokenText = pt.tokenLabel || (pt.tokenNumber ? (String(pt.tokenNumber).startsWith('G-') || String(pt.tokenNumber).startsWith('OPT-') ? pt.tokenNumber : `G-${String(pt.tokenNumber).padStart(3, '0')}`) : pt.id);
+                    const patientDisplayName = pt.patientName || 'Patient';
+                    const patientId = pt.patientHealthId || pt.healthId || pt.displayId || pt.appointmentId;
+                    const scheduledTime = pt.timeSlot || pt.bookedStartAt || 'Scheduled';
                     return (
                       <div key={pt.id} className="py-2.5 flex items-center justify-between text-xs hover:bg-rose-50/50 px-2 rounded-lg transition-colors border border-transparent hover:border-rose-100">
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold text-rose-800 font-mono bg-rose-50 px-1.5 py-0.5 rounded">{tokenText}</span>
-                          <span className="text-slate-700 font-medium ml-1">{patientDisplayName}</span>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="font-semibold text-rose-800 font-mono bg-rose-50 px-1.5 py-0.5 rounded text-[11px] shrink-0">{tokenText}</span>
+                          <span className="text-slate-900 font-medium truncate">{patientDisplayName}</span>
+                          {patientId && (
+                            <span className="text-slate-400 font-mono text-[11px] shrink-0">({patientId})</span>
+                          )}
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-slate-500 font-mono text-xs">🕒 {scheduledTime}</span>
                           <span className="px-1.5 py-0.5 bg-rose-100 text-rose-700 text-[10px] font-bold rounded">
                             LATE
                           </span>
-                          <button
-                            onClick={() => handleCheckInPatient(pt.id, pt.patientName)}
-                            className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-300 font-bold text-[11px] rounded-lg transition flex items-center gap-1 shadow-xs"
-                            title="Check in late arrival"
-                          >
-                            <span>✓ Check In</span>
-                          </button>
                         </div>
                       </div>
                     );
