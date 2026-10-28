@@ -258,5 +258,72 @@ describe('Doctor Display ID Service & Specification Regression', () => {
       expect(data.doctorId).toBe(testDocId); // Internal reference kept intact
       expect(data.uid).toBe(testDocUid); // Internal UID kept intact
     });
+
+    it('verifies all demo doctors render exact display IDs and single consistent departments', () => {
+      const demoDoctors = [
+        {
+          id: 'cyeu58WkM5ekSgUcU5n95BBkwKJ3',
+          uid: 'cyeu58WkM5ekSgUcU5n95BBkwKJ3',
+          doctorId: 'DOC-REAL-001',
+          fullName: 'Dr. Aarti Sunil Kamath',
+          departmentId: 'dept-gen',
+          departmentName: 'General Medicine',
+          specialization: 'General Medicine'
+        },
+        {
+          id: 'Qd9Qc0z7UrZEXmrqKyLfd202VdG3',
+          uid: 'Qd9Qc0z7UrZEXmrqKyLfd202VdG3',
+          doctorId: 'DOC-REAL-002',
+          fullName: 'Dr. Anurag Ranjan',
+          departmentId: 'dept-gen',
+          departmentName: 'General Medicine',
+          specialization: 'General Medicine'
+        },
+        {
+          id: 'NPI8NL4Jb5XY9FQ8kbnLOjdOsuR2',
+          uid: 'NPI8NL4Jb5XY9FQ8kbnLOjdOsuR2',
+          doctorId: 'DOC-REAL-003',
+          fullName: 'Dr. Anusha Sharma P S',
+          departmentId: 'dept-gen',
+          departmentName: 'General Medicine',
+          specialization: 'General Medicine'
+        },
+        {
+          id: 'SydqDB6qo3ggrcDGrffFShNTcyu1',
+          uid: 'SydqDB6qo3ggrcDGrffFShNTcyu1',
+          doctorId: 'DOC-REAL-004',
+          fullName: 'Dr. Aditi Singhvi',
+          departmentId: 'dept-card',
+          departmentName: 'Cardiology',
+          specialization: 'Cardiology'
+        }
+      ];
+
+      // Dr. Aarti Sunil Kamath
+      const doc1 = demoDoctors[0];
+      const id1 = assignDoctorDisplayId(doc1);
+      expect(id1).toBe('DOC-GEN-ASK-001');
+      expect(doc1.departmentName).toBe('General Medicine');
+      expect(doc1.departmentId).toBe('dept-gen');
+
+      // Dr. Anurag Ranjan
+      const doc2 = demoDoctors[1];
+      const id2 = assignDoctorDisplayId(doc2);
+      expect(id2).toBe('DOC-GEN-AR-002');
+      expect(doc2.departmentName).toBe('General Medicine');
+
+      // Dr. Anusha Sharma P S
+      const doc3 = demoDoctors[2];
+      const id3 = assignDoctorDisplayId(doc3);
+      expect(id3).toBe('DOC-GEN-ASPS-003');
+      expect(doc3.departmentName).toBe('General Medicine');
+
+      // Dr. Aditi Singhvi
+      const doc4 = demoDoctors[3];
+      const id4 = assignDoctorDisplayId(doc4);
+      expect(id4).toBe('DOC-CAR-AS-004');
+      expect(doc4.departmentName).toBe('Cardiology');
+      expect(doc4.departmentId).toBe('dept-card');
+    });
   });
 });

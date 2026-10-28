@@ -17,6 +17,8 @@ import { useAuth } from '../../context/AuthContext';
  *   Extend (+5/+10/+15 min) with Undo, Start/End Break, Mark Procedure
  * - Quota safe: 1 live listener on queues/{doctorId_date}, NO polling
  */
+import { generateClientDoctorDisplayId } from '../../utils/doctorDisplayId';
+
 export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: propDoctorName, doctorDisplayId: propDoctorDisplayId }) {
   const navigate = useNavigate();
   const { currentUser, userRole, loading: authLoading } = useAuth();
@@ -30,15 +32,24 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
     if (doctorId && !currentUser?.displayId && !propDoctorDisplayId) {
       API.get(`/doctors/${doctorId}`)
         .then((res) => {
-          if (res.data?.data?.displayId) {
-            setProfileDisplayId(res.data.data.displayId);
+          if (res.data?.data) {
+            const dData = res.data.data;
+            const resolved = dData.displayId || dData.doctorDisplayId || generateClientDoctorDisplayId(dData);
+            if (resolved) {
+              setProfileDisplayId(resolved);
+            }
           }
         })
         .catch(() => {});
     }
   }, [doctorId, currentUser?.displayId, propDoctorDisplayId]);
 
-  const displayId = propDoctorDisplayId || currentUser?.displayId || currentUser?.doctorDisplayId || profileDisplayId || doctorId;
+  const displayId =
+    propDoctorDisplayId ||
+    currentUser?.displayId ||
+    currentUser?.doctorDisplayId ||
+    profileDisplayId ||
+    doctorId;
 
   const todayStr = new Date().toISOString().split('T')[0];
   const [selectedDate, setSelectedDate] = useState(todayStr);

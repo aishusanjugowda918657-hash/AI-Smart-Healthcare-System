@@ -19,40 +19,65 @@ import { Link } from 'react-router-dom';
 import API from '../services/api';
 import { db } from '../config/firebase';
 import { doc, onSnapshot } from 'firebase/firestore';
+import { generateClientDoctorDisplayId } from '../utils/doctorDisplayId';
 
 export const DoctorDashboard = () => {
   const { currentUser } = useAuth();
   const { t } = useLanguage();
 
-  const doctorName = currentUser?.fullName || currentUser?.name || currentUser?.displayName || 'Doctor';
-  const doctorId = currentUser?.doctorId || currentUser?.uid || 'DOC-001';
-  const departmentId = currentUser?.departmentId || 'dept-card';
-  const specialization = currentUser?.specialization || 'General Medicine';
+  const [doctorProfile, setDoctorProfile] = useState(null);
 
-  const [profileDisplayId, setProfileDisplayId] = useState(null);
+  const doctorId =
+    currentUser?.doctorId ||
+    doctorProfile?.doctorId ||
+    currentUser?.uid ||
+    'DOC-001';
 
   useEffect(() => {
-    if (doctorId && !currentUser?.displayId && !currentUser?.doctorDisplayId) {
-      API.get(`/doctors/${doctorId}`)
+    const lookupId = currentUser?.doctorId || currentUser?.uid;
+    if (lookupId) {
+      API.get(`/doctors/${lookupId}`)
         .then((res) => {
-          if (res.data?.data?.displayId) {
-            setProfileDisplayId(res.data.data.displayId);
+          if (res.data?.success && res.data?.data) {
+            setDoctorProfile(res.data.data);
           }
         })
         .catch(() => {});
     }
-  }, [doctorId, currentUser?.displayId, currentUser?.doctorDisplayId]);
+  }, [currentUser?.doctorId, currentUser?.uid]);
 
-  const displayId = currentUser?.displayId || currentUser?.doctorDisplayId || profileDisplayId || doctorId;
+  const displayId =
+    currentUser?.displayId ||
+    currentUser?.doctorDisplayId ||
+    doctorProfile?.displayId ||
+    doctorProfile?.doctorDisplayId ||
+    (doctorProfile ? generateClientDoctorDisplayId(doctorProfile) : null) ||
+    currentUser?.doctorId ||
+    currentUser?.uid ||
+    'DOC-001';
 
   const deptMap = {
-    'dept-card': 'Cardiology',
     'dept-gen': 'General Medicine',
+    'dept-card': 'Cardiology',
     'dept-ped': 'Pediatrics',
     'dept-ortho': 'Orthopedics',
     'dept-derm': 'Dermatology'
   };
-  const deptName = deptMap[departmentId] || departmentId;
+
+  // Authoritative department from doctor profile, then user claims, without defaulting to 'dept-card'
+  const resolvedDeptId = doctorProfile?.departmentId || doctorProfile?.deptId || currentUser?.departmentId || null;
+  const authoritativeDeptName =
+    doctorProfile?.department?.name ||
+    doctorProfile?.departmentName ||
+    (resolvedDeptId ? deptMap[resolvedDeptId] || resolvedDeptId : null) ||
+    currentUser?.departmentName ||
+    currentUser?.specialization ||
+    'General Medicine';
+
+  const authoritativeSpecialization =
+    doctorProfile?.specialization ||
+    currentUser?.specialization ||
+    authoritativeDeptName;
 
   const [summary, setSummary] = useState(null);
   const [queueLive, setQueueLive] = useState(null);
@@ -196,6 +221,14 @@ export const DoctorDashboard = () => {
   const runningLateMsg = queueLive?.runningLateMsg || totals.runningLateMsg || 'On schedule';
   const isDelayed = totals.delayMin > 0 || (totals.timeFactor && totals.timeFactor > 1.15);
 
+  const doctorName =
+    doctorProfile?.fullName ||
+    doctorProfile?.name ||
+    currentUser?.fullName ||
+    currentUser?.name ||
+    currentUser?.displayName ||
+    'Doctor';
+
   return (
     <div className="space-y-6" data-testid="doctor-dashboard">
       {/* Welcome & Live Status Header */}
@@ -203,7 +236,7 @@ export const DoctorDashboard = () => {
         <div className="space-y-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="px-3 py-1 bg-white/20 backdrop-blur-md rounded-full text-xs font-bold text-teal-100">
-              Doctor Clinical Portal — {specialization}
+              Doctor Clinical Portal — {authoritativeSpecialization}
             </span>
 
             {/* Non-blaming schedule status chip */}
@@ -221,7 +254,20 @@ export const DoctorDashboard = () => {
 
           <h1 className="text-2xl sm:text-3xl font-bold">{doctorName}</h1>
           <p className="text-xs text-teal-100">
-            Doctor ID: <span className="font-mono font-bold bg-black/20 px-2 py-0.5 rounded text-white">{displayId}</span> | {deptName} Dept | {specialization}
+            Doctor ID: <span className="font-mono font-bold bg-black/20 px-2 py-0.5 rounded text-white">{displayId}</span>
+            <span className="mx-2 opacity-60">|</span>
+            <span>
+              {authoritativeDeptName.toLowerCase().includes('dept')
+                ? authoritativeDeptName
+                : `${authoritativeDeptName} Dept`}
+            </span>
+            {authoritativeSpecialization &&
+             authoritativeSpecialization.toLowerCase().trim() !== authoritativeDeptName.toLowerCase().trim() && (
+              <>
+                <span className="mx-2 opacity-60">|</span>
+                <span>{authoritativeSpecialization}</span>
+              </>
+            )}
           </p>
         </div>
 

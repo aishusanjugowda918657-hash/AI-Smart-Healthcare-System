@@ -95,13 +95,42 @@ export function formatDoctorDisplayId(deptAbbr, initials, seq) {
   return `DOC-${deptAbbr}-${initials}-${paddedSeq}`;
 }
 
+export function isValidDoctorDisplayId(id) {
+  if (!id || typeof id !== 'string') return false;
+  return /^DOC-[A-Z]+-[A-Z]+-\d{3,}$/.test(id);
+}
+
+export function parseDoctorDisplayId(id) {
+  if (!isValidDoctorDisplayId(id)) return null;
+  const parts = id.split('-');
+  return {
+    prefix: parts[0],
+    dept: parts[1],
+    initials: parts[2],
+    sequence: parseInt(parts[3], 10),
+    formattedSequence: parts[3]
+  };
+}
+
 export function generateClientDoctorDisplayId(doctor, existingDoctors = []) {
+  if (!doctor) return null;
+  if (isValidDoctorDisplayId(doctor.displayId)) return doctor.displayId;
+  if (isValidDoctorDisplayId(doctor.doctorDisplayId)) return doctor.doctorDisplayId;
+
   const dept = getDepartmentAbbreviation(
     doctor.departmentId || doctor.deptId,
-    doctor.departmentName || doctor.specialization,
-    doctor.departmentCode
+    doctor.departmentName || doctor.department?.name || doctor.specialization,
+    doctor.departmentCode || doctor.department?.code
   );
-  const initials = extractDoctorInitials(doctor.fullName || doctor.name);
-  const seq = (existingDoctors.length || 0) + 1;
-  return formatDoctorDisplayId(dept, initials, seq);
+  const initials = extractDoctorInitials(doctor.fullName || doctor.name || doctor.displayName);
+
+  let candidateSeq = null;
+  const matchNum = String(doctor.doctorId || doctor.id || '').match(/(\d+)$/);
+  if (matchNum) {
+    candidateSeq = parseInt(matchNum[1], 10);
+  } else {
+    candidateSeq = (existingDoctors.length || 0) + 1;
+  }
+
+  return formatDoctorDisplayId(dept, initials, candidateSeq);
 }
