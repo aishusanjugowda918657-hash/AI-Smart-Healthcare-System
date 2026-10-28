@@ -13,7 +13,8 @@ import {
   AlertTriangle,
   Bot,
   RefreshCw,
-  ArrowRight
+  ArrowRight,
+  Share2
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import API from '../services/api';
@@ -83,6 +84,7 @@ export const DoctorDashboard = () => {
   const [queueLive, setQueueLive] = useState(null);
   const [queueDetails, setQueueDetails] = useState({ currentConsultation: null, nextPatient: null });
   const [alertsSummary, setAlertsSummary] = useState([]);
+  const [sharedCount, setSharedCount] = useState(0);
   const [callingNext, setCallingNext] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -92,10 +94,11 @@ export const DoctorDashboard = () => {
   const fetchSummary = async (nocache = false) => {
     try {
       setError(null);
-      const [sumRes, queueRes, alertsRes] = await Promise.allSettled([
+      const [sumRes, queueRes, alertsRes, sharedRes] = await Promise.allSettled([
         API.get(`/doctor/dashboard-summary${nocache ? '?nocache=true' : ''}`),
         API.get(`/queue/doctor/${doctorId}/readonly?date=${todayStr}`),
-        API.get(`/doctor/alerts`)
+        API.get(`/doctor/alerts`),
+        API.get(`/doctor/patients/shared-with-me`)
       ]);
 
       if (sumRes.status === 'fulfilled' && sumRes.value.data?.success) {
@@ -113,6 +116,10 @@ export const DoctorDashboard = () => {
       if (alertsRes.status === 'fulfilled') {
         const aData = alertsRes.value.data?.data || alertsRes.value.data || [];
         setAlertsSummary(Array.isArray(aData) ? aData.slice(0, 3) : (aData.alerts || []).slice(0, 3));
+      }
+
+      if (sharedRes.status === 'fulfilled' && sharedRes.value.data?.success) {
+        setSharedCount((sharedRes.value.data.data || []).length);
       }
     } catch (err) {
       console.warn('Dashboard summary fetch notice:', err.message);
@@ -288,6 +295,32 @@ export const DoctorDashboard = () => {
           </Link>
         </div>
       </div>
+
+      {/* Active Shared Records Banner */}
+      {sharedCount > 0 && (
+        <div className="p-4 bg-teal-50 border border-teal-200 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center space-x-3">
+            <div className="p-2.5 bg-teal-100 text-teal-700 rounded-xl">
+              <Share2 className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="text-xs font-bold text-teal-900">
+                {sharedCount} Patient{sharedCount > 1 ? 's Have' : ' Has'} Shared Medical History With You
+              </h4>
+              <p className="text-xs text-teal-700">
+                You have active time-bound access to review their complete clinical timeline and records.
+              </p>
+            </div>
+          </div>
+          <Link
+            to="/doctor/patients?tab=shared"
+            className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition flex items-center space-x-1.5 shadow-xs"
+          >
+            <span>View Shared Records ({sharedCount})</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </Link>
+        </div>
+      )}
 
       {/* Real Totals Grid */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -519,13 +552,23 @@ export const DoctorDashboard = () => {
 
         <Link
           to="/doctor/patients"
-          className="bg-white p-5 rounded-2xl border border-slate-200 hover:border-teal-300 hover:shadow-md transition space-y-2 block"
+          className="bg-white p-5 rounded-2xl border border-slate-200 hover:border-teal-300 hover:shadow-md transition space-y-2 block relative overflow-hidden"
         >
+          {sharedCount > 0 && (
+            <span className="absolute top-4 right-4 px-2 py-0.5 bg-teal-100 text-teal-800 text-[10px] font-bold rounded-full flex items-center space-x-1">
+              <Share2 className="w-2.5 h-2.5" />
+              <span>{sharedCount} shared</span>
+            </span>
+          )}
           <div className="p-3 bg-teal-50 text-teal-600 rounded-xl w-fit">
             <Users className="w-5 h-5" />
           </div>
           <h3 className="font-bold text-slate-800 text-sm">{t('myPatients') || 'Patients Directory'}</h3>
-          <p className="text-xs text-slate-500">Patient lookup by name, Health ID or token with access verification</p>
+          <p className="text-xs text-slate-500">
+            {sharedCount > 0
+              ? `${sharedCount} patient record${sharedCount > 1 ? 's' : ''} currently shared with you`
+              : 'Patient lookup by name, Health ID, shared records or past patients'}
+          </p>
         </Link>
 
         <Link

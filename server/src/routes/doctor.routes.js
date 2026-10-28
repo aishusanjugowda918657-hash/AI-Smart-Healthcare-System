@@ -14,6 +14,7 @@ import {
   getDoctorLeaveImpact,
   doctorSearchPatients,
   doctorGetMyPatients,
+  doctorGetSharedPatients,
   doctorCheckPatientAccess
 } from '../controllers/doctorController.js';
 import { adminCreateLeave, adminDeleteLeave } from '../controllers/slotController.js';
@@ -38,6 +39,7 @@ router.get('/dashboard-summary', requireAuth, requireRole('doctor', 'admin'), ge
 router.get('/leaves/impact', requireAuth, requireRole('doctor', 'admin'), getDoctorLeaveImpact);
 router.get('/patients/search', requireAuth, requireRole('doctor', 'admin'), doctorSearchPatients);
 router.get('/patients/my-patients', requireAuth, requireRole('doctor', 'admin'), doctorGetMyPatients);
+router.get('/patients/shared-with-me', requireAuth, requireRole('doctor', 'admin'), doctorGetSharedPatients);
 router.get('/patients/:healthId/access-check', requireAuth, requireRole('doctor', 'admin'), doctorCheckPatientAccess);
 router.get('/prescription-helpers', requireAuth, requireRole('doctor', 'admin'), getDoctorPrescriptionHelpers);
 router.get('/templates', requireAuth, requireRole('doctor', 'admin'), getDoctorTemplates);

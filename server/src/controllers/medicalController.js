@@ -1,6 +1,8 @@
 import { assertDbConnected, isEmulator, getActiveProjectId } from '../config/firebase.js';
 import PDFDocument from 'pdfkit';
 import { assignDoctorDisplayId } from '../services/doctorDisplayIdService.js';
+import { resolveDoctorIds } from '../services/queueService.js';
+import { notify } from '../services/notify.js';
 
 /**
  * Helper to build PDF Buffer asynchronously from PDFDocument
@@ -197,9 +199,25 @@ export async function verifyRecordAccess({ db, uid, role, patientHealthId, reqQu
       .get();
 
     const now = new Date();
+    // Resolve doctor aliases so grants shared by displayId or doctorId match doctor's login UID
+    const { docIdList: myAliases } = await resolveDoctorIds(uid, db);
+    const myDoctorSet = new Set([uid, ...myAliases]);
+    try {
+      const myDocSnap = await db.collection('doctors').doc(uid).get();
+      if (myDocSnap.exists) {
+        const d = myDocSnap.data();
+        if (d.doctorId) myDoctorSet.add(d.doctorId);
+        if (d.displayId) myDoctorSet.add(d.displayId);
+        if (d.doctorUid) myDoctorSet.add(d.doctorUid);
+      }
+    } catch (_) {}
+
     const activeDoctorGrants = docShareSnap.docs.filter((d) => {
       const data = d.data();
-      return data.granteeUid === uid || data.doctorId === uid;
+      const matchesUid = data.granteeUid && myDoctorSet.has(data.granteeUid);
+      const matchesDocId = data.doctorId && myDoctorSet.has(data.doctorId);
+      const matchesAliases = Array.isArray(data.doctorAliases) && data.doctorAliases.some((a) => myDoctorSet.has(a));
+      return matchesUid || matchesDocId || matchesAliases;
     });
 
     let hasExpiredGrant = false;
@@ -775,7 +793,8 @@ export const sharePatientHistory = async (req, res, next) => {
   try {
     const { healthId } = req.params;
     const { uid } = req.user;
-    const { doctorId, hours = 24 } = req.body;
+    const { hours = 24 } = req.body;
+    const doctorId = req.body.doctorId || req.body.granteeUid;
 
     if (!doctorId) {
       return res.status(400).json({ success: false, message: 'Doctor ID is required.' });
@@ -787,6 +806,43 @@ export const sharePatientHistory = async (req, res, next) => {
     const expiresAt = new Date(now.getTime() + shareHours * 3600 * 1000);
     const shareId = `share-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
 
+    const trimmedDoctorId = String(doctorId).trim();
+    const { docIdList, canonicalDoctorId } = await resolveDoctorIds(trimmedDoctorId, db);
+    const targetDocAliases = new Set([trimmedDoctorId, canonicalDoctorId, ...docIdList].filter(Boolean));
+
+    let doctorUid = null;
+    let doctorDisplayName = trimmedDoctorId;
+
+    let resolvedDocSnap = await db.collection('doctors').doc(trimmedDoctorId).get();
+    if (!resolvedDocSnap.exists) {
+      const q1 = await db.collection('doctors').where('doctorId', '==', trimmedDoctorId).limit(1).get();
+      if (!q1.empty) resolvedDocSnap = q1.docs[0];
+    }
+    if (!resolvedDocSnap.exists) {
+      const q2 = await db.collection('doctors').where('displayId', '==', trimmedDoctorId).limit(1).get();
+      if (!q2.empty) resolvedDocSnap = q2.docs[0];
+    }
+    if (resolvedDocSnap.exists) {
+      const dData = resolvedDocSnap.data();
+      doctorUid = dData.uid || dData.doctorUid || resolvedDocSnap.id;
+      doctorDisplayName = dData.fullName || dData.name || trimmedDoctorId;
+      if (doctorUid) targetDocAliases.add(doctorUid);
+      if (dData.displayId) targetDocAliases.add(dData.displayId);
+      if (dData.doctorId) targetDocAliases.add(dData.doctorId);
+    }
+
+    // Resolve patient display name
+    let patientName = 'Patient';
+    const pSnap = await db.collection('patients').doc(healthId).get();
+    if (pSnap.exists) {
+      patientName = pSnap.data().name || pSnap.data().fullName || patientName;
+    } else {
+      const pSnap2 = await db.collection('patients').where('patientHealthId', '==', healthId).limit(1).get();
+      if (!pSnap2.empty) {
+        patientName = pSnap2.docs[0].data().name || pSnap2.docs[0].data().fullName || patientName;
+      }
+    }
+
     // Invalidate existing active shares for this doctor + patient to avoid lingering duplicate active shares
     const existingGrantsSnap = await db
       .collection('accessGrants')
@@ -796,7 +852,11 @@ export const sharePatientHistory = async (req, res, next) => {
 
     for (const d of existingGrantsSnap.docs) {
       const data = d.data();
-      if (data.granteeUid === doctorId || data.doctorId === doctorId) {
+      if (
+        targetDocAliases.has(data.granteeUid) ||
+        targetDocAliases.has(data.doctorId) ||
+        (Array.isArray(data.doctorAliases) && data.doctorAliases.some((a) => targetDocAliases.has(a)))
+      ) {
         await d.ref.update({ status: 'superseded', supersededAt: now });
       }
     }
@@ -806,9 +866,13 @@ export const sharePatientHistory = async (req, res, next) => {
       shareId,
       patientHealthId: healthId,
       healthId,
+      patientName,
       grantedByUid: uid,
-      granteeUid: doctorId,
-      doctorId,
+      granteeUid: doctorUid || trimmedDoctorId,
+      doctorId: trimmedDoctorId,
+      doctorDisplayId: trimmedDoctorId,
+      doctorDisplayName,
+      doctorAliases: Array.from(targetDocAliases),
       hours: shareHours,
       status: 'active',
       createdAt: now,
@@ -818,12 +882,28 @@ export const sharePatientHistory = async (req, res, next) => {
 
     await db.collection('accessGrants').doc(shareId).set(grantData);
 
+    // Notify doctor about the newly shared medical history
+    const notifRecipient = doctorUid || (resolvedDocSnap.exists ? resolvedDocSnap.id : null);
+    if (notifRecipient) {
+      try {
+        await notify({
+          uids: [notifRecipient],
+          title: 'Patient Medical History Shared',
+          body: `${patientName} (${healthId}) has shared their medical history with you for ${shareHours} hour(s).`,
+          type: 'PATIENT_RECORD_SHARED',
+          data: { patientHealthId: healthId, shareId }
+        });
+      } catch (err) {
+        console.warn('Doctor share notification notice:', err.message);
+      }
+    }
+
     await recordAuditLog(db, {
       actorUid: uid,
       actorRole: 'patient',
       action: 'SHARE_MEDICAL_HISTORY',
       targetType: 'doctor',
-      targetId: doctorId,
+      targetId: trimmedDoctorId,
       healthId,
       details: { shareHours, expiresAt: expiresAt.toISOString() },
       req
@@ -831,7 +911,7 @@ export const sharePatientHistory = async (req, res, next) => {
 
     res.status(201).json({
       success: true,
-      message: `Medical history shared with doctor for ${shareHours} hour(s).`,
+      message: `Medical history shared with Dr. ${doctorDisplayName} for ${shareHours} hour(s).`,
       data: grantData
     });
   } catch (error) {

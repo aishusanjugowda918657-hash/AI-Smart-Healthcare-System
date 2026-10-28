@@ -6,6 +6,7 @@ import { clock } from '../utils/clock.js';
 import { writeAuditLog } from '../utils/audit.js';
 import { assignBatchDoctorDisplayIds, assignDoctorDisplayId } from '../services/doctorDisplayIdService.js';
 import { parseSlotTimeToDate, getHospitalTodayStr } from '../utils/timezoneDate.js';
+import { resolveDoctorIds } from '../services/queueService.js';
 
 // 60-second in-memory cache for doctor dashboard totals
 export const dashboardSummaryCache = new Map();
@@ -1000,23 +1001,35 @@ export const doctorCheckPatientAccess = async (req, res, next) => {
     const db = assertDbConnected();
     const doctorUid = user.uid;
 
-    let targetDoctorId = user.doctorId;
-    if (!targetDoctorId) {
+    const { docIdList: myAliases } = await resolveDoctorIds(doctorUid, db);
+    const myDoctorSet = new Set([doctorUid, ...myAliases]);
+    if (user.doctorId) myDoctorSet.add(user.doctorId);
+    try {
       const docSnap = await db.collection('doctors').doc(doctorUid).get();
-      targetDoctorId = docSnap.exists ? docSnap.data().doctorId : doctorUid;
-    }
+      if (docSnap.exists) {
+        const d = docSnap.data();
+        if (d.doctorId) myDoctorSet.add(d.doctorId);
+        if (d.displayId) myDoctorSet.add(d.displayId);
+        if (d.doctorUid) myDoctorSet.add(d.doctorUid);
+      }
+    } catch (_) {}
 
     // 1. Check share grant in accessGrants
     const grantSnap = await db.collection('accessGrants')
-      .where('granteeUid', '==', doctorUid)
       .where('patientHealthId', '==', healthId)
       .where('status', '==', 'active')
-      .limit(1)
       .get();
 
-    const hasActiveGrant = !grantSnap.empty && (
-      !grantSnap.docs[0].data().expiryDate || new Date(grantSnap.docs[0].data().expiryDate) > new Date()
-    );
+    const now = new Date();
+    const hasActiveGrant = grantSnap.docs.some((doc) => {
+      const data = doc.data();
+      const matches = (data.granteeUid && myDoctorSet.has(data.granteeUid)) ||
+        (data.doctorId && myDoctorSet.has(data.doctorId)) ||
+        (Array.isArray(data.doctorAliases) && data.doctorAliases.some((a) => myDoctorSet.has(a)));
+      if (!matches) return false;
+      const expDate = data.expiresAt ? new Date(data.expiresAt) : (data.expiryDate ? new Date(data.expiryDate) : null);
+      return !expDate || expDate > now;
+    });
 
     if (hasActiveGrant) {
       return res.status(200).json(formatSuccessResponse({ hasAccess: true, reason: 'active_share_grant' }));
@@ -1034,7 +1047,7 @@ export const doctorCheckPatientAccess = async (req, res, next) => {
 
     const hasTreatingRelationship = apptSnap.docs.some((doc) => {
       const data = doc.data();
-      const isDocMatch = data.doctorId === targetDoctorId || data.doctorId === doctorUid || data.doctorUid === doctorUid;
+      const isDocMatch = myDoctorSet.has(data.doctorId) || myDoctorSet.has(data.doctorUid) || myDoctorSet.has(data.assignedDoctorId);
       return isDocMatch && data.date >= ninetyDaysAgoStr;
     });
 
@@ -1057,6 +1070,109 @@ export const doctorCheckPatientAccess = async (req, res, next) => {
       hasAccess: false,
       message: 'No access. Ask the patient to share their history'
     }));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * GET /api/doctor/patients/shared-with-me
+ * Returns a list of patients who currently have an active, non-expired record share grant with this doctor.
+ */
+export const doctorGetSharedPatients = async (req, res, next) => {
+  try {
+    const user = req.user;
+    const db = assertDbConnected();
+    const doctorUid = user.uid;
+
+    const { docIdList: myAliases } = await resolveDoctorIds(doctorUid, db);
+    const myDoctorSet = new Set([doctorUid, ...myAliases]);
+    if (user.doctorId) myDoctorSet.add(user.doctorId);
+    try {
+      const docSnap = await db.collection('doctors').doc(doctorUid).get();
+      if (docSnap.exists) {
+        const d = docSnap.data();
+        if (d.doctorId) myDoctorSet.add(d.doctorId);
+        if (d.displayId) myDoctorSet.add(d.displayId);
+        if (d.doctorUid) myDoctorSet.add(d.doctorUid);
+      }
+    } catch (_) {}
+
+    // Query active accessGrants
+    const grantSnap = await db.collection('accessGrants')
+      .where('status', '==', 'active')
+      .get();
+
+    const now = new Date();
+    const activeGrants = [];
+    const patientHealthIds = new Set();
+
+    grantSnap.docs.forEach((doc) => {
+      const data = doc.data();
+      const matches = (data.granteeUid && myDoctorSet.has(data.granteeUid)) ||
+        (data.doctorId && myDoctorSet.has(data.doctorId)) ||
+        (Array.isArray(data.doctorAliases) && data.doctorAliases.some((a) => myDoctorSet.has(a)));
+      if (!matches) return;
+
+      const expDate = data.expiresAt ? new Date(data.expiresAt) : (data.expiryDate ? new Date(data.expiryDate) : null);
+      if (expDate && expDate <= now) return;
+
+      activeGrants.push({
+        id: doc.id,
+        patientHealthId: data.patientHealthId,
+        hours: data.hours,
+        createdAt: data.createdAt,
+        expiresAt: data.expiresAt || data.expiryDate,
+        grantedBy: data.grantedBy || data.patientHealthId,
+        patientName: data.patientName || null
+      });
+      if (data.patientHealthId) {
+        patientHealthIds.add(data.patientHealthId);
+      }
+    });
+
+    // Lookup patient profiles
+    const patientsMap = new Map();
+    await Promise.all(
+      Array.from(patientHealthIds).map(async (healthId) => {
+        try {
+          const pDoc = await db.collection('patients').doc(healthId).get();
+          if (pDoc.exists) {
+            patientsMap.set(healthId, pDoc.data());
+          } else {
+            const querySnap = await db.collection('patients')
+              .where('patientHealthId', '==', healthId)
+              .limit(1)
+              .get();
+            if (!querySnap.empty) {
+              patientsMap.set(healthId, querySnap.docs[0].data());
+            }
+          }
+        } catch (_) {}
+      })
+    );
+
+    // Merge shared grants with patient info
+    const result = activeGrants.map((grant) => {
+      const pData = patientsMap.get(grant.patientHealthId) || {};
+      const fullName = grant.patientName || pData.fullName || pData.name || [pData.firstName, pData.lastName].filter(Boolean).join(' ') || grant.patientHealthId;
+      return {
+        grantId: grant.id,
+        patientHealthId: grant.patientHealthId,
+        healthId: grant.patientHealthId,
+        fullName,
+        name: fullName,
+        age: pData.age || calculateAge(pData.dob || pData.dateOfBirth),
+        gender: pData.gender || 'Unknown',
+        bloodGroup: pData.bloodGroup || pData.bloodType || 'N/A',
+        contactNumber: pData.contactNumber || pData.phone || 'N/A',
+        createdAt: grant.createdAt,
+        expiresAt: grant.expiresAt,
+        hours: grant.hours
+      };
+    });
+
+    res.status(200).json(formatSuccessResponse(result));
   } catch (error) {
     next(error);
   }

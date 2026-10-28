@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useLanguage } from '../context/LanguageContext';
 import {
   Search,
@@ -12,21 +12,43 @@ import {
   Clock,
   ShieldAlert,
   Loader2,
-  RefreshCw
+  RefreshCw,
+  Share2,
+  FileText,
+  CheckCircle2
 } from 'lucide-react';
 import API from '../services/api';
 
 export const DoctorPatientsPage = () => {
   const { t } = useLanguage();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  const [activeTab, setActiveTab] = useState('search'); // 'search' | 'my-patients'
+  const tabParam = searchParams.get('tab');
+  const [activeTab, setActiveTab] = useState(tabParam === 'shared' ? 'shared' : (tabParam === 'my-patients' ? 'my-patients' : 'search'));
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [myPatients, setMyPatients] = useState([]);
+  const [sharedPatients, setSharedPatients] = useState([]);
   const [loading, setLoading] = useState(false);
   const [accessError, setAccessError] = useState(null);
   const [hasSearched, setHasSearched] = useState(false);
+
+  const handleTabChange = (tab) => {
+    setActiveTab(tab);
+    setAccessError(null);
+    setSearchParams({ tab });
+  };
+
+  const formatTimeRemaining = (expiresAt) => {
+    if (!expiresAt) return 'Active';
+    const diff = new Date(expiresAt).getTime() - Date.now();
+    if (diff <= 0) return 'Expired';
+    const hours = Math.floor(diff / (1000 * 60 * 60));
+    const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+    if (hours > 0) return `${hours}h ${mins}m remaining`;
+    return `${mins}m remaining`;
+  };
 
   // Fetch My Patients (seen in last 12 months)
   const fetchMyPatients = async () => {
@@ -43,9 +65,31 @@ export const DoctorPatientsPage = () => {
     }
   };
 
+  // Fetch Patients who have shared their history with this doctor
+  const fetchSharedPatients = async () => {
+    try {
+      setLoading(true);
+      const res = await API.get('/doctor/patients/shared-with-me');
+      if (res.data?.success) {
+        setSharedPatients(res.data.data || []);
+      }
+    } catch (err) {
+      console.warn('Shared patients lookup notice:', err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // On mount, also fetch shared patients count so badge is populated
+  useEffect(() => {
+    fetchSharedPatients();
+  }, []);
+
   useEffect(() => {
     if (activeTab === 'my-patients') {
       fetchMyPatients();
+    } else if (activeTab === 'shared') {
+      fetchSharedPatients();
     }
   }, [activeTab]);
 
@@ -111,32 +155,44 @@ export const DoctorPatientsPage = () => {
         </div>
 
         {/* Tab Controls */}
-        <div className="flex bg-slate-100 p-1 rounded-xl">
+        <div className="flex flex-wrap bg-slate-100 p-1 rounded-xl gap-1">
           <button
-            onClick={() => {
-              setActiveTab('search');
-              setAccessError(null);
-            }}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition ${
+            onClick={() => handleTabChange('search')}
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 ${
               activeTab === 'search'
                 ? 'bg-white text-brand-700 shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            {t('searchPatients') || 'Search Patients'}
+            <Search className="w-3.5 h-3.5" />
+            <span>{t('searchPatients') || 'Search Patients'}</span>
           </button>
           <button
-            onClick={() => {
-              setActiveTab('my-patients');
-              setAccessError(null);
-            }}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition ${
+            onClick={() => handleTabChange('my-patients')}
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 ${
               activeTab === 'my-patients'
                 ? 'bg-white text-brand-700 shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            {t('myPatients') || 'My Patients (12 Months)'}
+            <Users className="w-3.5 h-3.5" />
+            <span>{t('myPatients') || 'My Patients (12 Months)'}</span>
+          </button>
+          <button
+            onClick={() => handleTabChange('shared')}
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 ${
+              activeTab === 'shared'
+                ? 'bg-white text-teal-700 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Share2 className="w-3.5 h-3.5 text-teal-600" />
+            <span>Shared with Me</span>
+            {sharedPatients.length > 0 && (
+              <span className="ml-1.5 px-2 py-0.5 bg-teal-100 text-teal-800 rounded-full text-[10px] font-bold">
+                {sharedPatients.length}
+              </span>
+            )}
           </button>
         </div>
       </div>
@@ -326,6 +382,108 @@ export const DoctorPatientsPage = () => {
                   </button>
                 </div>
               ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* SHARED WITH ME TAB */}
+      {activeTab === 'shared' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between text-xs text-slate-500">
+            <span>Patients who have actively shared time-bound access to their medical records with you</span>
+            <button
+              onClick={fetchSharedPatients}
+              className="p-2 hover:bg-slate-100 rounded-lg text-slate-600 transition flex items-center space-x-1"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Refresh</span>
+            </button>
+          </div>
+
+          {loading && (
+            <div className="py-12 text-center text-slate-400 text-xs flex items-center justify-center space-x-2">
+              <Loader2 className="w-4 h-4 animate-spin text-teal-600" />
+              <span>Checking shared medical records...</span>
+            </div>
+          )}
+
+          {!loading && sharedPatients.length === 0 && (
+            <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center space-y-3">
+              <div className="w-12 h-12 bg-teal-50 text-teal-600 rounded-2xl flex items-center justify-center mx-auto">
+                <Share2 className="w-6 h-6" />
+              </div>
+              <h3 className="font-bold text-slate-800 text-sm">No Active Patient Shares</h3>
+              <p className="text-xs text-slate-500 max-w-md mx-auto">
+                When a patient shares their medical history using your Doctor ID (e.g. <strong className="text-slate-700">DOC-GEN-ASK-001</strong>), their record will immediately appear here with direct one-click access.
+              </p>
+            </div>
+          )}
+
+          {!loading && sharedPatients.length > 0 && (
+            <div className="space-y-3">
+              <div className="p-3.5 bg-teal-50 border border-teal-200 rounded-xl text-xs text-teal-800 flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <CheckCircle2 className="w-4 h-4 text-teal-600 flex-shrink-0" />
+                  <span>
+                    You have <strong>{sharedPatients.length} active shared patient record{sharedPatients.length > 1 ? 's' : ''}</strong>. You can view their full medical history and timeline.
+                  </span>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-slate-200 divide-y divide-slate-100 overflow-hidden shadow-xs">
+                {sharedPatients.map((p) => (
+                  <div
+                    key={p.grantId || p.patientHealthId}
+                    className="p-4 hover:bg-slate-50 transition flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3"
+                  >
+                    <div className="space-y-1.5">
+                      <div className="flex items-center space-x-2">
+                        <span className="font-bold text-slate-800 text-sm">{p.fullName || p.name}</span>
+                        {p.gender && p.gender !== 'Unknown' && (
+                          <span className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded text-[11px] font-semibold capitalize">
+                            {p.gender}
+                          </span>
+                        )}
+                        {p.age && (
+                          <span className="px-2 py-0.5 bg-brand-50 text-brand-700 rounded text-[11px] font-bold">
+                            {p.age} yrs
+                          </span>
+                        )}
+                        {p.bloodGroup && p.bloodGroup !== 'N/A' && (
+                          <span className="px-2 py-0.5 bg-rose-50 text-rose-700 rounded text-[11px] font-bold">
+                            {p.bloodGroup}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                        <span>
+                          Health ID: <strong className="font-mono text-slate-700">{p.patientHealthId}</strong>
+                        </span>
+                        <span>•</span>
+                        <span className="flex items-center space-x-1 text-teal-700 font-medium">
+                          <Clock className="w-3.5 h-3.5" />
+                          <span>{formatTimeRemaining(p.expiresAt)}</span>
+                          {p.expiresAt && (
+                            <span className="text-slate-400 text-[11px]">
+                              (Expires {new Date(p.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })})
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => handleOpenPatient(p)}
+                      className="px-4 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition flex items-center space-x-1.5 shadow-xs"
+                    >
+                      <FileText className="w-3.5 h-3.5" />
+                      <span>View Medical History</span>
+                      <ChevronRight className="w-3.5 h-3.5 ml-1" />
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>
