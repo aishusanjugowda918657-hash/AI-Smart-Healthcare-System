@@ -313,6 +313,44 @@ export const PatientHistoryTimelinePage = ({ defaultHealthId, embedded = false }
     }
   };
 
+  // Who Viewed My Records date formatter
+  const formatAuditDate = (raw) => {
+    if (!raw) return 'Recent';
+    if (typeof raw === 'object') {
+      if (typeof raw._seconds === 'number') {
+        return new Date(raw._seconds * 1000).toLocaleString([], {
+          year: 'numeric',
+          month: 'numeric',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit'
+        });
+      }
+      if (typeof raw.seconds === 'number') {
+        return new Date(raw.seconds * 1000).toLocaleString([], {
+          year: 'numeric',
+          month: 'numeric',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit'
+        });
+      }
+    }
+    const d = new Date(raw);
+    return !isNaN(d.getTime())
+      ? d.toLocaleString([], {
+          year: 'numeric',
+          month: 'numeric',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit'
+        })
+      : 'Recent';
+  };
+
   // Who Viewed My Records
   const handleOpenAccessLog = async () => {
     setShowAccessLogModal(true);
@@ -1354,21 +1392,35 @@ export const PatientHistoryTimelinePage = ({ defaultHealthId, embedded = false }
             {loadingLogs ? (
               <div className="py-8 text-center text-xs text-slate-400">Loading access logs...</div>
             ) : accessLogs.length > 0 ? (
-              <div className="space-y-2 max-h-72 overflow-y-auto">
+              <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
                 {accessLogs.map((log, i) => (
-                  <div key={i} className="p-3 bg-slate-50 rounded-xl border text-xs space-y-1">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-slate-800">{log.action || 'VIEW'}</span>
-                      <span className="text-[10px] text-slate-400">
-                        {log.at || log.timestamp ? new Date(log.at || log.timestamp).toLocaleString() : 'Recent'}
+                  <div key={log.id || i} className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 text-xs space-y-1.5 hover:bg-slate-100/60 transition">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-slate-800 text-xs">
+                        {log.actionLabel || log.action || 'VIEW'}
+                      </span>
+                      <span className="text-[10px] text-slate-500 font-medium whitespace-nowrap">
+                        {formatAuditDate(log.timestamp || log.at)}
                       </span>
                     </div>
-                    <div className="text-[11px] text-slate-500">
-                      Role: <strong className="text-slate-700">{log.actorRole || log.userRole}</strong> | User: {log.actorUid || log.userId}
+                    <div className="text-[11px] text-slate-600 flex flex-wrap items-center gap-1.5">
+                      <span className="px-2 py-0.5 bg-slate-200/80 text-slate-700 rounded text-[10px] font-bold capitalize">
+                        {log.actorRole || log.userRole || 'Staff'}
+                      </span>
+                      <span>•</span>
+                      <span className="font-semibold text-slate-800">
+                        {log.actorDisplayName || log.actorName || log.actorUid || log.userId}
+                      </span>
                     </div>
+                    {log.details && (log.details.shareHours || log.details.itemsCount !== undefined) && (
+                      <div className="text-[10px] text-slate-500 pl-0.5">
+                        {log.details.shareHours && `Access duration: ${log.details.shareHours} hour(s)`}
+                        {log.details.itemsCount !== undefined && `Reviewed ${log.details.itemsCount} clinical record item(s)`}
+                      </div>
+                    )}
                     {log.breakGlassReason && (
-                      <div className="text-[10px] text-rose-700 font-semibold bg-rose-50 p-1 rounded">
-                        Break-Glass Reason: {log.breakGlassReason}
+                      <div className="text-[10px] text-rose-700 font-semibold bg-rose-50 p-1.5 rounded-lg border border-rose-200">
+                        Break-Glass Justification: {log.breakGlassReason}
                       </div>
                     )}
                   </div>

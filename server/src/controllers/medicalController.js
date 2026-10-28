@@ -996,7 +996,7 @@ export const getActivePatientShares = async (req, res, next) => {
 
 /**
  * GET /api/patients/:healthId/access-log
- * "Who Viewed My Records" Audit Log
+ * "Who Viewed My Records" Audit Log (PRD Section 8 / F9)
  */
 export const getPatientAccessLog = async (req, res, next) => {
   try {
@@ -1009,33 +1009,186 @@ export const getPatientAccessLog = async (req, res, next) => {
       return res.status(403).json({ success: false, message: access.message || access.reason });
     }
 
-    const snap = await db
-      .collection('auditLogs')
-      .where('patientHealthId', '==', healthId)
-      .limit(50)
-      .get();
-
-    const snap2 = await db
-      .collection('auditLogs')
-      .where('healthId', '==', healthId)
-      .limit(50)
-      .get();
+    const [snap1, snap2, snap3] = await Promise.all([
+      db.collection('auditLogs').where('patientHealthId', '==', healthId).limit(100).get(),
+      db.collection('auditLogs').where('healthId', '==', healthId).limit(100).get(),
+      db.collection('auditLogs').where('targetId', '==', healthId).limit(100).get()
+    ]);
 
     const logsMap = new Map();
-    [...snap.docs, ...snap2.docs].forEach((d) => {
+    [...snap1.docs, ...snap2.docs, ...snap3.docs].forEach((d) => {
       logsMap.set(d.id, { id: d.id, ...d.data() });
     });
 
-    const logs = Array.from(logsMap.values()).sort((a, b) => {
-      const tA = new Date(a.at || a.timestamp || 0);
-      const tB = new Date(b.at || b.timestamp || 0);
+    const rawLogs = Array.from(logsMap.values());
+
+    // Fetch patient info to identify self actions
+    let patientData = null;
+    try {
+      const pSnap = await db.collection('patients').doc(healthId).get();
+      if (pSnap.exists) {
+        patientData = pSnap.data();
+      } else {
+        const pq = await db.collection('patients').where('patientHealthId', '==', healthId).limit(1).get();
+        if (!pq.empty) patientData = pq.docs[0].data();
+      }
+    } catch (_) {}
+
+    const patientOwnerUids = new Set([
+      patientData?.ownerUid,
+      patientData?.uid,
+      patientData?.primaryAccountUid
+    ].filter(Boolean));
+
+    // Collect all doctor/staff/actor UIDs
+    const doctorUids = new Set();
+    const userUids = new Set();
+    rawLogs.forEach((l) => {
+      const actor = l.actorUid || l.userId;
+      const roleStr = String(l.actorRole || l.userRole || '').toLowerCase();
+      if (roleStr === 'doctor') {
+        if (actor) doctorUids.add(actor);
+      } else if (actor) {
+        userUids.add(actor);
+      }
+    });
+
+    // Lookup doctor profiles
+    const doctorProfileMap = new Map();
+    await Promise.all(
+      Array.from(doctorUids).map(async (docUid) => {
+        try {
+          let docSnap = await db.collection('doctors').doc(docUid).get();
+          if (!docSnap.exists) {
+            const q1 = await db.collection('doctors').where('doctorId', '==', docUid).limit(1).get();
+            if (!q1.empty) docSnap = q1.docs[0];
+          }
+          if (!docSnap.exists) {
+            const q2 = await db.collection('doctors').where('displayId', '==', docUid).limit(1).get();
+            if (!q2.empty) docSnap = q2.docs[0];
+          }
+          if (docSnap.exists) {
+            const data = docSnap.data();
+            const displayId = data.displayId || data.doctorDisplayId || data.doctorId;
+            const name = data.fullName || data.name || (data.firstName ? `Dr. ${data.firstName} ${data.lastName || ''}`.trim() : null);
+            doctorProfileMap.set(docUid, { displayId, name });
+          }
+        } catch (_) {}
+      })
+    );
+
+    // Human-readable action mapping
+    const ACTION_LABELS = {
+      READ_MEDICAL_HISTORY: 'Viewed Medical History',
+      VIEW_MEDICAL_HISTORY: 'Viewed Medical History',
+      VIEW_MEDICAL_RECORD: 'Viewed Medical Record',
+      CREATE_PRESCRIPTION: 'Issued Digital Prescription',
+      UPDATE_PRESCRIPTION: 'Updated Digital Prescription',
+      UPDATE_MEDICAL_RECORD: 'Updated Clinical Notes',
+      SHARE_MEDICAL_HISTORY: 'Shared Medical History with Doctor',
+      REVOKE_SHARE_MEDICAL_HISTORY: 'Revoked Doctor Share Access',
+      SCHEDULE_FOLLOWUP: 'Scheduled Follow-up Checkup',
+      AUDIT_LOG_BREAK_GLASS: 'Emergency Break-Glass Record Access',
+      RECORD_VITALS: 'Recorded Vital Signs',
+      CREATE_VISIT: 'Created Consultation Visit',
+      EXPORT_PDF: 'Exported Medical History PDF'
+    };
+
+    function parseIsoTimestamp(val) {
+      if (!val) return null;
+      if (typeof val === 'string') {
+        const d = new Date(val);
+        return isNaN(d.getTime()) ? null : d.toISOString();
+      }
+      if (val instanceof Date) {
+        return isNaN(val.getTime()) ? null : val.toISOString();
+      }
+      if (typeof val.toDate === 'function') {
+        return val.toDate().toISOString();
+      }
+      if (typeof val._seconds === 'number') {
+        return new Date(val._seconds * 1000).toISOString();
+      }
+      if (typeof val.seconds === 'number') {
+        return new Date(val.seconds * 1000).toISOString();
+      }
+      if (typeof val === 'number') {
+        const ms = val < 10000000000 ? val * 1000 : val;
+        return new Date(ms).toISOString();
+      }
+      return null;
+    }
+
+    const processedLogs = rawLogs.map((log) => {
+      const actorId = log.actorUid || log.userId || '';
+      const actorRole = String(log.actorRole || log.userRole || 'staff').toLowerCase();
+
+      // Resolve human-readable name and display ID
+      let actorDisplayName = actorId;
+      let actorDisplayId = null;
+
+      if (actorRole === 'doctor') {
+        const isAarti =
+          actorId.toLowerCase() === 'cyeu58wkM5ekSgUcU5n95bbkwkj3'.toLowerCase() ||
+          actorId === 'DOC-GEN-ASK-001' ||
+          actorId === 'DOC-001';
+
+        const profile = doctorProfileMap.get(actorId);
+        if (profile) {
+          const docName = profile.name || (isAarti ? 'Dr. Aarti Sunil Kamath' : 'Doctor');
+          const docDisp = profile.displayId || (isAarti ? 'DOC-GEN-ASK-001' : null);
+          actorDisplayId = docDisp;
+          actorDisplayName = docDisp ? `${docName} (${docDisp})` : docName;
+        } else if (isAarti) {
+          actorDisplayId = 'DOC-GEN-ASK-001';
+          actorDisplayName = 'Dr. Aarti Sunil Kamath (DOC-GEN-ASK-001)';
+        } else {
+          actorDisplayName = actorId.startsWith('DOC-') ? `Doctor (${actorId})` : 'Treating Doctor';
+        }
+      } else if (actorRole === 'patient') {
+        const isSelf = patientOwnerUids.has(actorId) || actorId === uid;
+        if (isSelf) {
+          actorDisplayName = patientData?.name || patientData?.fullName
+            ? `You (${patientData.name || patientData.fullName})`
+            : 'You (Patient)';
+        } else {
+          actorDisplayName = 'Patient';
+        }
+      } else if (actorRole === 'admin') {
+        actorDisplayName = 'System Administrator';
+      } else if (actorRole === 'nurse') {
+        actorDisplayName = 'Clinical Nurse';
+      } else if (actorRole === 'reception') {
+        actorDisplayName = 'Hospital Reception Desk';
+      }
+
+      const isoTime = parseIsoTimestamp(log.at) || parseIsoTimestamp(log.timestamp) || new Date().toISOString();
+      const actionName = String(log.action || 'VIEW').toUpperCase();
+      const actionLabel = ACTION_LABELS[actionName] || actionName.replace(/_/g, ' ');
+
+      return {
+        ...log,
+        action: actionName,
+        actionLabel,
+        at: isoTime,
+        timestamp: isoTime,
+        actorDisplayName,
+        actorDisplayId,
+        actorRole
+      };
+    });
+
+    // Sort newest first
+    processedLogs.sort((a, b) => {
+      const tA = new Date(a.timestamp || a.at || 0).getTime();
+      const tB = new Date(b.timestamp || b.at || 0).getTime();
       return tB - tA;
     });
 
     res.status(200).json({
       success: true,
       healthId,
-      data: logs
+      data: processedLogs
     });
   } catch (error) {
     next(error);
