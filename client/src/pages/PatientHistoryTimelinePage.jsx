@@ -119,6 +119,16 @@ export const PatientHistoryTimelinePage = ({ defaultHealthId, embedded = false }
   const [conditionName, setConditionName] = useState('');
   const [conditionSince, setConditionSince] = useState('');
 
+  // Vitals recording modal
+  const [showVitalsModal, setShowVitalsModal] = useState(false);
+  const [vitalsBp, setVitalsBp] = useState('');
+  const [vitalsSugar, setVitalsSugar] = useState('');
+  const [vitalsWeight, setVitalsWeight] = useState('');
+  const [vitalsPulse, setVitalsPulse] = useState('');
+  const [vitalsTemp, setVitalsTemp] = useState('');
+  const [vitalsSpo2, setVitalsSpo2] = useState('');
+  const [submittingVitals, setSubmittingVitals] = useState(false);
+
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploadFile, setUploadFile] = useState(null);
   const [uploadStatus, setUploadStatus] = useState(null);
@@ -351,6 +361,39 @@ export const PatientHistoryTimelinePage = ({ defaultHealthId, embedded = false }
       fetchProfileAndFamily();
     } catch (err) {
       alert('Error adding condition: ' + (err.response?.data?.message || err.message));
+    }
+  };
+
+  // Record Vitals
+  const handleRecordVitals = async (e) => {
+    e.preventDefault();
+    if (!vitalsBp && !vitalsSugar && !vitalsWeight && !vitalsPulse && !vitalsTemp && !vitalsSpo2) {
+      alert('Please enter at least one vital measurement.');
+      return;
+    }
+    setSubmittingVitals(true);
+    try {
+      await API.post(`/patients/${selectedHealthId}/vitals`, {
+        bp: vitalsBp.trim(),
+        sugar: vitalsSugar.trim(),
+        weightKg: vitalsWeight.trim(),
+        pulse: vitalsPulse.trim(),
+        temp: vitalsTemp.trim(),
+        spo2: vitalsSpo2.trim()
+      });
+      setShowVitalsModal(false);
+      setVitalsBp('');
+      setVitalsSugar('');
+      setVitalsWeight('');
+      setVitalsPulse('');
+      setVitalsTemp('');
+      setVitalsSpo2('');
+      await fetchVitals();
+      await fetchTimeline();
+    } catch (err) {
+      alert('Error recording vitals: ' + (err.response?.data?.message || err.message));
+    } finally {
+      setSubmittingVitals(false);
     }
   };
 
@@ -649,9 +692,9 @@ export const PatientHistoryTimelinePage = ({ defaultHealthId, embedded = false }
         </div>
       </div>
 
-      {/* 3. LONGITUDINAL VITALS TRENDS (SVG / Tailwind - No External Chart Library) */}
+      {/* 3. LONGITUDINAL VITALS TRENDS (Tailwind SVG-free bar tracks with explicit heights) */}
       <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-4">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h3 className="text-base font-bold text-slate-800 flex items-center space-x-2">
               <Heart className="w-4 h-4 text-rose-500" />
@@ -659,33 +702,62 @@ export const PatientHistoryTimelinePage = ({ defaultHealthId, embedded = false }
             </h3>
             <p className="text-xs text-slate-500">Track longitudinal progression of blood pressure, blood glucose & weight</p>
           </div>
-          <span className="text-xs text-slate-400 font-mono">{vitalsTrend.length} data point(s)</span>
+          <div className="flex items-center space-x-2">
+            <button
+              type="button"
+              onClick={() => setShowVitalsModal(true)}
+              className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold rounded-xl border border-rose-200 transition flex items-center space-x-1"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Record Vitals</span>
+            </button>
+            <span className="text-xs text-slate-400 font-mono bg-slate-50 px-2 py-1 rounded-lg border border-slate-100">
+              {vitalsTrend.length} data point(s)
+            </span>
+          </div>
         </div>
 
         {vitalsTrend.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {/* Blood Pressure Bar Trend */}
-            <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2">
-              <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Blood Pressure (BP)</span>
-              <div className="h-28 flex items-end justify-between gap-1 pt-4">
+            <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Blood Pressure (BP)</span>
+                <span className="text-[11px] font-mono font-bold text-slate-700 bg-white px-2 py-0.5 rounded border border-slate-200 shadow-2xs">
+                  {vitalsTrend[vitalsTrend.length - 1]?.bp || '—'} mmHg
+                </span>
+              </div>
+              <div className="h-32 flex items-end justify-between gap-2 pt-2 border-b border-slate-200 pb-1">
                 {vitalsTrend.map((v, i) => {
-                  const sys = parseInt((v.bp || '').split('/')[0], 10) || 120;
-                  const heightPct = Math.min(Math.max(((sys - 80) / 100) * 100, 20), 100);
+                  const hasBp = Boolean(v.bp && String(v.bp).trim() && v.bp !== 'N/A');
+                  const sys = hasBp ? parseInt(String(v.bp).split('/')[0], 10) || 120 : 0;
+                  const heightPct = hasBp ? Math.min(Math.max(((sys - 70) / 110) * 100, 25), 100) : 0;
                   const isHigh = sys >= 140;
                   return (
-                    <div key={i} className="flex-1 flex flex-col items-center group relative">
-                      <div
-                        style={{ height: `${heightPct}%` }}
-                        className={`w-full max-w-[14px] rounded-t-sm transition-all ${
-                          isHigh ? 'bg-rose-500' : 'bg-brand-500'
-                        }`}
-                      ></div>
-                      <span className="text-[9px] text-slate-400 mt-1 truncate max-w-[28px]">
+                    <div key={i} className="flex-1 h-full flex flex-col justify-end items-center group relative min-w-[20px]">
+                      {hasBp && (
+                        <span className="text-[10px] font-bold text-slate-600 font-mono mb-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          {sys}
+                        </span>
+                      )}
+                      <div className="w-full h-20 flex items-end justify-center">
+                        {hasBp ? (
+                          <div
+                            style={{ height: `${heightPct}%` }}
+                            className={`w-full max-w-[16px] min-h-[6px] rounded-t-md transition-all shadow-xs ${
+                              isHigh ? 'bg-rose-500 hover:bg-rose-600' : 'bg-sky-500 hover:bg-sky-600'
+                            }`}
+                          />
+                        ) : (
+                          <div className="w-full max-w-[16px] h-1.5 bg-slate-200 rounded-full" title="Not measured" />
+                        )}
+                      </div>
+                      <span className="text-[9px] text-slate-400 mt-1.5 font-mono truncate max-w-[32px]">
                         {(v.date || '').slice(5)}
                       </span>
-                      {/* Tooltip */}
-                      <div className="absolute bottom-full mb-1 hidden group-hover:block bg-slate-800 text-white text-[10px] px-1.5 py-0.5 rounded shadow z-10 whitespace-nowrap">
-                        {v.bp || 'N/A'} ({v.date})
+                      <div className="absolute bottom-full mb-1.5 hidden group-hover:block bg-slate-900 text-white text-[10px] px-2 py-1 rounded-lg shadow-lg z-20 whitespace-nowrap pointer-events-none">
+                        <span className="font-bold">{hasBp ? `${v.bp} mmHg` : 'Not recorded'}</span>
+                        <span className="text-slate-300 block text-[9px]">{v.date}</span>
                       </div>
                     </div>
                   );
@@ -694,26 +766,45 @@ export const PatientHistoryTimelinePage = ({ defaultHealthId, embedded = false }
             </div>
 
             {/* Blood Sugar (BG) Trend */}
-            <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2">
-              <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Blood Sugar (mg/dL)</span>
-              <div className="h-28 flex items-end justify-between gap-1 pt-4">
+            <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Blood Sugar (mg/dL)</span>
+                <span className="text-[11px] font-mono font-bold text-slate-700 bg-white px-2 py-0.5 rounded border border-slate-200 shadow-2xs">
+                  {vitalsTrend[vitalsTrend.length - 1]?.sugar || vitalsTrend[vitalsTrend.length - 1]?.bg || '—'} mg/dL
+                </span>
+              </div>
+              <div className="h-32 flex items-end justify-between gap-2 pt-2 border-b border-slate-200 pb-1">
                 {vitalsTrend.map((v, i) => {
-                  const bgVal = parseFloat(v.sugar || v.bg) || 100;
-                  const heightPct = Math.min(Math.max(((bgVal - 60) / 160) * 100, 20), 100);
+                  const rawSugar = v.sugar || v.bg;
+                  const hasSugar = Boolean(rawSugar && String(rawSugar).trim() && rawSugar !== 'N/A');
+                  const bgVal = hasSugar ? parseFloat(String(rawSugar).replace(/[^\d.]/g, '')) || 100 : 0;
+                  const heightPct = hasSugar ? Math.min(Math.max(((bgVal - 60) / 160) * 100, 25), 100) : 0;
                   const isHigh = bgVal >= 140;
                   return (
-                    <div key={i} className="flex-1 flex flex-col items-center group relative">
-                      <div
-                        style={{ height: `${heightPct}%` }}
-                        className={`w-full max-w-[14px] rounded-t-sm transition-all ${
-                          isHigh ? 'bg-amber-500' : 'bg-emerald-500'
-                        }`}
-                      ></div>
-                      <span className="text-[9px] text-slate-400 mt-1 truncate max-w-[28px]">
+                    <div key={i} className="flex-1 h-full flex flex-col justify-end items-center group relative min-w-[20px]">
+                      {hasSugar && (
+                        <span className="text-[10px] font-bold text-slate-600 font-mono mb-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          {bgVal}
+                        </span>
+                      )}
+                      <div className="w-full h-20 flex items-end justify-center">
+                        {hasSugar ? (
+                          <div
+                            style={{ height: `${heightPct}%` }}
+                            className={`w-full max-w-[16px] min-h-[6px] rounded-t-md transition-all shadow-xs ${
+                              isHigh ? 'bg-amber-500 hover:bg-amber-600' : 'bg-emerald-500 hover:bg-emerald-600'
+                            }`}
+                          />
+                        ) : (
+                          <div className="w-full max-w-[16px] h-1.5 bg-slate-200 rounded-full" title="Not measured" />
+                        )}
+                      </div>
+                      <span className="text-[9px] text-slate-400 mt-1.5 font-mono truncate max-w-[32px]">
                         {(v.date || '').slice(5)}
                       </span>
-                      <div className="absolute bottom-full mb-1 hidden group-hover:block bg-slate-800 text-white text-[10px] px-1.5 py-0.5 rounded shadow z-10 whitespace-nowrap">
-                        {v.sugar || 'N/A'} mg/dL ({v.date})
+                      <div className="absolute bottom-full mb-1.5 hidden group-hover:block bg-slate-900 text-white text-[10px] px-2 py-1 rounded-lg shadow-lg z-20 whitespace-nowrap pointer-events-none">
+                        <span className="font-bold">{hasSugar ? `${bgVal} mg/dL` : 'Not recorded'}</span>
+                        <span className="text-slate-300 block text-[9px]">{v.date}</span>
                       </div>
                     </div>
                   );
@@ -722,23 +813,42 @@ export const PatientHistoryTimelinePage = ({ defaultHealthId, embedded = false }
             </div>
 
             {/* Weight (kg) Trend */}
-            <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2">
-              <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Weight (kg)</span>
-              <div className="h-28 flex items-end justify-between gap-1 pt-4">
+            <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Weight (kg)</span>
+                <span className="text-[11px] font-mono font-bold text-slate-700 bg-white px-2 py-0.5 rounded border border-slate-200 shadow-2xs">
+                  {vitalsTrend[vitalsTrend.length - 1]?.weightKg || vitalsTrend[vitalsTrend.length - 1]?.weight || '—'} kg
+                </span>
+              </div>
+              <div className="h-32 flex items-end justify-between gap-2 pt-2 border-b border-slate-200 pb-1">
                 {vitalsTrend.map((v, i) => {
-                  const wt = parseFloat(v.weightKg || v.weight) || 70;
-                  const heightPct = Math.min(Math.max(((wt - 40) / 80) * 100, 20), 100);
+                  const rawWt = v.weightKg || v.weight;
+                  const hasWt = Boolean(rawWt && String(rawWt).trim() && rawWt !== 'N/A');
+                  const wt = hasWt ? parseFloat(String(rawWt).replace(/[^\d.]/g, '')) || 70 : 0;
+                  const heightPct = hasWt ? Math.min(Math.max(((wt - 30) / 90) * 100, 25), 100) : 0;
                   return (
-                    <div key={i} className="flex-1 flex flex-col items-center group relative">
-                      <div
-                        style={{ height: `${heightPct}%` }}
-                        className="w-full max-w-[14px] bg-indigo-500 rounded-t-sm transition-all"
-                      ></div>
-                      <span className="text-[9px] text-slate-400 mt-1 truncate max-w-[28px]">
+                    <div key={i} className="flex-1 h-full flex flex-col justify-end items-center group relative min-w-[20px]">
+                      {hasWt && (
+                        <span className="text-[10px] font-bold text-slate-600 font-mono mb-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          {wt}
+                        </span>
+                      )}
+                      <div className="w-full h-20 flex items-end justify-center">
+                        {hasWt ? (
+                          <div
+                            style={{ height: `${heightPct}%` }}
+                            className="w-full max-w-[16px] min-h-[6px] bg-indigo-500 hover:bg-indigo-600 rounded-t-md transition-all shadow-xs"
+                          />
+                        ) : (
+                          <div className="w-full max-w-[16px] h-1.5 bg-slate-200 rounded-full" title="Not measured" />
+                        )}
+                      </div>
+                      <span className="text-[9px] text-slate-400 mt-1.5 font-mono truncate max-w-[32px]">
                         {(v.date || '').slice(5)}
                       </span>
-                      <div className="absolute bottom-full mb-1 hidden group-hover:block bg-slate-800 text-white text-[10px] px-1.5 py-0.5 rounded shadow z-10 whitespace-nowrap">
-                        {v.weightKg || 'N/A'} kg ({v.date})
+                      <div className="absolute bottom-full mb-1.5 hidden group-hover:block bg-slate-900 text-white text-[10px] px-2 py-1 rounded-lg shadow-lg z-20 whitespace-nowrap pointer-events-none">
+                        <span className="font-bold">{hasWt ? `${wt} kg` : 'Not recorded'}</span>
+                        <span className="text-slate-300 block text-[9px]">{v.date}</span>
                       </div>
                     </div>
                   );
@@ -747,8 +857,24 @@ export const PatientHistoryTimelinePage = ({ defaultHealthId, embedded = false }
             </div>
           </div>
         ) : (
-          <div className="text-center py-6 bg-slate-50 rounded-2xl text-xs text-slate-400">
-            No vitals recorded yet. Recorded vitals from consultations will automatically populate here.
+          <div className="text-center py-8 bg-slate-50/80 rounded-2xl border border-dashed border-slate-200 space-y-3">
+            <div className="p-3 bg-white w-12 h-12 rounded-2xl shadow-2xs mx-auto flex items-center justify-center text-slate-400">
+              <Heart className="w-6 h-6 text-rose-400" />
+            </div>
+            <div>
+              <p className="text-xs font-bold text-slate-700">No Vitals Recorded Yet</p>
+              <p className="text-[11px] text-slate-400 max-w-sm mx-auto mt-0.5">
+                Clinical readings (Blood Pressure, Blood Glucose, Weight) taken during doctor consultations or logged directly will appear here.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowVitalsModal(true)}
+              className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-bold text-xs rounded-xl shadow-2xs transition inline-flex items-center space-x-1.5"
+            >
+              <Plus className="w-3.5 h-3.5 text-rose-500" />
+              <span>Record First Reading</span>
+            </button>
           </div>
         )}
       </div>
@@ -1349,6 +1475,119 @@ export const PatientHistoryTimelinePage = ({ defaultHealthId, embedded = false }
                 className="px-4 py-2 bg-brand-600 text-white font-bold text-xs rounded-xl"
               >
                 Save
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Record Vitals Modal */}
+      {showVitalsModal && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <form onSubmit={handleRecordVitals} className="bg-white rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <h3 className="font-bold text-slate-800 text-sm flex items-center space-x-2">
+                <Heart className="w-4 h-4 text-rose-500" />
+                <span>Record Clinical Vitals</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowVitalsModal(false)}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Blood Pressure</label>
+                <input
+                  type="text"
+                  value={vitalsBp}
+                  onChange={(e) => setVitalsBp(e.target.value)}
+                  placeholder="e.g. 120/80"
+                  className="w-full p-2.5 bg-slate-50 border rounded-xl text-xs font-mono outline-none focus:border-rose-500"
+                />
+                <span className="text-[10px] text-slate-400">mmHg</span>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Blood Glucose</label>
+                <input
+                  type="text"
+                  value={vitalsSugar}
+                  onChange={(e) => setVitalsSugar(e.target.value)}
+                  placeholder="e.g. 100"
+                  className="w-full p-2.5 bg-slate-50 border rounded-xl text-xs font-mono outline-none focus:border-rose-500"
+                />
+                <span className="text-[10px] text-slate-400">mg/dL</span>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Weight</label>
+                <input
+                  type="text"
+                  value={vitalsWeight}
+                  onChange={(e) => setVitalsWeight(e.target.value)}
+                  placeholder="e.g. 70"
+                  className="w-full p-2.5 bg-slate-50 border rounded-xl text-xs font-mono outline-none focus:border-rose-500"
+                />
+                <span className="text-[10px] text-slate-400">kg</span>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Pulse / Heart Rate</label>
+                <input
+                  type="text"
+                  value={vitalsPulse}
+                  onChange={(e) => setVitalsPulse(e.target.value)}
+                  placeholder="e.g. 72"
+                  className="w-full p-2.5 bg-slate-50 border rounded-xl text-xs font-mono outline-none focus:border-rose-500"
+                />
+                <span className="text-[10px] text-slate-400">bpm</span>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Temperature</label>
+                <input
+                  type="text"
+                  value={vitalsTemp}
+                  onChange={(e) => setVitalsTemp(e.target.value)}
+                  placeholder="e.g. 98.6"
+                  className="w-full p-2.5 bg-slate-50 border rounded-xl text-xs font-mono outline-none focus:border-rose-500"
+                />
+                <span className="text-[10px] text-slate-400">°F</span>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Oxygen (SpO2)</label>
+                <input
+                  type="text"
+                  value={vitalsSpo2}
+                  onChange={(e) => setVitalsSpo2(e.target.value)}
+                  placeholder="e.g. 98"
+                  className="w-full p-2.5 bg-slate-50 border rounded-xl text-xs font-mono outline-none focus:border-rose-500"
+                />
+                <span className="text-[10px] text-slate-400">%</span>
+              </div>
+            </div>
+
+            <div className="flex justify-end space-x-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowVitalsModal(false)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={submittingVitals}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-xs transition inline-flex items-center space-x-1.5"
+              >
+                {submittingVitals ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Heart className="w-3.5 h-3.5" />}
+                <span>Save Vitals</span>
               </button>
             </div>
           </form>

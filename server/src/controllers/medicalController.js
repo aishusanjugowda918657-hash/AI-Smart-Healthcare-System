@@ -614,17 +614,41 @@ export const getPatientVitalsTrend = async (req, res, next) => {
     medRecsSnap.docs.forEach((d) => { if (!map.has(d.id)) map.set(d.id, d.data()); });
 
     let vitalsList = Array.from(map.values())
-      .filter((r) => r.vitals && Object.keys(r.vitals).length > 0)
-      .map((r) => ({
-        date: r.date || (r.createdAt ? new Date(r.createdAt).toISOString().split('T')[0] : 'Recent'),
-        bp: r.vitals.bp || '',
-        pulse: r.vitals.pulse || r.vitals.hr || '',
-        spo2: r.vitals.spo2 || r.vitals.spO2 || '',
-        temp: r.vitals.temp || '',
-        sugar: r.vitals.sugar || r.vitals.bg || '',
-        weightKg: r.vitals.weightKg || r.vitals.weight || '',
-        vitals: r.vitals
-      }))
+      .filter((r) => {
+        if (!r.vitals || typeof r.vitals !== 'object') return false;
+        // Verify that at least one meaningful, non-empty measurement is present
+        return Object.values(r.vitals).some((val) => {
+          if (val === null || val === undefined) return false;
+          const s = String(val).trim();
+          return s !== '' && s !== 'N/A' && s !== 'null' && s !== 'undefined';
+        });
+      })
+      .map((r) => {
+        const bp = r.vitals.bp || r.vitals.bloodPressure || '';
+        const pulse = r.vitals.pulse || r.vitals.hr || r.vitals.heartRate || '';
+        const spo2 = r.vitals.spo2 || r.vitals.spO2 || '';
+        const temp = r.vitals.temp || r.vitals.temperature || '';
+        const rawSugar = r.vitals.sugar || r.vitals.bg || r.vitals.bloodSugar || '';
+        const rawWeight = r.vitals.weightKg || r.vitals.weight || '';
+        const rawHeight = r.vitals.heightCm || r.vitals.height || '';
+
+        // Extract clean numeric strings for charts (e.g. "100 mg/dL" -> "100", "70 kg" -> "70")
+        const sugar = rawSugar ? String(rawSugar).replace(/[^\d.]/g, '') || String(rawSugar).trim() : '';
+        const weightKg = rawWeight ? String(rawWeight).replace(/[^\d.]/g, '') || String(rawWeight).trim() : '';
+        const heightCm = rawHeight ? String(rawHeight).replace(/[^\d.]/g, '') || String(rawHeight).trim() : '';
+
+        return {
+          date: r.date || (r.createdAt ? new Date(r.createdAt).toISOString().split('T')[0] : 'Recent'),
+          bp: bp ? String(bp).trim() : '',
+          pulse: pulse ? String(pulse).trim() : '',
+          spo2: spo2 ? String(spo2).trim() : '',
+          temp: temp ? String(temp).trim() : '',
+          sugar,
+          weightKg,
+          heightCm,
+          vitals: r.vitals
+        };
+      })
       .sort((a, b) => new Date(a.date) - new Date(b.date));
 
     // Keep only the last 12 values as required by quota rules
@@ -657,6 +681,89 @@ export const getPatientVitalsTrend = async (req, res, next) => {
     });
   } catch (error) {
     next(error);
+  }
+};
+
+/**
+ * POST /api/patients/:healthId/vitals
+ * Log or record vitals entry for longitudinal tracking
+ */
+export const recordPatientVitals = async (req, res, next) => {
+  try {
+    const targetHealthId = req.params.healthId || req.params.patientHealthId;
+    const { uid, role } = req.user;
+    const {
+      bp = '',
+      pulse = '',
+      hr = '',
+      spo2 = '',
+      temp = '',
+      sugar = '',
+      bg = '',
+      weightKg = '',
+      weight = '',
+      heightCm = '',
+      height = '',
+      date = null
+    } = req.body;
+
+    const db = assertDbConnected();
+    const access = await verifyRecordAccess({ db, uid, role, patientHealthId: targetHealthId, reqQuery: req.query });
+    if (!access.authorized) {
+      return res.status(403).json({ success: false, message: access.message || access.reason });
+    }
+
+    const recordedDate = date || new Date().toISOString().split('T')[0];
+    const finalPulse = pulse || hr || '';
+    const finalSugar = sugar || bg || '';
+    const finalWeight = weightKg || weight || '';
+    const finalHeight = heightCm || height || '';
+
+    const vitalsObj = {
+      bp: bp ? String(bp).trim() : '',
+      pulse: finalPulse ? String(finalPulse).trim() : '',
+      hr: finalPulse ? String(finalPulse).trim() : '',
+      spo2: spo2 ? String(spo2).trim() : '',
+      temp: temp ? String(temp).trim() : '',
+      sugar: finalSugar ? String(finalSugar).trim() : '',
+      bg: finalSugar ? String(finalSugar).trim() : '',
+      weightKg: finalWeight ? String(finalWeight).trim() : '',
+      weight: finalWeight ? String(finalWeight).trim() : '',
+      heightCm: finalHeight ? String(finalHeight).trim() : ''
+    };
+
+    const hasAnyValue = Object.values(vitalsObj).some((v) => v !== '');
+    if (!hasAnyValue) {
+      return res.status(400).json({ success: false, message: 'At least one vital measurement is required.' });
+    }
+
+    const newVisitRef = db.collection('visits').doc();
+    const visitData = {
+      id: newVisitRef.id,
+      healthId: targetHealthId,
+      patientHealthId: targetHealthId,
+      date: recordedDate,
+      reason: 'Routine Vitals Check / Self-Recording',
+      diagnosis: 'Vitals Logged',
+      diagnosisNotes: 'Vitals Logged',
+      vitals: vitalsObj,
+      recordedByUid: uid,
+      recordedByRole: role,
+      createdAt: new Date().toISOString()
+    };
+    await newVisitRef.set(visitData);
+
+    return res.status(201).json({
+      success: true,
+      message: 'Vitals recorded successfully.',
+      data: {
+        id: newVisitRef.id,
+        date: recordedDate,
+        ...vitalsObj
+      }
+    });
+  } catch (err) {
+    next(err);
   }
 };
 

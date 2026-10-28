@@ -25,6 +25,7 @@ import { requireRole } from '../middleware/roleMiddleware.js';
 import {
   getPatientHistory,
   getPatientVitalsTrend,
+  recordPatientVitals,
   sharePatientHistory,
   revokePatientShare,
   getActivePatientShares,
@@ -53,6 +54,7 @@ router.get('/:healthId/history.pdf', requireAuth, exportMedicalHistoryPdf);
 router.get('/:healthId/prescriptions', requireAuth, getPrescriptionsByHealthId);
 router.get('/:healthId/adherence', requireAuth, getAdherenceMetrics);
 router.get('/:healthId/vitals', requireAuth, getPatientVitalsTrend);
+router.post('/:healthId/vitals', requireAuth, recordPatientVitals);
 router.get('/:healthId/access-log', requireAuth, getPatientAccessLog);
 router.post('/:healthId/share', requireAuth, sharePatientHistory);
 router.delete('/:healthId/share/:shareId', requireAuth, revokePatientShare);

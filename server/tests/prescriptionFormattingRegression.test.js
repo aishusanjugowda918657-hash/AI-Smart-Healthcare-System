@@ -122,6 +122,8 @@ describe('Prescription Display Formatting & UID Privacy Regression', () => {
       await db.collection('patients').doc(testHealthId).set({
         healthId: testHealthId,
         patientHealthId: testHealthId,
+        uid: 'user-patient-super',
+        ownerUid: 'user-patient-super',
         name: 'Test Charlie',
         age: 35
       });
@@ -183,6 +185,59 @@ describe('Prescription Display Formatting & UID Privacy Regression', () => {
       expect(rxItem.medicines[0].dosage).toBe('500 mg');
       expect(rxItem.medicines[0].notes).toBe('Take with warm water');
       expect(rxItem.date).toBe('2026-10-28');
+    });
+
+    it('filters out empty-string vitals from vitals trend and correctly logs new vitals via POST', async () => {
+      // Seed visit with all empty vitals strings
+      await db.collection('visits').doc('vis-empty-vitals-test').set({
+        id: 'vis-empty-vitals-test',
+        healthId: testHealthId,
+        patientHealthId: testHealthId,
+        date: '2026-10-27',
+        vitals: { bp: '', pulse: '', hr: '', spo2: '', temp: '', sugar: '', weightKg: '' },
+        createdAt: new Date().toISOString()
+      });
+
+      // Fetch vitals trend before adding valid readings
+      const preRes = await request(app)
+        .get(`/api/patients/${testHealthId}/vitals`)
+        .set('x-demo-role', 'admin')
+        .set('x-demo-uid', 'admin-super-uid');
+
+      expect(preRes.status).toBe(200);
+      expect(preRes.body.data).toEqual([]); // empty vitals record must NOT be counted as a data point!
+
+      // Record valid vitals via POST /api/patients/:healthId/vitals
+      const postRes = await request(app)
+        .post(`/api/patients/${testHealthId}/vitals`)
+        .set('x-demo-role', 'patient')
+        .set('x-demo-uid', 'user-patient-super')
+        .send({
+          bp: '120/80',
+          sugar: '100 mg/dL',
+          weightKg: '70 kg',
+          pulse: '72',
+          temp: '98.6',
+          spo2: '98'
+        });
+
+      expect(postRes.status).toBe(201);
+      expect(postRes.body.success).toBe(true);
+
+      // Verify vitals trend now returns the valid normalized reading
+      const vitalsRes = await request(app)
+        .get(`/api/patients/${testHealthId}/vitals`)
+        .set('x-demo-role', 'admin')
+        .set('x-demo-uid', 'admin-super-uid');
+
+      expect(vitalsRes.status).toBe(200);
+      expect(vitalsRes.body.data).toHaveLength(1);
+      expect(vitalsRes.body.data[0].bp).toBe('120/80');
+      expect(vitalsRes.body.data[0].sugar).toBe('100');
+      expect(vitalsRes.body.data[0].weightKg).toBe('70');
+      expect(vitalsRes.body.data[0].pulse).toBe('72');
+      expect(vitalsRes.body.data[0].temp).toBe('98.6');
+      expect(vitalsRes.body.data[0].spo2).toBe('98');
     });
   });
 });
