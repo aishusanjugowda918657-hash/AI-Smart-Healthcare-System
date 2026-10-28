@@ -6,6 +6,7 @@ import { getHospitalTodayStr, parseSlotTimeToDate, formatHospitalTime, formatSlo
 import { getGlobalSettings } from '../services/settingsService.js';
 import { computeQueueSnapshot } from '../services/queueService.js';
 import { callNextPatient as queueCallNextPatient, finishConsultation as queueFinishConsultation } from './queueController.js';
+import { checkAndDispatchCheckinReminders } from '../services/notificationService.js';
 
 /**
  * Check-in appointment & generate priority token
@@ -691,6 +692,21 @@ export const getMyQueueStatus = async (req, res, next) => {
     const checkinRequired = !isCheckedIn && ['booked', 'confirmed', 'not_arrived'].includes(apptStatusLower);
     const isOverdue = checkinRequired && now.getTime() > apptTimeMs;
     const overdueMinutes = isOverdue ? Math.max(0, Math.floor((now.getTime() - apptTimeMs) / 60000)) : 0;
+
+    // Dispatches at-time or overdue check-in notification if not already sent
+    if (checkinRequired) {
+      try {
+        await checkAndDispatchCheckinReminders({
+          appointment: activeAppt,
+          appointmentId: targetApptId,
+          userUid: req.user?.uid,
+          db,
+          now
+        });
+      } catch (remErr) {
+        console.warn('Check-in notification dispatch warning:', remErr.message);
+      }
+    }
 
     if (isCompleted) {
       positionText = 'CONSULTATION COMPLETED';

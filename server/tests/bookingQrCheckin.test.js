@@ -129,4 +129,56 @@ describe('Booking QR Checkin Regression', () => {
     expect(snap.data().status).toBe('checked_in');
     expect(snap.data().checkedInAt).toBeDefined();
   });
+
+  it('12. Check-in succeeds for appointment today at 11:15 AM at 11:17 AM without false TOO_EARLY', async () => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const { id, rawCode } = await seedAppointment(db, {
+      date: todayStr,
+      timeSlot: '11:15',
+      bookedStartAt: '11:15'
+    });
+
+    const res = await request(app).post('/api/checkin/scan')
+      .set('x-demo-uid', 'mock-reception-uid')
+      .set('x-demo-role', 'reception')
+      .send({ qrPayload: 'APPT:' + id + ':' + rawCode });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('checked_in');
+  });
+
+  it('13. Dispatches check-in notification on-demand when patient checks queue status', async () => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const patientUid = 'patient_notify_test_' + Date.now();
+    const { id } = await seedAppointment(db, {
+      date: todayStr,
+      timeSlot: '11:15',
+      bookedStartAt: '11:15',
+      patientUid,
+      ownerUid: patientUid,
+      patientName: 'Ravi Kumar Test',
+      checkinAtTimeReminderSent: false
+    });
+
+    const res = await request(app)
+      .get('/api/tokens/my-queue-status')
+      .set('x-demo-uid', patientUid)
+      .set('x-demo-role', 'patient');
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.queueSummary.checkinRequired).toBe(true);
+
+    // Verify notification was created in notifications collection
+    const notifSnap = await db.collection('notifications')
+      .where('uid', '==', patientUid)
+      .get();
+
+    expect(notifSnap.empty).toBe(false);
+    const notifs = notifSnap.docs.map(d => d.data());
+    const checkinNotif = notifs.find(n => n.type === 'CHECKIN_REMINDER' || n.type === 'CHECKIN_OVERDUE');
+    expect(checkinNotif).toBeDefined();
+    expect(checkinNotif.title).toContain('Please check in');
+  });
 });
+

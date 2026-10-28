@@ -55,6 +55,12 @@ export function parseSlotTimeToDate(dateStr, timeSlotStr) {
   if (!dateStr || !timeSlotStr) return null;
 
   try {
+    let normalizedDate = String(dateStr).trim();
+    if (/^\d{2}-\d{2}-\d{4}$/.test(normalizedDate)) {
+      const [d, m, y] = normalizedDate.split('-');
+      normalizedDate = `${y}-${m}-${d}`;
+    }
+
     const trimmed = String(timeSlotStr).trim();
     const isPM = /pm/i.test(trimmed);
     const isAM = /am/i.test(trimmed);
@@ -69,7 +75,7 @@ export function parseSlotTimeToDate(dateStr, timeSlotStr) {
     if (isAM && hours === 12) hours = 0;
 
     const formattedTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
-    const parsed = dayjs.tz(`${dateStr} ${formattedTime}`, HOSPITAL_TZ);
+    const parsed = dayjs.tz(`${normalizedDate} ${formattedTime}`, HOSPITAL_TZ);
     return parsed.isValid() ? parsed.toDate() : null;
   } catch {
     return null;

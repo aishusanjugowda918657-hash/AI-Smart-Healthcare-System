@@ -3,7 +3,7 @@ import { assertDbConnected } from '../config/firebase.js';
 import { assertTransition } from '../domain/status.js';
 import { AppError, formatSuccessResponse } from '../utils/errors.js';
 import { clock } from '../utils/clock.js';
-import { getHospitalTodayStr } from '../utils/timezoneDate.js';
+import { getHospitalTodayStr, parseSlotTimeToDate } from '../utils/timezoneDate.js';
 import { writeAuditLog } from '../utils/audit.js';
 import { recalculateQueue } from '../services/queueService.js';
 
@@ -132,13 +132,15 @@ export const scanCheckIn = async (req, res, next) => {
       throw new AppError('WRONG_DATE', `Check-in is only permitted on the scheduled date (${apt.date}). Today is ${todayStr}.`, 400);
     }
 
-    // 5. Window check (Too early check > 2 hours in advance)
+    // 5. Window check (Too early check > 2 hours in advance in Asia/Kolkata)
     if (apt.timeSlot) {
-      const [hours, mins] = apt.timeSlot.split(':').map(Number);
-      const apptStartTimeMs = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, mins).getTime();
-      const twoHoursMs = 2 * 60 * 60 * 1000;
-      if (now.getTime() < apptStartTimeMs - twoHoursMs) {
-        throw new AppError('TOO_EARLY', 'Check-in is permitted at most 2 hours prior to scheduled slot time.', 400);
+      const apptDateObj = parseSlotTimeToDate(apt.date || todayStr, apt.timeSlot);
+      if (apptDateObj) {
+        const apptStartTimeMs = apptDateObj.getTime();
+        const twoHoursMs = 2 * 60 * 60 * 1000;
+        if (now.getTime() < apptStartTimeMs - twoHoursMs) {
+          throw new AppError('TOO_EARLY', 'Check-in is permitted at most 2 hours prior to scheduled slot time.', 400);
+        }
       }
     }
 

@@ -5,6 +5,8 @@
 
 import { assertDbConnected } from '../config/firebase.js';
 import { clock } from '../utils/clock.js';
+import { getHospitalTodayStr } from '../utils/timezoneDate.js';
+import { checkAndDispatchCheckinReminders } from '../services/notificationService.js';
 import { formatSuccessResponse, formatErrorResponse } from '../utils/errors.js';
 
 /**
@@ -16,6 +18,40 @@ export const getNotifications = async (req, res, next) => {
   try {
     const { uid } = req.user;
     const db = assertDbConnected();
+
+    // On-demand sync: ensure check-in reminders are dispatched if due today
+    if (uid) {
+      try {
+        const todayStr = getHospitalTodayStr(clock.now());
+        const apptsToCheck = [];
+        const q1 = await db.collection('appointments')
+          .where('date', '==', todayStr)
+          .where('patientUid', '==', uid)
+          .limit(3)
+          .get();
+        if (!q1.empty) {
+          apptsToCheck.push(...q1.docs);
+        } else {
+          const q2 = await db.collection('appointments')
+            .where('date', '==', todayStr)
+            .where('ownerUid', '==', uid)
+            .limit(3)
+            .get();
+          if (!q2.empty) apptsToCheck.push(...q2.docs);
+        }
+        for (const doc of apptsToCheck) {
+          await checkAndDispatchCheckinReminders({
+            appointment: { id: doc.id, ...doc.data() },
+            appointmentId: doc.id,
+            userUid: uid,
+            db,
+            now: clock.now()
+          });
+        }
+      } catch (remErr) {
+        console.warn('Check-in notification sweep warning in getNotifications:', remErr.message);
+      }
+    }
 
     const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
 
