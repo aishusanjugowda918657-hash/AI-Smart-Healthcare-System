@@ -47,4 +47,6 @@ local-demo-profiles/
 .local-demo-profiles/
 demo_credentials.json
 
+# Archive files
+*.zip
 

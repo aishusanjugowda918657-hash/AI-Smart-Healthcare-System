@@ -27,7 +27,8 @@ describe('Task D: Medicine Reminders, Follow-ups, and Doctor Alerts', () => {
   // ── Part 1: Domain Generation (Pure, Unit) ─────────────────────────
   describe('Part 1: Dose Generation & Action Tokens', () => {
     it('1-0-1 for 5 days gives 10 reminders at the right times', () => {
-      const refDate = new Date('2026-10-10T06:00:00Z');
+      // Early morning reference time: 01:00 UTC = 06:30 AM IST, before breakfast dose at 08:30 AM IST
+      const refDate = new Date('2026-10-10T01:00:00Z');
       const reminders = createDoseReminders({
         prescriptionId: 'RX-TEST-001',
         item: {
@@ -46,9 +47,9 @@ describe('Task D: Medicine Reminders, Follow-ups, and Doctor Alerts', () => {
       });
 
       expect(reminders).toHaveLength(10);
-      // 1-0-1 = breakfast + dinner. after_food (+30m) -> 08:30 and 20:30
-      expect(reminders[0].dueAt).toContain('08:30');
-      expect(reminders[1].dueAt).toContain('20:30');
+      // 1-0-1 = breakfast + dinner. In Asia/Kolkata: 08:30 IST = 03:00 UTC, and 20:30 IST = 15:00 UTC
+      expect(reminders[0].dueAt).toBe('2026-10-10T03:00:00.000Z');
+      expect(reminders[1].dueAt).toBe('2026-10-10T15:00:00.000Z');
       expect(reminders[0].medicineName).toBe('Paracetamol');
       expect(reminders[0].healthId).toBe('PHI-2026-TEST01-A');
       expect(reminders[0].receiverUids).toContain('uid-ravi');
@@ -58,8 +59,8 @@ describe('Task D: Medicine Reminders, Follow-ups, and Doctor Alerts', () => {
     });
 
     it('first dose is at least 5 minutes ahead if scheduled today', () => {
-      // Current time is 08:28, scheduled dose is 08:30 (only 2 mins ahead)
-      const now = new Date('2026-10-10T08:28:00Z');
+      // Current time is 08:00 AM IST (02:30 UTC), scheduled dose is 08:30 AM IST (03:00 UTC) (30 mins ahead)
+      const now = new Date('2026-10-10T02:30:00Z');
       const reminders = createDoseReminders({
         prescriptionId: 'RX-TEST-002',
         item: { name: 'Amoxicillin', dosage: '250 mg', frequency: '1-0-0', durationDays: 1, timing: 'after_food' },

@@ -5,7 +5,7 @@
  * and Pre-Consultation Summary Card with Database Flags and Post-Check Guards.
  */
 import { generateText, generateJson, runWithTools } from '../ai/geminiClient.js';
-import { checkEmergencyKeywords, getEmergencyResponse, checkQuickChipIntent, validateSummaryFacts } from '../ai/guards.js';
+import { checkEmergencyKeywords, getEmergencyResponse, checkQuickChipIntent, isHowToProcedureQuery, validateSummaryFacts } from '../ai/guards.js';
 import { getChatFallback, getDoctorAgentFallback, getSummaryFallback } from '../ai/fallbacks.js';
 import { buildChatSystemPrompt } from '../ai/prompts/chat.js';
 import { buildDoctorAgentSystemPrompt } from '../ai/prompts/doctorAgent.js';
@@ -21,7 +21,7 @@ import { assertDbConnected } from '../config/firebase.js';
 import { createAppointment } from './bookingController.js';
 import { cancelAppointment } from './appointmentController.js';
 import { evaluatePrescriptionSafety } from '../domain/safety.js';
-import { searchHelp, getArticleSummaries } from '../domain/helpSearch.js';
+import { searchHelp, getArticleSummaries, getHelpReplyById } from '../domain/helpSearch.js';
 import flags from '../config/flags.js';
 import medicinesConfig from '../config/clinical/medicines.json' with { type: 'json' };
 
@@ -47,28 +47,35 @@ export const aiChat = async (req, res, next) => {
     // Selected patient health ID defaults to logged-in user or provided healthId
     const selectedPatientHealthId = patientHealthId || uid;
 
-    // 1. RULE PRE-CHECK: Emergency Keywords (4 languages)
+    // 1. RULE PRE-CHECK: Emergency Keywords (4 languages) - Takes absolute precedence
     if (checkEmergencyKeywords(message)) {
       return res.status(200).json(getEmergencyResponse(language));
     }
 
-    // 2. RULE PRE-CHECK: Quick-Chip Intents (4 languages) -> NO Gemini Call
+    // 2. HOW-TO / PROCEDURE PRE-CHECK:
+    // If the message is a how-to question, call searchHelp() first before quick chips or Gemini
+    const isHowTo = isHowToProcedureQuery(message);
+    if (isHowTo) {
+      const helpResult = searchHelp(message, language);
+      if (helpResult.matched) {
+        return res.status(200).json(helpResult.reply);
+      }
+    }
+
+    // 3. RULE PRE-CHECK: Quick-Chip Intents (4 languages) -> NO Gemini Call
     const quickIntent = checkQuickChipIntent(message);
     if (quickIntent) {
       const db = assertDbConnected();
       switch (quickIntent) {
-        case 'BOOK_APPOINTMENT':
-          return res.status(200).json({
-            success: true,
-            language,
-            message: 'You can book an appointment with our available doctors below. Please select a department or doctor.',
-            quickChips: [
-              { label: 'General Medicine', action: 'SELECT_DEPT_gen' },
-              { label: 'Cardiology', action: 'SELECT_DEPT_card' },
-              { label: 'Pediatrics', action: 'SELECT_DEPT_ped' }
-            ],
-            aiSource: 'quick_chip'
-          });
+        case 'BOOK_APPOINTMENT': {
+          // Return the same reply as the help article book_appointment (answer + numbered steps + actionButtons).
+          // Fake SELECT_DEPT_* chips removed.
+          const helpReply = getHelpReplyById('book_appointment', language) || searchHelp('book appointment', language)?.reply;
+          if (helpReply) {
+            return res.status(200).json(helpReply);
+          }
+          break;
+        }
 
         case 'TOKEN_STATUS': {
           const result = await executePatientChatTool('get_token_status', {}, { userId: uid, selectedPatientHealthId });
@@ -117,7 +124,7 @@ export const aiChat = async (req, res, next) => {
       }
     }
 
-    // 3. HELP LIBRARY SEARCH (handles common questions without Gemini)
+    // 4. HELP LIBRARY SEARCH (handles common questions without Gemini)
     const helpResult = searchHelp(message, language);
     if (helpResult.matched) {
       return res.status(200).json(helpResult.reply);

@@ -57,10 +57,75 @@ export function getEmergencyResponse(language = 'en') {
 }
 
 /**
- * Quick-chip intent detection before Gemini call
+ * Detect whether a user message is asking for a how-to or step-by-step procedure
+ * across English, Hindi, Kannada, and Tamil.
+ */
+export function isHowToProcedureQuery(message = '') {
+  if (!message || typeof message !== 'string') return false;
+  const lower = message.toLowerCase().trim();
+
+  // Multi-word procedural phrases across 4 languages
+  if (
+    lower.includes('step by step') ||
+    lower.includes('how to') ||
+    lower.includes('how do i') ||
+    lower.includes('how can i') ||
+    lower.includes('how should i') ||
+    lower.includes('guide me') ||
+    lower.includes('kaise kare') ||
+    lower.includes('kaise karein') ||
+    lower.includes('kaise karte') ||
+    lower.includes('hege maduvudu') ||
+    lower.includes('hege madodu') ||
+    lower.includes('eppadi seivathu') ||
+    lower.includes('eppadi seivadhu')
+  ) {
+    return true;
+  }
+
+  // Word-boundary keywords (English & transliterated Indic)
+  const asciiKeywordsRegex = /\b(how|steps?|procedure|process|guide|explain|instructions?|kaise|kese|tarika|tareeka|prakriya|vidhana|krama|vivarisi|eppadi|murai|nadavadikkai|vilakkavum)\b/i;
+  if (asciiKeywordsRegex.test(lower)) {
+    return true;
+  }
+
+  // Native Indic script keywords (Devanagari, Kannada, Tamil)
+  const nativeIndicKeywords = [
+    'कैसे', 'प्रक्रिया', 'तरीका', 'कदम', 'समझाएं', 'समझाओ', 'विधि',
+    'ಹೇಗೆ', 'ವಿಧಾನ', 'ಕ್ರಮ', 'ವಿವರಿಸಿ', 'ಹಂತಗಳು',
+    'எப்படி', 'முறை', 'நடவடிக்கை', 'விளக்கவும்', 'படிநிலைகள்'
+  ];
+  for (const kw of nativeIndicKeywords) {
+    if (lower.includes(kw)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Quick-chip intent detection before Gemini call.
+ * Quick intents trigger ONLY for short chip-like messages (at most 4 words)
+ * and NEVER when the message is a how-to/procedure question.
  */
 export function checkQuickChipIntent(message = '') {
-  const lower = message.toLowerCase();
+  if (!message || typeof message !== 'string') return null;
+
+  // Never trigger quick intents for how-to / procedure questions -> fall through to searchHelp
+  if (isHowToProcedureQuery(message)) {
+    return null;
+  }
+
+  const clean = message.trim();
+  const words = clean.split(/\s+/).filter(Boolean);
+
+  // Quick intents trigger only for short chip-like messages (at most 4 words)
+  if (words.length > 4) {
+    return null;
+  }
+
+  const lower = clean.toLowerCase();
 
   if (lower.includes('book appointment') || lower.includes('book slot') || lower.includes('schedule appointment') || lower.includes('अपॉइंटमेंट') || lower.includes('ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್') || lower.includes('அப்பாயிண்ட்மெண்ட்')) {
     return 'BOOK_APPOINTMENT';
@@ -68,7 +133,7 @@ export function checkQuickChipIntent(message = '') {
   if (lower.includes('my token status') || lower.includes('token status') || lower.includes('queue status') || lower.includes('मेरा टोकन') || lower.includes('ನನ್ನ ಟೋಕನ್') || lower.includes('என் டோக்கன்')) {
     return 'TOKEN_STATUS';
   }
-  if (lower.includes('wait time') || lower.includes('how long') || lower.includes('when is my turn') || lower.includes('how much wait') || lower.includes('kitna wait') || lower.includes('कितना इंतज़ार') || lower.includes('ಎಷ್ಟು ಕಾಯಬೇಕು') || lower.includes('எவ்வளவு நேரம்')) {
+  if (lower.includes('wait time') || lower.includes('when is my turn') || lower.includes('how much wait') || lower.includes('kitna wait') || lower.includes('कितना इंतज़ार') || lower.includes('ಎಷ್ಟು ಕಾಯಬೇಕು') || lower.includes('எவ்வளவு நேரம்')) {
     return 'WAIT_TIME';
   }
   if (lower.includes('doctor timings') || lower.includes('hospital hours') || lower.includes('timing') || lower.includes('डॉक्टर का समय') || lower.includes('ವೈದ್ಯರ ಸಮಯ') || lower.includes('டாக்டர் நேரம்')) {

@@ -1,8 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import API from '../../services/api';
-import { Calendar, Clock, Stethoscope, CheckCircle, XCircle, AlertCircle, RefreshCw, X } from 'lucide-react';
+import { Calendar, Clock, Stethoscope, CheckCircle, XCircle, AlertCircle, RefreshCw, X, WifiOff } from 'lucide-react';
 import QRCode from 'qrcode';
 import { getTodayInHospitalTz } from '../../utils/formatters';
+import { getCachedAppointments, updateCachedAppointment, enqueueOfflineAction } from '../../services/offlineStorage';
+import { syncAppointmentsToOfflineStorage, triggerBackgroundSync } from '../../services/offlineSync';
+import { generateAppointmentIcs, downloadIcsFile } from '../../services/calendarExport';
 
 const formatDepartmentName = (deptId) => {
   if (!deptId) return 'General Medicine';
@@ -17,6 +20,27 @@ export const ActiveAppointmentsBanner = () => {
   const [cancelAppt, setCancelAppt] = useState(null);
   const [cancelReason, setCancelReason] = useState('');
   const [isCancelling, setIsCancelling] = useState(false);
+
+  const [isOffline, setIsOffline] = useState(typeof navigator !== 'undefined' ? !navigator.onLine : false);
+  const [offlineNotice, setOfflineNotice] = useState(null);
+
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOffline(false);
+      setOfflineNotice(null);
+      fetchActiveAppointments();
+    };
+    const handleOffline = () => {
+      setIsOffline(true);
+      setOfflineNotice('Offline mode: Showing cached appointments & check-in QR codes.');
+    };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   const fetchActiveAppointments = async () => {
     setLoading(true);
@@ -40,8 +64,17 @@ export const ActiveAppointmentsBanner = () => {
       // Sort by date asc (soonest first)
       activeAppts.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
       setAppointments(activeAppts);
+
+      // Cache active appointments into IndexedDB
+      syncAppointmentsToOfflineStorage(activeAppts);
     } catch (err) {
-      console.warn('Failed to fetch active appointments for banner', err.message);
+      console.warn('Network error fetching active appointments, loading offline cache:', err.message);
+      const cached = await getCachedAppointments();
+      if (cached && cached.length > 0) {
+        setAppointments(cached);
+        setIsOffline(true);
+        setOfflineNotice('Viewing cached appointments and QR codes from local storage.');
+      }
     } finally {
       setLoading(false);
     }
@@ -63,15 +96,54 @@ export const ActiveAppointmentsBanner = () => {
 
   const handleCancel = async () => {
     if (!cancelReason.trim()) return;
+    const targetId = cancelAppt.id || cancelAppt.appointmentId;
+
+    // Handle offline cancellation
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setAppointments(appointments.filter(a => (a.id || a.appointmentId) !== targetId));
+      await updateCachedAppointment(targetId, { status: 'cancelled' });
+      await enqueueOfflineAction({
+        type: 'appointment_cancel',
+        entityId: targetId,
+        endpoint: `/appointments/${targetId}/cancel`,
+        method: 'POST',
+        body: { reason: cancelReason }
+      });
+      await triggerBackgroundSync();
+      setCancelAppt(null);
+      setCancelReason('');
+      if (selectedAppt) setSelectedAppt(null);
+      setOfflineNotice('Cancellation recorded offline. Will sync with hospital once online.');
+      return;
+    }
+
     try {
       setIsCancelling(true);
-      await API.post(`/appointments/${cancelAppt.id || cancelAppt.appointmentId}/cancel`, { reason: cancelReason });
+      await API.post(`/appointments/${targetId}/cancel`, { reason: cancelReason });
       setCancelAppt(null);
       setCancelReason('');
       if (selectedAppt) setSelectedAppt(null);
       fetchActiveAppointments();
     } catch (error) {
-      console.error('Cancel failed', error);
+      if (!error.response) {
+        // Network drop during call
+        setAppointments(appointments.filter(a => (a.id || a.appointmentId) !== targetId));
+        await updateCachedAppointment(targetId, { status: 'cancelled' });
+        await enqueueOfflineAction({
+          type: 'appointment_cancel',
+          entityId: targetId,
+          endpoint: `/appointments/${targetId}/cancel`,
+          method: 'POST',
+          body: { reason: cancelReason }
+        });
+        await triggerBackgroundSync();
+        setCancelAppt(null);
+        setCancelReason('');
+        if (selectedAppt) setSelectedAppt(null);
+        setOfflineNotice('Network lost: Cancellation queued offline and will sync automatically.');
+      } else {
+        console.error('Cancel failed', error);
+      }
     } finally {
       setIsCancelling(false);
     }
@@ -96,6 +168,14 @@ export const ActiveAppointmentsBanner = () => {
           <RefreshCw className="w-4 h-4" />
         </button>
       </div>
+
+      {/* Offline Mode Indicator */}
+      {offlineNotice && (
+        <div className="p-3 bg-sky-950/60 border border-sky-600/40 text-sky-200 rounded-2xl flex items-center gap-2 text-xs font-semibold shadow-md">
+          <WifiOff className="w-4 h-4 text-sky-400 shrink-0" />
+          <span>{offlineNotice}</span>
+        </div>
+      )}
 
       <div className="grid gap-4">
         {appointments.map(appt => {
@@ -136,6 +216,19 @@ export const ActiveAppointmentsBanner = () => {
                   className="w-full md:w-auto px-4 py-2 bg-teal-600 hover:bg-teal-500 text-slate-950 font-bold text-xs rounded-xl transition-all shadow-lg"
                 >
                   View Details / QR
+                </button>
+                <button
+                  onClick={() => {
+                    const ics = generateAppointmentIcs(appt);
+                    if (ics) {
+                      downloadIcsFile(`appointment-${appt.date || 'checkin'}.ics`, ics);
+                    }
+                  }}
+                  className="w-full md:w-auto px-4 py-2 bg-slate-800 hover:bg-slate-700 text-teal-300 font-bold text-xs rounded-xl border border-teal-500/30 transition-all flex items-center justify-center gap-1.5"
+                  title="Add reminder to phone calendar for offline check-in alarms"
+                >
+                  <Calendar className="w-3.5 h-3.5" />
+                  <span>Add to Calendar</span>
                 </button>
                 {isCancelable && (
                   <button

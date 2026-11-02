@@ -303,7 +303,7 @@ export const ChatbotPage = () => {
             </div>
 
             <div
-              className={`max-w-[80%] rounded-2xl p-4 text-xs leading-relaxed whitespace-pre-wrap ${
+              className={`max-w-[80%] rounded-2xl p-4 text-xs leading-relaxed whitespace-pre-line ${
                 m.sender === 'user'
                   ? 'bg-brand-600 text-white shadow-sm'
                   : m.isEmergency

@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Pill, CheckCircle, Clock, AlertCircle, ShieldCheck, Loader2, Undo2, Flame, Settings, AlertTriangle, UserCheck } from 'lucide-react';
+import { Pill, CheckCircle, Clock, AlertCircle, ShieldCheck, Loader2, Undo2, Flame, Settings, AlertTriangle, UserCheck, Calendar, WifiOff } from 'lucide-react';
 import Badge from '../common/Badge';
 import API from '../../services/api';
+import { getCachedReminders, updateCachedReminderStatus, enqueueOfflineAction } from '../../services/offlineStorage';
+import { syncRemindersToOfflineStorage, triggerBackgroundSync } from '../../services/offlineSync';
+import { generateMedicineScheduleIcs, downloadIcsFile } from '../../services/calendarExport';
 
 export const MedicineTracker = ({ patientHealthId, patientName }) => {
   const [reminders, setReminders] = useState([]);
@@ -18,6 +21,26 @@ export const MedicineTracker = ({ patientHealthId, patientName }) => {
   const [showMealTimesModal, setShowMealTimesModal] = useState(false);
   const [mealTimes, setMealTimes] = useState({ breakfast: '08:00', lunch: '13:00', dinner: '20:00' });
   const [refillWarning, setRefillWarning] = useState(null);
+  const [isOfflineMode, setIsOfflineMode] = useState(typeof navigator !== 'undefined' ? !navigator.onLine : false);
+  const [offlineNotice, setOfflineNotice] = useState(null);
+
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOfflineMode(false);
+      setOfflineNotice(null);
+      fetchReminders();
+    };
+    const handleOffline = () => {
+      setIsOfflineMode(true);
+      setOfflineNotice('Operating in offline mode. Doses recorded now will sync once internet returns.');
+    };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   useEffect(() => {
     fetchReminders();
@@ -43,6 +66,7 @@ export const MedicineTracker = ({ patientHealthId, patientName }) => {
       if (res.data?.success) {
         const list = res.data.data || [];
         setReminders(list);
+        syncRemindersToOfflineStorage(list);
 
         // Check if any chronic reminder has 2 days left
         const refillItem = list.find((r) => r.isRefill || (r.daysRemaining && r.daysRemaining <= 2));
@@ -51,7 +75,13 @@ export const MedicineTracker = ({ patientHealthId, patientName }) => {
         }
       }
     } catch (err) {
-      console.warn('Error fetching medicine reminders:', err.message);
+      console.warn('Network error fetching medicine reminders, loading offline cache:', err.message);
+      const cached = await getCachedReminders();
+      if (cached && cached.length > 0) {
+        setReminders(cached);
+        setIsOfflineMode(true);
+        setOfflineNotice('Viewing cached schedule from local storage.');
+      }
     } finally {
       setLoading(false);
     }
@@ -74,11 +104,36 @@ export const MedicineTracker = ({ patientHealthId, patientName }) => {
     setLoadingId(id);
     const target = reminders.find((r) => r.id === id);
     const prevStatus = target ? target.status : 'pending';
+    const nowTimeLabel = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const offlineStatus = action === 'taken' ? 'taken' : action === 'skip' ? 'skipped' : 'snoozed';
+
+    // If browser is currently offline, record action locally and enqueue for background sync
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setReminders(
+        reminders.map((r) =>
+          r.id === id
+            ? { ...r, status: offlineStatus, takenAt: action === 'taken' ? nowTimeLabel : null, respondedByName: 'You (Offline)' }
+            : r
+        )
+      );
+      await updateCachedReminderStatus(id, offlineStatus, { takenAt: action === 'taken' ? nowTimeLabel : null });
+      await enqueueOfflineAction({
+        type: 'medicine_dose',
+        entityId: id,
+        endpoint: `/reminders/${id}/respond`,
+        method: 'POST',
+        body: { action, snoozeMinutes, token: target?.actionToken }
+      });
+      await triggerBackgroundSync();
+      setOfflineNotice('Dose recorded offline. Will sync with your clinic once back online.');
+      setLoadingId(null);
+      return;
+    }
 
     try {
       const res = await API.post(`/reminders/${id}/respond`, { action, snoozeMinutes });
       const updatedStatus = res.data?.data?.status || action;
-      const takenAt = res.data?.data?.takenAt || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const takenAt = res.data?.data?.takenAt || nowTimeLabel;
 
       setReminders(
         reminders.map((r) =>
@@ -87,6 +142,7 @@ export const MedicineTracker = ({ patientHealthId, patientName }) => {
             : r
         )
       );
+      await updateCachedReminderStatus(id, updatedStatus, { takenAt });
 
       fetchAdherenceMetrics();
 
@@ -94,7 +150,28 @@ export const MedicineTracker = ({ patientHealthId, patientName }) => {
       setLastAction({ id, prevStatus, actionTime: Date.now() });
       setUndoTimer(10);
     } catch (err) {
-      alert(err.response?.data?.message || err.message || 'Error processing action.');
+      if (!err.response) {
+        // Network failure during request: enqueue offline
+        setReminders(
+          reminders.map((r) =>
+            r.id === id
+              ? { ...r, status: offlineStatus, takenAt: action === 'taken' ? nowTimeLabel : null, respondedByName: 'You (Offline)' }
+              : r
+          )
+        );
+        await updateCachedReminderStatus(id, offlineStatus, { takenAt: action === 'taken' ? nowTimeLabel : null });
+        await enqueueOfflineAction({
+          type: 'medicine_dose',
+          entityId: id,
+          endpoint: `/reminders/${id}/respond`,
+          method: 'POST',
+          body: { action, snoozeMinutes, token: target?.actionToken }
+        });
+        await triggerBackgroundSync();
+        setOfflineNotice('Connection lost. Dose recorded offline and will sync automatically.');
+      } else {
+        alert(err.response?.data?.message || err.message || 'Error processing action.');
+      }
     } finally {
       setLoadingId(null);
     }
@@ -178,8 +255,32 @@ export const MedicineTracker = ({ patientHealthId, patientName }) => {
             <Settings className="w-3.5 h-3.5 text-slate-500" />
             <span>Change Meal Times</span>
           </button>
+
+          <button
+            onClick={() => {
+              const ics = generateMedicineScheduleIcs(reminders);
+              if (ics) {
+                downloadIcsFile('medicine-schedule.ics', ics);
+              } else {
+                alert('No active medicine reminders to export.');
+              }
+            }}
+            className="px-3 py-1.5 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-xl border border-emerald-200 text-xs font-bold flex items-center space-x-1 transition-colors"
+            title="Add schedule to phone calendar for guaranteed offline alarms"
+          >
+            <Calendar className="w-3.5 h-3.5 text-emerald-600" />
+            <span>Sync to Calendar</span>
+          </button>
         </div>
       </div>
+
+      {/* Offline Mode / Cache Notice */}
+      {offlineNotice && (
+        <div className="p-3 bg-sky-50 border border-sky-200 text-sky-900 rounded-2xl flex items-center space-x-2 text-xs font-semibold shadow-xs">
+          <WifiOff className="w-4 h-4 text-sky-600 shrink-0" />
+          <span>{offlineNotice}</span>
+        </div>
+      )}
 
       {/* Refill Warning Banner */}
       {refillWarning && (
@@ -255,12 +356,19 @@ export const MedicineTracker = ({ patientHealthId, patientName }) => {
                     >
                       <div>
                         <div className="flex items-center space-x-2">
-                          <h4 className="font-bold text-sm text-slate-800">{rem.medicineName || rem.item?.name}</h4>
+                          {rem.packet && (
+                            <span className="px-2 py-0.5 rounded-md bg-teal-600 text-white font-extrabold text-[11px] shadow-xs tracking-wider">
+                              Packet {rem.packet}
+                            </span>
+                          )}
+                          <h4 className="font-bold text-sm text-slate-800">
+                            {rem.packet ? `Packet ${rem.packet}` : (rem.medicineName || rem.item?.name)}
+                          </h4>
                           <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
-                            {rem.dosage || rem.item?.dosage || '1 dose'}
+                            {rem.tabletCount || rem.tabletsCount ? `${rem.tabletCount || rem.tabletsCount} Tablet${(rem.tabletCount || rem.tabletsCount) > 1 ? 's' : ''}` : (rem.dosage || rem.item?.dosage || '1 dose')}
                           </span>
                           <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-teal-50 text-teal-800 border border-teal-200 capitalize">
-                            {timingText}
+                            {rem.foodInstruction || timingText}
                           </span>
                         </div>
 

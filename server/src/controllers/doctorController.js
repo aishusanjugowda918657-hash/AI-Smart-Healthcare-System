@@ -934,30 +934,74 @@ export const doctorGetMyPatients = async (req, res, next) => {
   try {
     const user = req.user;
     const db = assertDbConnected();
-    let targetDoctorId = user.doctorId;
-    if (!targetDoctorId) {
-      const docSnap = await db.collection('doctors').doc(user.uid).get();
-      targetDoctorId = docSnap.exists ? docSnap.data().doctorId : user.uid;
-    }
+    const doctorUid = user.uid;
+
+    const { docIdList: myAliases } = await resolveDoctorIds(doctorUid, db);
+    const myDoctorSet = new Set([doctorUid, ...myAliases]);
+    if (user.doctorId) myDoctorSet.add(user.doctorId);
+    try {
+      const docSnap = await db.collection('doctors').doc(doctorUid).get();
+      if (docSnap.exists) {
+        const d = docSnap.data();
+        if (d.doctorId) myDoctorSet.add(d.doctorId);
+        if (d.displayId) myDoctorSet.add(d.displayId);
+        if (d.doctorUid) myDoctorSet.add(d.doctorUid);
+      }
+    } catch (_) {}
+
+    const candidateDoctorIds = Array.from(myDoctorSet).filter(Boolean).slice(0, 10);
 
     const oneYearAgo = new Date();
     oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
     const oneYearAgoStr = oneYearAgo.toISOString().split('T')[0];
 
-    const apptsSnap = await db.collection('appointments')
-      .where('doctorId', '==', targetDoctorId)
-      .where('status', '==', 'completed')
-      .where('date', '>=', oneYearAgoStr)
-      .limit(100)
-      .get();
+    // To prevent un-deployed composite index failure on (doctorId, status, date),
+    // query by doctorId and filter status/date in memory
+    const queries = [];
+    if (candidateDoctorIds.length > 0) {
+      queries.push(
+        db.collection('appointments')
+          .where('doctorId', 'in', candidateDoctorIds)
+          .limit(200)
+          .get()
+      );
+    }
+    if (doctorUid) {
+      queries.push(
+        db.collection('appointments')
+          .where('doctorUid', '==', doctorUid)
+          .limit(200)
+          .get()
+      );
+    }
+
+    const snapshots = await Promise.all(queries);
+    const seenApptIds = new Set();
+    const apptsDocs = [];
+    snapshots.forEach((snap) => {
+      snap.docs.forEach((doc) => {
+        if (!seenApptIds.has(doc.id)) {
+          seenApptIds.add(doc.id);
+          apptsDocs.push(doc);
+        }
+      });
+    });
 
     const patientVisits = new Map();
-    apptsSnap.docs.forEach((doc) => {
+    apptsDocs.forEach((doc) => {
       const data = doc.data();
-      const hId = data.patientHealthId;
-      if (hId) {
-        if (!patientVisits.has(hId) || data.date > patientVisits.get(hId)) {
-          patientVisits.set(hId, data.date);
+      const statusLower = (data.status || '').toLowerCase();
+      const isDocMatch =
+        myDoctorSet.has(data.doctorId) ||
+        myDoctorSet.has(data.doctorUid) ||
+        myDoctorSet.has(data.assignedDoctorId);
+
+      if (isDocMatch && statusLower === 'completed' && data.date && data.date >= oneYearAgoStr) {
+        const hId = data.patientHealthId;
+        if (hId) {
+          if (!patientVisits.has(hId) || data.date > patientVisits.get(hId)) {
+            patientVisits.set(hId, data.date);
+          }
         }
       }
     });

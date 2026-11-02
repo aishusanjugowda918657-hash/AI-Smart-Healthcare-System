@@ -16,7 +16,7 @@ import hiArticles from '../config/help/hi.js';
 import knArticles from '../config/help/kn.js';
 import taArticles from '../config/help/ta.js';
 
-const LIBRARIES = {
+export const LIBRARIES = {
   en: enArticles.articles || enArticles.default?.articles || enArticles,
   hi: hiArticles.articles || hiArticles.default?.articles || hiArticles,
   kn: knArticles.articles || knArticles.default?.articles || knArticles,
@@ -119,7 +119,7 @@ function scoreArticle(article, queryNorm, queryTokens) {
           tokenBestScore = Math.max(tokenBestScore, 45);
         } else if (tToken.startsWith(qToken) && qToken.length >= 3) {
           tokenBestScore = Math.max(tokenBestScore, 30);
-        } else if (qToken.length >= 4 && tToken.length >= 4) {
+        } else if (qToken.length >= 3 && tToken.length >= 3) {
           const tClean = tToken.endsWith('s') ? tToken.slice(0, -1) : tToken;
           const qClean = qToken.endsWith('s') ? qToken.slice(0, -1) : qToken;
           if (editDistance(qToken, tToken) <= 1 || editDistance(qClean, tClean) <= 1) {
@@ -154,7 +154,7 @@ function scoreArticle(article, queryNorm, queryTokens) {
 
 /* ────────────── format reply ────────────── */
 
-function formatArticleReply(article) {
+export function formatArticleReply(article) {
   const lines = [article.answer || ''];
   if (article.steps && article.steps.length > 0) {
     article.steps.forEach((step, i) => {
@@ -162,6 +162,28 @@ function formatArticleReply(article) {
     });
   }
   return lines.join('\n');
+}
+
+/**
+ * Retrieve a specific help article reply by article ID and language.
+ * Returns the standard help reply object.
+ */
+export function getHelpReplyById(id, language = 'en') {
+  const lang = (language || 'en').split('-')[0];
+  const articlesList = LIBRARIES[lang] || LIBRARIES.en;
+  const article = articlesList.find(a => a.id === id) || (lang !== 'en' ? LIBRARIES.en.find(a => a.id === id) : null);
+  if (!article) return null;
+
+  const replyText = formatArticleReply(article);
+  return {
+    success: true,
+    message: replyText,
+    response: replyText.includes('Disclaimer:') ? replyText : `${replyText}\n\nDisclaimer: This is AI generated content.`,
+    actionButtons: article.actionButtons || [],
+    quickChips: (article.followUpChips || []).map(label => ({ label, action: 'TOPIC_CHIP' })),
+    aiSource: 'help_library',
+    language: lang
+  };
 }
 
 /* ────────────── public API ────────────── */

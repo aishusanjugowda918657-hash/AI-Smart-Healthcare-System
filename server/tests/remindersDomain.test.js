@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   generateDoseSchedule,
+  createDoseReminders,
   parseFrequencySlots,
   generateActionToken,
   verifyActionToken
@@ -53,10 +54,11 @@ describe('PRD F11: Reminder Schedule Engine & HMAC Action Token Unit Tests', () 
     expect(scheduleBefore[0].timeStr).toBe('07:30');
   });
 
-  it('generateDoseSchedule ensures first dose is at least 5 minutes in the future if start date is today and past', () => {
-    // Current time is 09:00 AM local time. Breakfast dose was scheduled for 08:30 AM (past).
-    const mockNow = new Date(2026, 9, 2, 9, 0, 0);
-    const schedule = generateDoseSchedule({
+  it('generateDoseSchedule omits past doses on day 0 and keeps future doses at prescribed local times', () => {
+    // Reference now: 09:00 AM IST on 2026-10-02 (03:30:00.000Z). Breakfast dose was 08:30 AM (past).
+    const mockNow = new Date('2026-10-02T03:30:00.000Z');
+    // Case A: 1-0-0 (only morning dose at 08:30) on day 0 -> past dose is omitted
+    const schedulePast = generateDoseSchedule({
       medicineName: 'Cetirizine',
       dosage: '10 mg',
       frequency: '1-0-0',
@@ -65,9 +67,58 @@ describe('PRD F11: Reminder Schedule Engine & HMAC Action Token Unit Tests', () 
       timing: 'after_food',
       referenceNow: mockNow
     });
+    expect(schedulePast).toHaveLength(0);
 
-    const firstScheduled = new Date(schedule[0].scheduledTime);
-    expect(firstScheduled.getTime()).toBeGreaterThanOrEqual(mockNow.getTime() + 5 * 60 * 1000);
+    // Case B: 1-0-1 (morning 08:30, evening 20:30) on day 0 -> morning omitted, evening preserved at 20:30 IST
+    const scheduleFuture = generateDoseSchedule({
+      medicineName: 'Cetirizine',
+      dosage: '10 mg',
+      frequency: '1-0-1',
+      startDate: '2026-10-02',
+      durationDays: 1,
+      timing: 'after_food',
+      referenceNow: mockNow
+    });
+    expect(scheduleFuture).toHaveLength(1);
+    expect(scheduleFuture[0].timeStr).toBe('20:30');
+    expect(scheduleFuture[0].scheduledTime).toBe('2026-10-02T15:00:00.000Z'); // 20:30 IST = 15:00 UTC
+  });
+
+  it('generateDoseSchedule and createDoseReminders convert 08:00 Asia/Kolkata to 02:30:00.000Z UTC', () => {
+    // 08:00 AM with_food (0m offset) on 2026-10-30 in Asia/Kolkata
+    const refNow = new Date('2026-10-29T12:00:00.000Z'); // Day before
+    const schedule = generateDoseSchedule({
+      medicineName: 'Thyroxine',
+      dosage: '50 mcg',
+      frequency: '1-0-0',
+      startDate: '2026-10-30',
+      durationDays: 1,
+      timing: 'with_food',
+      mealTimes: { breakfast: '08:00' },
+      referenceNow: refNow
+    });
+
+    expect(schedule).toHaveLength(1);
+    expect(schedule[0].timeStr).toBe('08:00');
+    expect(schedule[0].scheduledTime).toBe('2026-10-30T02:30:00.000Z');
+
+    const reminders = createDoseReminders({
+      prescriptionId: 'RX-TEST-TZ',
+      item: {
+        name: 'Thyroxine',
+        dosage: '50 mcg',
+        frequency: '1-0-0',
+        timing: 'with_food',
+        durationDays: 1
+      },
+      healthId: 'PHI-TEST-TZ',
+      startDate: '2026-10-30',
+      mealTimes: { breakfast: '08:00' },
+      referenceNow: refNow
+    });
+
+    expect(reminders).toHaveLength(1);
+    expect(reminders[0].dueAt).toBe('2026-10-30T02:30:00.000Z');
   });
 
   it('generateActionToken creates valid HMAC token and verifyActionToken verifies signature and expiry', () => {

@@ -951,8 +951,40 @@ export const DigitalPrescriptionForm = ({
                     </div>
                   </div>
 
+                  {/* Packet Group (Pharmacy Pack) */}
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                      Packet Group
+                    </label>
+                    <select
+                      value={med.packet || 'auto'}
+                      onChange={(e) => handleMedicineChange(idx, 'packet', e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-teal-500 font-bold"
+                    >
+                      <option value="auto">Auto (Timing-based)</option>
+                      <option value="A">Packet A (Morning Before Food)</option>
+                      <option value="B">Packet B (Morning After Food)</option>
+                      <option value="C">Packet C (Afternoon / Lunch)</option>
+                      <option value="D">Packet D (Night / Dinner)</option>
+                    </select>
+                  </div>
+
+                  {/* Tablets per Dose */}
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                      Tablets per Dose
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={med.tablets || 1}
+                      onChange={(e) => handleMedicineChange(idx, 'tablets', parseInt(e.target.value, 10) || 1)}
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-teal-500 font-semibold"
+                    />
+                  </div>
+
                   {/* Specific Item Instructions */}
-                  <div className="sm:col-span-2">
+                  <div className="sm:col-span-3">
                     <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
                       Special Item Instructions (Optional)
                     </label>
@@ -1086,6 +1118,55 @@ export const DigitalPrescriptionForm = ({
             </div>
           </div>
         </div>
+
+        {/* Doctor-Approved Pharmacy Packet Grouping Preview */}
+        {medicines.length > 0 && (
+          <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
+            <div className="flex items-center justify-between">
+              <h4 className="font-bold text-xs text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                <CheckCircle className="w-4 h-4 text-teal-600" />
+                <span>Doctor-Approved Pharmacy Packaging (Packet Grouping)</span>
+              </h4>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-teal-100 text-teal-800">
+                Doctor Approved
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-500">
+              The pharmacy will pack medicines according to this approved grouping. Patients identify packets using letters (A, B, C, D).
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2.5">
+              {['A', 'B', 'C', 'D'].map((pkt) => {
+                const pktMeds = medicines.filter((m) => {
+                  const resolved = (m.packet && m.packet !== 'auto')
+                    ? m.packet
+                    : (m.timing === 'before_food' ? 'A' : (String(m.frequency || '').includes('0-0-1') ? 'D' : (String(m.frequency || '').includes('1-1-1') ? 'C' : 'B')));
+                  return resolved === pkt;
+                });
+                const totalTabs = pktMeds.reduce((sum, m) => sum + (parseInt(m.tablets, 10) || 1), 0);
+                if (pktMeds.length === 0) return null;
+                return (
+                  <div key={pkt} className="p-3 bg-white rounded-xl border border-teal-200/70 shadow-2xs space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold text-xs px-2 py-0.5 bg-teal-600 text-white rounded-md">
+                        Packet {pkt}
+                      </span>
+                      <span className="text-[10px] font-bold text-slate-600">
+                        {totalTabs} Tab{totalTabs > 1 ? 's' : ''}/dose
+                      </span>
+                    </div>
+                    <ul className="text-[11px] text-slate-700 space-y-0.5">
+                      {pktMeds.map((m, i) => (
+                        <li key={i} className="truncate font-medium">
+                          • {m.name || 'Medicine'} ({m.dosage})
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Verification & Legal Disclaimer */}
         <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 flex items-center space-x-2 text-[11px] text-emerald-800">

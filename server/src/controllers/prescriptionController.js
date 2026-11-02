@@ -3,6 +3,7 @@ import medicinesConfig from '../config/clinical/medicines.json' with { type: 'js
 import followupIntervalsConfig from '../config/clinical/followupIntervals.json' with { type: 'json' };
 import { evaluatePrescriptionSafety } from '../domain/safety.js';
 import { createDoseReminders, createFollowUpReminders } from '../domain/reminders.js';
+import { assignPrescriptionPacketGroups, parseTabletCount } from '../domain/packetNotifications.js';
 import { notify } from '../services/notify.js';
 import PDFDocument from 'pdfkit';
 import QRCode from 'qrcode';
@@ -359,8 +360,8 @@ export const createDigitalPrescription = async (req, res, next) => {
     const dateStr = getHospitalTodayStr(now);
     const verificationCode = `VCD-${prescriptionId}-${Date.now().toString(36).slice(-4).toUpperCase()}`;
 
-    // Format & validate medicine items
-    const formattedMedicines = medicines.map((m, idx) => ({
+    // Format & validate medicine items with packet groups
+    const rawMedicines = medicines.map((m, idx) => ({
       id: m.id || `item-${idx + 1}`,
       name: m.name || 'Paracetamol',
       dosage: m.dosage || m.dose || '500 mg',
@@ -369,8 +370,43 @@ export const createDigitalPrescription = async (req, res, next) => {
       timing: m.timing || 'after_food',
       durationDays: Number(m.durationDays ?? m.days) || 5,
       notes: m.notes || '',
+      packet: m.packet || m.packetLetter || m.packetGroup || null,
+      tablets: m.tablets || m.tabletCount || parseTabletCount(m),
       status: 'ACTIVE'
     }));
+
+    const formattedMedicines = assignPrescriptionPacketGroups(rawMedicines);
+
+    const packetGrouping = {};
+    for (const m of formattedMedicines) {
+      const p = m.packet || 'A';
+      const dosesPerDay = String(m.frequency || '').includes('1-1-1') ? 3 : String(m.frequency || '').includes('1-0-1') ? 2 : 1;
+      const durationDays = Number(m.durationDays ?? m.days) || 5;
+      const tabletsPerDose = m.tablets || 1;
+      const totalQuantity = tabletsPerDose * dosesPerDay * durationDays;
+
+      if (!packetGrouping[p]) {
+        packetGrouping[p] = {
+          packet: p,
+          packetLetter: p,
+          timing: m.timing || 'after_food',
+          foodInstruction: m.timing === 'before_food' ? '30 minutes before meal' : 'after meal',
+          totalTabletsPerDose: 0,
+          medicines: []
+        };
+      }
+      packetGrouping[p].medicines.push({
+        name: m.name,
+        dosage: m.dosage,
+        strength: m.dosage,
+        tabletsPerDose,
+        durationDays,
+        frequency: m.frequency,
+        timing: m.timing,
+        totalQuantity
+      });
+      packetGrouping[p].totalTabletsPerDose += tabletsPerDose;
+    }
 
     const prescriptionData = {
       id,
@@ -389,6 +425,7 @@ export const createDigitalPrescription = async (req, res, next) => {
       medicalRecordId: medicalRecordId || '',
       date: dateStr,
       medicines: formattedMedicines,
+      packetGrouping,
       doctorNotes,
       safetyResult,
       overrideReason: overrideReason ? overrideReason.trim() : null,
@@ -413,6 +450,7 @@ export const createDigitalPrescription = async (req, res, next) => {
     // 1) Resolve caregiver & patient meal times
     let receiverUids = pUid ? [pUid] : [];
     let patientMealTimes = null;
+    let patientLanguage = 'en';
     try {
       const pSnap = await db.collection('patients').doc(patientHealthId).get();
       if (pSnap.exists) {
@@ -425,9 +463,19 @@ export const createDigitalPrescription = async (req, res, next) => {
           }
         }
         patientMealTimes = pData.mealTimes || null;
+        patientLanguage = pData.language || pData.preferredLanguage || 'en';
       }
     } catch {
       // Non-critical access check
+    }
+
+    if (patientLanguage === 'en' && pUid) {
+      try {
+        const uSnap = await db.collection('users').doc(pUid).get();
+        if (uSnap.exists) {
+          patientLanguage = uSnap.data().language || uSnap.data().prefs?.language || 'en';
+        }
+      } catch (_) {}
     }
 
     // 2) Write canonical dose reminders to reminders collection
@@ -440,7 +488,8 @@ export const createDigitalPrescription = async (req, res, next) => {
         receiverUids,
         startDate: dateStr,
         mealTimes: patientMealTimes || undefined,
-        referenceNow: now
+        referenceNow: now,
+        language: patientLanguage
       });
 
       for (const r of doseReminders) {
@@ -619,7 +668,7 @@ export const updateDigitalPrescription = async (req, res, next) => {
       updatedAt: oldData.updatedAt || oldData.createdAt
     });
 
-    const formattedMedicines = medicines.map((m, idx) => ({
+    const rawMedicines = medicines.map((m, idx) => ({
       id: m.id || `item-${idx + 1}`,
       name: m.name,
       dosage: m.dosage || m.dose || '500 mg',
@@ -628,11 +677,47 @@ export const updateDigitalPrescription = async (req, res, next) => {
       timing: m.timing || 'after_food',
       durationDays: Number(m.durationDays ?? m.days) || 5,
       notes: m.notes || '',
+      packet: m.packet || m.packetLetter || m.packetGroup || null,
+      tablets: m.tablets || m.tabletCount || parseTabletCount(m),
       status: m.status || 'ACTIVE'
     }));
 
+    const formattedMedicines = assignPrescriptionPacketGroups(rawMedicines);
+
+    const packetGrouping = {};
+    for (const m of formattedMedicines) {
+      const p = m.packet || 'A';
+      const dosesPerDay = String(m.frequency || '').includes('1-1-1') ? 3 : String(m.frequency || '').includes('1-0-1') ? 2 : 1;
+      const durationDays = Number(m.durationDays ?? m.days) || 5;
+      const tabletsPerDose = m.tablets || 1;
+      const totalQuantity = tabletsPerDose * dosesPerDay * durationDays;
+
+      if (!packetGrouping[p]) {
+        packetGrouping[p] = {
+          packet: p,
+          packetLetter: p,
+          timing: m.timing || 'after_food',
+          foodInstruction: m.timing === 'before_food' ? '30 minutes before meal' : 'after meal',
+          totalTabletsPerDose: 0,
+          medicines: []
+        };
+      }
+      packetGrouping[p].medicines.push({
+        name: m.name,
+        dosage: m.dosage,
+        strength: m.dosage,
+        tabletsPerDose,
+        durationDays,
+        frequency: m.frequency,
+        timing: m.timing,
+        totalQuantity
+      });
+      packetGrouping[p].totalTabletsPerDose += tabletsPerDose;
+    }
+
     const updatePayload = {
       medicines: formattedMedicines,
+      packetGrouping,
       doctorNotes,
       version,
       supersedes: oldData.version || 1,
@@ -1193,8 +1278,12 @@ export const verifyPrescription = async (req, res, next) => {
         dosage: m.dosage,
         frequency: m.frequency,
         durationDays: m.durationDays,
+        timing: m.timing || 'after_food',
+        packet: m.packet || m.packetLetter || 'A',
+        tablets: m.tablets || m.tabletCount || 1,
         status: m.status || 'ACTIVE'
       })),
+      packetGrouping: rxData.packetGrouping || null,
       dispenseStatus: rxData.dispenseStatus || 'PENDING',
       dispensedAt: rxData.dispensedAt || null
     };

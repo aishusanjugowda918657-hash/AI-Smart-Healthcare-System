@@ -6,6 +6,8 @@
 
 import { assertDbConnected } from '../config/firebase.js';
 import { notify } from '../services/notify.js';
+import { parseSlotTimeToDate } from '../utils/timezoneDate.js';
+import { buildPatientMedicineNotification, parseTabletCount } from '../domain/packetNotifications.js';
 
 export async function processRemindersJob({ nowOverride, batchSize = 100, maxBatches = 1 } = {}) {
   const db = assertDbConnected();
@@ -131,24 +133,60 @@ export async function processRemindersJob({ nowOverride, batchSize = 100, maxBat
         try {
           const first = items[0].data;
 
-          // PRD Section 3.5: Never send reminders for cancelled, completed, or no-show appointments
+          // PRD Section 3.5: Never send reminders for cancelled, completed, no-show, rescheduled, or deleted appointments
           if (first.appointmentId) {
             try {
               const aptSnap = await db.collection('appointments').doc(first.appointmentId).get();
-              if (aptSnap.exists) {
-                const aptData = aptSnap.data();
-                const aptStatus = (aptData.status || '').toLowerCase();
-                if (['cancelled', 'completed', 'no_show'].includes(aptStatus)) {
-                  for (const item of items) {
-                    groupBatch.update(item.doc.ref, {
-                      status: 'cancelled',
-                      cancellationReason: `Appointment in status ${aptStatus}`,
-                      updatedAt: now.toISOString()
-                    });
-                    hasGroupWrites = true;
-                  }
-                  continue;
+              if (!aptSnap.exists) {
+                for (const item of items) {
+                  groupBatch.update(item.doc.ref, {
+                    status: 'cancelled',
+                    cancellationReason: 'Appointment record not found',
+                    updatedAt: now.toISOString()
+                  });
+                  hasGroupWrites = true;
                 }
+                continue;
+              }
+
+              const aptData = aptSnap.data();
+              const aptStatus = (aptData.status || '').toLowerCase();
+
+              // Cancel reminder if appointment date & time has already passed
+              let isPastAppt = false;
+              const apptDate = aptData.date;
+              const slotTime = aptData.timeSlot || aptData.bookedStartAt;
+              if (apptDate && slotTime) {
+                const apptDateObj = parseSlotTimeToDate(apptDate, slotTime);
+                if (apptDateObj && apptDateObj.getTime() <= nowMs) {
+                  isPastAppt = true;
+                }
+              }
+
+              if (['cancelled', 'completed', 'no_show', 'rescheduled'].includes(aptStatus)) {
+                const reason = `Appointment in status ${aptStatus}`;
+                for (const item of items) {
+                  groupBatch.update(item.doc.ref, {
+                    status: 'cancelled',
+                    cancellationReason: reason,
+                    updatedAt: now.toISOString()
+                  });
+                  hasGroupWrites = true;
+                }
+                continue;
+              }
+
+              if (isPastAppt) {
+                const reason = 'Appointment time already passed';
+                for (const item of items) {
+                  groupBatch.update(item.doc.ref, {
+                    status: 'cancelled',
+                    cancellationReason: reason,
+                    updatedAt: now.toISOString()
+                  });
+                  hasGroupWrites = true;
+                }
+                continue;
               }
             } catch (aptCheckErr) {
               console.warn('Appointment status check warning in reminder processor:', aptCheckErr.message);
@@ -162,12 +200,45 @@ export async function processRemindersJob({ nowOverride, batchSize = 100, maxBat
           let body = first.body || 'Scheduled dose reminder';
           let privacyBody = first.privacyBody || 'Medicine reminder';
 
-          if (items.length > 1) {
-            const medNames = items
-              .map((it) => `${it.data.medicineName || it.data.item?.name || 'Medicine'} ${it.data.dosage || ''}`.trim())
-              .join(', ');
+          if (first.type === 'medicine' || first.type === 'medicine_reminder' || first.item?.name) {
+            // Determine patient language from reminder, patient doc, or user doc
+            let patientLang = first.language;
+            if (!patientLang && first.patientUid) {
+              try {
+                const uDoc = await db.collection('users').doc(first.patientUid).get();
+                patientLang = uDoc.data()?.language || uDoc.data()?.prefs?.language;
+              } catch (_) {}
+            }
+            if (!patientLang && first.healthId) {
+              try {
+                const ptDoc = await db.collection('patients').doc(first.healthId).get();
+                patientLang = ptDoc.data()?.preferredLanguage || ptDoc.data()?.language;
+              } catch (_) {}
+            }
+            patientLang = patientLang || 'en';
+
+            const packetLetter = first.packet || first.packetLetter || (first.timing === 'before_food' ? 'A' : 'B');
+            const totalTablets = items.reduce(
+              (sum, it) => sum + (it.data.tabletCount || it.data.tabletsCount || parseTabletCount(it.data.item || it.data)),
+              0
+            );
+
+            // Personalized patient-friendly notification (zero drug names exposed!)
+            const notif = buildPatientMedicineNotification({
+              patientName,
+              packetLetter,
+              tabletCount: totalTablets,
+              timing: first.timing || first.item?.timing || 'after_food',
+              scheduledTime: first.dueAt || now,
+              language: patientLang
+            });
+
+            title = notif.title;
+            body = notif.body;
+            privacyBody = notif.privacyBody;
+          } else if (items.length > 1) {
             title = `${patientName}: Time for your ${items.length} medicines`;
-            body = `${patientName}: Time for ${medNames}`;
+            body = `${patientName}: Scheduled healthcare reminder`;
             privacyBody = `${patientName}: Medicine reminder`;
           }
 
@@ -183,7 +254,12 @@ export async function processRemindersJob({ nowOverride, batchSize = 100, maxBat
                 data: {
                   groupKey,
                   reminderId: items[0].doc.id,
-                  count: items.length
+                  count: items.length,
+                  packet: first.packet || first.packetLetter || 'A',
+                  tabletCount: items.reduce(
+                    (sum, it) => sum + (it.data.tabletCount || it.data.tabletsCount || parseTabletCount(it.data.item || it.data)),
+                    0
+                  )
                 },
                 batch: groupBatch
               });
@@ -261,14 +337,18 @@ export async function processRemindersJob({ nowOverride, batchSize = 100, maxBat
       if (elapsedMinutes >= 15 && !rem.secondaryCaregiverNotified) {
         if (Array.isArray(rem.receiverUids) && rem.receiverUids.length > 1) {
           const secondaryUid = rem.receiverUids[1];
+          const packetLetter = rem.packet || rem.packetLetter || 'A';
+          const isKn = rem.language === 'kn' || String(rem.language).toLowerCase().startsWith('kn');
           try {
             await notify({
               uids: [secondaryUid],
-              title: `Caregiver Alert: ${rem.patientName}'s Medicine`,
-              body: `${rem.patientName} has not taken ${rem.medicineName || 'prescribed medicine'} due at ${rem.dueAt?.slice ? rem.dueAt.slice(11, 16) : 'scheduled time'}.`,
-              privacyBody: `${rem.patientName}: Medicine reminder alert`,
+              title: isKn ? `ಪಾಲಕರ ಜ್ಞಾಪನೆ: ${rem.patientName}` : `Caregiver Alert: ${rem.patientName}'s Medicine`,
+              body: isKn
+                ? `${rem.patientName} ಅವರು ನಿಗದಿತ ಸಮಯಕ್ಕೆ ಪ್ಯಾಕೆಟ್ ${packetLetter} ತೆಗೆದುಕೊಂಡಿಲ್ಲ.`
+                : `${rem.patientName} has not taken Packet ${packetLetter} due at ${rem.dueAt?.slice ? rem.dueAt.slice(11, 16) : 'scheduled time'}.`,
+              privacyBody: isKn ? `${rem.patientName}: ಪ್ಯಾಕೆಟ್ ಜ್ಞಾಪನೆ` : `${rem.patientName}: Packet reminder alert`,
               type: 'caregiver_medicine_reminder',
-              data: { reminderId: doc.id, healthId: rem.healthId },
+              data: { reminderId: doc.id, healthId: rem.healthId, packet: packetLetter },
               batch: escalationBatch
             });
           } catch {
@@ -284,14 +364,18 @@ export async function processRemindersJob({ nowOverride, batchSize = 100, maxBat
       if (elapsedMinutes >= 30 && elapsedMinutes < 60 && !rem.secondReminderSent) {
         const receiverUids = rem.receiverUids || [rem.patientUid].filter(Boolean);
         if (receiverUids.length > 0) {
+          const packetLetter = rem.packet || rem.packetLetter || 'A';
+          const isKn = rem.language === 'kn' || String(rem.language).toLowerCase().startsWith('kn');
           try {
             await notify({
               uids: receiverUids,
-              title: `${rem.patientName}: 2nd Reminder for ${rem.medicineName || 'Medication'}`,
-              body: `Gentle reminder: Please take your ${rem.medicineName || 'prescribed medicine'}.`,
-              privacyBody: `${rem.patientName}: Medicine reminder nudge`,
+              title: isKn ? `${rem.patientName}: ಪ್ಯಾಕೆಟ್ ${packetLetter}ಗೆ 2ನೇ ಜ್ಞಾಪನೆ` : `${rem.patientName}: 2nd Reminder for Packet ${packetLetter}`,
+              body: isKn
+                ? `ಜ್ಞಾಪನೆ: ಸೂಚಿಸಿದಂತೆ ದಯವಿಟ್ಟು ಪ್ಯಾಕೆಟ್ ${packetLetter} ತೆಗೆದುಕೊಳ್ಳಿ.`
+                : `Gentle reminder: Please take Packet ${packetLetter} as prescribed.`,
+              privacyBody: isKn ? `${rem.patientName}: ಔಷಧ ಜ್ಞಾಪನೆ` : `${rem.patientName}: Packet reminder nudge`,
               type: 'medicine_reminder_nudge',
-              data: { reminderId: doc.id },
+              data: { reminderId: doc.id, packet: packetLetter },
               batch: escalationBatch
             });
           } catch {

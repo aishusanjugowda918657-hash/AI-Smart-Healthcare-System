@@ -6,6 +6,31 @@
 
 import crypto from 'crypto';
 import env from '../config/env.js';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc.js';
+import timezone from 'dayjs/plugin/timezone.js';
+import { parseTabletCount, buildPatientMedicineNotification } from './packetNotifications.js';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+const HOSPITAL_TZ = env.HOSPITAL_TZ || 'Asia/Kolkata';
+
+// Resolve a calendar date from the hospital's local timezone, never from the
+// server's UTC date. A Date represents an instant; dose times are local wall times.
+function getHospitalDateString(value) {
+  if (value instanceof Date) return dayjs(value).tz(HOSPITAL_TZ).format('YYYY-MM-DD');
+  const raw = String(value || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  return dayjs(raw).tz(HOSPITAL_TZ).format('YYYY-MM-DD');
+}
+
+// Convert a hospital-local YYYY-MM-DD + HH:mm dose time into the correct UTC instant.
+function hospitalLocalDateTime(dateStr, timeStr) {
+  const parsed = dayjs.tz(`${dateStr} ${timeStr}`, HOSPITAL_TZ);
+  if (!parsed.isValid()) throw new Error(`Invalid medicine reminder date/time: ${dateStr} ${timeStr}`);
+  return parsed.toDate();
+}
 
 const DEFAULT_MEAL_TIMES = {
   breakfast: '08:00',
@@ -111,7 +136,7 @@ export function generateDoseSchedule({
     dailyTimes = slots.map((s) => offsetTimeStr(activeMealTimes[s] || '08:00', offsetMinutes));
   }
 
-  const dateBaseStr = startDate || (referenceNow instanceof Date ? referenceNow.toISOString().split('T')[0] : String(referenceNow).split('T')[0]);
+  const dateBaseStr = startDate ? getHospitalDateString(startDate) : getHospitalDateString(referenceNow);
   const start = new Date(`${dateBaseStr}T00:00:00.000Z`);
   const nowMs = referenceNow.getTime();
   const minFutureMs = nowMs + 5 * 60 * 1000; // First dose at least 5 minutes ahead if today
@@ -127,14 +152,13 @@ export function generateDoseSchedule({
       const timeStr = dailyTimes[timeIdx];
       const [h, m] = timeStr.split(':').map((n) => parseInt(n, 10) || 0);
 
-      const scheduledDateObj = new Date(`${dateStr}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00.000Z`);
+      const localTimeStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+      const scheduledDateObj = hospitalLocalDateTime(dateStr, localTimeStr);
 
-      // Check first dose constraint for day 0
-      let finalScheduledDate = scheduledDateObj;
-      if (dayIdx === 0 && scheduledDateObj.getTime() < minFutureMs) {
-        // If scheduled time has passed today, move first dose 5 minutes in future
-        finalScheduledDate = new Date(minFutureMs);
-      }
+      // Do not silently move a missed morning dose to the afternoon. Keep the
+      // prescribed wall-clock time; omit already-past doses for the first day.
+      if (dayIdx === 0 && scheduledDateObj.getTime() < minFutureMs) continue;
+      const finalScheduledDate = scheduledDateObj;
 
       const doseId = `dose-${Date.now().toString(36)}-${dayIdx + 1}-${timeIdx + 1}-${Math.floor(Math.random() * 1000)}`;
 
@@ -143,7 +167,7 @@ export function generateDoseSchedule({
         medicineName,
         dosage,
         dateStr,
-        timeStr: `${String(finalScheduledDate.getUTCHours()).padStart(2, '0')}:${String(finalScheduledDate.getUTCMinutes()).padStart(2, '0')}`,
+        timeStr: localTimeStr,
         scheduledTime: finalScheduledDate.toISOString(),
         status: 'scheduled',
         dayNumber: dayIdx + 1,
@@ -186,7 +210,8 @@ export function createDoseReminders({
   receiverUids = [],
   startDate,
   mealTimes = DEFAULT_MEAL_TIMES,
-  referenceNow = new Date()
+  referenceNow = new Date(),
+  language = 'en'
 }) {
   const medName = item.name || item.medicineName || 'Medication';
   const dosage = item.dosage || '500 mg';
@@ -194,6 +219,8 @@ export function createDoseReminders({
   const days = Math.max(1, Number(item.durationDays ?? item.days) || 5);
   const timing = item.timing || 'after_food';
   const timingLabel = getTimingLabel(timing);
+  const tabletCount = item.tablets || item.tabletCount || parseTabletCount(item);
+  const packetLetter = String(item.packet || item.packetLetter || item.packetGroup || (timing === 'before_food' ? 'A' : (timing === 'after_food' && (String(frequency).toLowerCase().includes('0-0-1') || String(frequency).toLowerCase().includes('night') || String(frequency).toLowerCase().includes('dinner')) ? 'D' : 'B'))).toUpperCase();
 
   const activeMealTimes = { ...DEFAULT_MEAL_TIMES, ...mealTimes };
 
@@ -210,7 +237,7 @@ export function createDoseReminders({
     dailyTimes = slots.map((s) => offsetTimeStr(activeMealTimes[s] || '08:00', offsetMinutes));
   }
 
-  const dateBaseStr = startDate || (referenceNow instanceof Date ? referenceNow.toISOString().split('T')[0] : String(referenceNow).split('T')[0]);
+  const dateBaseStr = startDate ? getHospitalDateString(startDate) : getHospitalDateString(referenceNow);
   const start = new Date(`${dateBaseStr}T00:00:00.000Z`);
   const nowMs = referenceNow.getTime();
   const minFutureMs = nowMs + 5 * 60 * 1000; // First dose at least 5 minutes ahead if today
@@ -226,13 +253,13 @@ export function createDoseReminders({
       const timeStr = dailyTimes[timeIdx];
       const [h, m] = timeStr.split(':').map((n) => parseInt(n, 10) || 0);
 
-      const scheduledDateObj = new Date(`${dateStr}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00.000Z`);
+      const localTimeStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+      const scheduledDateObj = hospitalLocalDateTime(dateStr, localTimeStr);
 
-      // Check first dose constraint for day 0: at least 5 minutes ahead
-      let finalScheduledDate = scheduledDateObj;
-      if (dayIdx === 0 && scheduledDateObj.getTime() < minFutureMs) {
-        finalScheduledDate = new Date(minFutureMs);
-      }
+      // A dose that has already passed today is missed; do not reschedule it
+      // for 'now + 5 minutes', which can shift an 08:00 dose into the afternoon.
+      if (dayIdx === 0 && scheduledDateObj.getTime() < minFutureMs) continue;
+      const finalScheduledDate = scheduledDateObj;
 
       const dueAtIso = finalScheduledDate.toISOString();
       const dueMinute = dueAtIso.slice(0, 16); // YYYY-MM-DDTHH:mm
@@ -248,6 +275,15 @@ export function createDoseReminders({
         patientUid: receiverUids[0] || '',
         dueAt: dueAtIso,
         exp: tokenExp
+      });
+
+      const notif = buildPatientMedicineNotification({
+        patientName,
+        packetLetter,
+        tabletCount,
+        timing,
+        scheduledTime: finalScheduledDate,
+        language
       });
 
       reminders.push({
@@ -270,6 +306,10 @@ export function createDoseReminders({
           dosage,
           frequency,
           timing,
+          packet: packetLetter,
+          packetLetter,
+          tabletCount,
+          tabletsCount: tabletCount,
           durationDays: days,
           notes: item.notes || ''
         },
@@ -277,9 +317,16 @@ export function createDoseReminders({
         dosage,
         frequency,
         timing,
-        title: `${patientName}: Time for ${medName} ${dosage} (${timingLabel})`,
-        body: `${patientName}: Time for ${medName} ${dosage} (${timingLabel})`,
-        privacyBody: `${patientName}: Medicine reminder`,
+        packet: packetLetter,
+        packetLetter,
+        tabletCount,
+        tabletsCount: tabletCount,
+        foodInstruction: notif.foodInstruction,
+        title: notif.title,
+        body: notif.body,
+        privacyBody: notif.privacyBody,
+        fullText: notif.fullText,
+        language: notif.language,
         actionToken,
         groupKey,
         snoozeCount: 0,

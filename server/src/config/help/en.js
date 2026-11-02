@@ -6,19 +6,20 @@ export const articles = [
   {
     id: 'book_appointment',
     title: 'How to Book an Appointment',
-    keywords: ['book', 'appointment', 'schedule', 'new appointment', 'booking', 'see doctor', 'visit doctor', 'consult', 'consultation'],
-    synonyms: ['make appointment', 'set appointment', 'get appointment', 'book doctor', 'reserve slot', 'fix appointment', 'doctor visit', 'opd booking'],
+    keywords: ['book', 'appointment', 'schedule', 'new appointment', 'booking', 'see doctor', 'visit doctor', 'consult', 'consultation', 'book appointment', 'doctor appointment'],
+    synonyms: ['make appointment', 'set appointment', 'get appointment', 'book doctor', 'reserve slot', 'fix appointment', 'doctor visit', 'opd booking', 'how to book appointment'],
     answer: 'Here is how to book an appointment:',
     steps: [
-      'Go to the **Appointments** page from the sidebar menu.',
-      'Click the **"Book New Appointment"** button.',
-      'Select your preferred **department** and **doctor**.',
-      'Pick a **date** and available **time slot**.',
-      'Confirm the **health disclaimer** checkbox.',
-      'Click **"Confirm Booking"** to complete.'
+      'Open **Book Appointment** from the menu.',
+      'Choose who the visit is for: **Me**, **Family member**, or **Other**.',
+      'Select or describe the **reason for visit** and symptoms.',
+      'Choose an available **doctor**.',
+      'Pick your preferred **date** and **available time slot**.',
+      'Tick the **health disclaimer** and click **"Confirm Booking"**.',
+      'Receive your **token number** and **QR code** to show at the hospital reception.'
     ],
     actionButtons: [
-      { label: '📅 Book Appointment now', route: '/patient/appointments' }
+      { label: '📅 Book Appointment Now', route: '/book-appointment' }
     ],
     followUpChips: ['My Token Status', 'Doctor Timings']
   },
@@ -29,12 +30,12 @@ export const articles = [
     synonyms: ['where am i in queue', 'my queue position', 'am i next', 'how many before me', 'token check', 'queue check', 'wait position'],
     answer: 'To check your token/queue status:',
     steps: [
-      'Open the **Dashboard** — your current token and queue position are shown at the top.',
-      'Or go to **My Appointments** to see the live queue card.',
-      'The card shows your **token number**, **current position**, and **estimated wait time**.'
+      'Open **Live Queue** or the **Patient Dashboard** from the menu.',
+      'The live card displays your **token number**, **current queue position**, and **estimated wait time**.',
+      'Status updates in real time as the doctor calls tokens.'
     ],
     actionButtons: [
-      { label: '🎫 View Live Queue', route: '/patient/dashboard' }
+      { label: '🎫 View Live Queue', route: '/live-queue' }
     ],
     followUpChips: ['Book Appointment', 'Doctor Timings']
   },
@@ -45,12 +46,12 @@ export const articles = [
     synonyms: ['what time doctor comes', 'when is opd', 'doctor availability', 'clinic hours', 'hospital timings', 'opd schedule', 'working hours'],
     answer: 'To check doctor timings:',
     steps: [
-      'Go to **Book Appointment** and select a department.',
-      'Each doctor card shows their **OPD hours** and **available slots**.',
+      'Go to **Book Appointment** from the menu.',
+      'Select your preferred doctor to view their **available slots** and **OPD schedule**.',
       'General OPD hours: **9:00 AM – 1:00 PM** and **2:00 PM – 5:00 PM** (Mon–Sat).'
     ],
     actionButtons: [
-      { label: '🕐 View Doctor Timings', route: '/patient/appointments' }
+      { label: '🕐 View Doctor Timings & Book', route: '/book-appointment' }
     ],
     followUpChips: ['Book Appointment', 'My Token Status']
   },
@@ -61,12 +62,12 @@ export const articles = [
     synonyms: ['view prescription', 'see medicines', 'my prescription', 'check medicines', 'medicine list', 'what medicines', 'prescribed medicines'],
     answer: 'To view your prescriptions:',
     steps: [
-      'Go to **My Prescriptions** from the sidebar menu.',
-      'You will see all past and current prescriptions with dosage details.',
-      'Click on any prescription to see full details including **timing**, **dosage**, and **duration**.'
+      'Go to **Prescriptions** from the sidebar menu.',
+      'View all active and past prescriptions with dosage instructions and timings.',
+      'Click any prescription to review full medicine details and timings.'
     ],
     actionButtons: [
-      { label: '💊 My Prescriptions', route: '/patient/prescriptions' }
+      { label: '💊 My Prescriptions', route: '/prescriptions' }
     ],
     followUpChips: ['Reminders', 'Talk to Staff']
   },
@@ -77,13 +78,13 @@ export const articles = [
     synonyms: ['set reminder', 'when next visit', 'follow up date', 'medicine alert', 'medication reminder', 'pill reminder', 'when to take medicine'],
     answer: 'About medicine reminders and follow-ups:',
     steps: [
-      'Go to **Reminders** from the sidebar — all active medicine reminders are shown.',
-      'Each reminder shows the **medicine name**, **dosage**, **time**, and **status**.',
-      'You can mark medicines as **Taken** or **Missed**.',
-      'Follow-up appointments appear in your **Appointments** page with the scheduled date.'
+      'Go to **Medicine Reminders** from the sidebar menu.',
+      'View your scheduled doses, packets, and timings.',
+      'Mark medicines as **Taken** or **Missed** directly from the tracker.',
+      'Scheduled follow-up appointments appear on your dashboard.'
     ],
     actionButtons: [
-      { label: '⏰ Reminders', route: '/patient/reminders' }
+      { label: '⏰ Medicine Reminders', route: '/medicine-reminders' }
     ],
     followUpChips: ['My Prescriptions', 'Book Appointment']
   },
@@ -96,10 +97,10 @@ export const articles = [
     steps: [
       'Visit the **hospital reception desk** on the ground floor for in-person help.',
       'Call the hospital helpline: **+91 80 1234 5678** (9 AM – 5 PM).',
-      'Or use the **"Talk to Staff"** button below to send an escalation request.'
+      'Or open the **Patient Dashboard** to check reception and queue assistance.'
     ],
     actionButtons: [
-      { label: '📞 Talk to Staff', route: '/patient/support' }
+      { label: '🏥 Patient Dashboard', route: '/patient-dashboard' }
     ],
     followUpChips: ['Book Appointment', 'My Token Status']
   },
@@ -111,12 +112,11 @@ export const articles = [
     answer: 'To view your medical history:',
     steps: [
       'Go to **Medical History** from the sidebar menu.',
-      'You will see a **timeline** of all your past visits, prescriptions, and reports.',
-      'Click on any entry to see full details.',
-      'You can also **share records** with doctors using the Share button.'
+      'View a comprehensive **timeline** of your past consultations, prescriptions, and diagnostic reports.',
+      'Click on any entry to see full clinical details or share records.'
     ],
     actionButtons: [
-      { label: '📋 Medical History', route: '/patient/history' }
+      { label: '📋 Medical History', route: '/medical-history' }
     ],
     followUpChips: ['My Prescriptions', 'Book Appointment']
   },
@@ -127,13 +127,12 @@ export const articles = [
     synonyms: ['cancel my appointment', 'change date', 'move appointment', 'delete appointment', 'undo booking', 'change slot'],
     answer: 'To cancel or reschedule:',
     steps: [
-      'Go to **My Appointments** from the sidebar.',
-      'Find the appointment you want to change.',
-      'Click **"Cancel"** to cancel, or **"Reschedule"** to pick a new date/time.',
-      'Cancelled appointments can be rebooked from the booking page.'
+      'Go to the **Patient Dashboard** from the sidebar.',
+      'Find your appointment card under **Active Appointments**.',
+      'Click **"Cancel"** to release your slot or choose a new slot from the booking page.'
     ],
     actionButtons: [
-      { label: '📅 My Appointments', route: '/patient/appointments' }
+      { label: '📅 Patient Dashboard', route: '/patient-dashboard' }
     ],
     followUpChips: ['Book Appointment', 'Talk to Staff']
   },
@@ -144,12 +143,12 @@ export const articles = [
     synonyms: ['how long wait', 'wait duration', 'when will i be called', 'time remaining', 'queue wait'],
     answer: 'About your wait time:',
     steps: [
-      'Your **estimated wait time** is shown on the Dashboard queue card.',
-      'Wait times are calculated based on the **current queue position** and **average consultation duration**.',
-      'You will get a **notification** when you are next in line.'
+      'Your **estimated wait time** is displayed on the Live Queue and Dashboard.',
+      'Wait times are calculated based on the current queue position and doctor consultation progress.',
+      'You will receive a notification when you are next in line.'
     ],
     actionButtons: [
-      { label: '🎫 View Live Queue', route: '/patient/dashboard' }
+      { label: '🎫 View Live Queue', route: '/live-queue' }
     ],
     followUpChips: ['My Token Status', 'Doctor Timings']
   },

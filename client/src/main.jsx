@@ -3,6 +3,10 @@ import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
 import './index.css';
 import { firebaseConfig } from './config/firebase.js';
+import { initOfflineSyncListeners } from './services/offlineSync.js';
+
+// Initialize offline action replay & reconnection listeners
+initOfflineSyncListeners();
 
 // Register FCM & PWA Service Worker
 if ('serviceWorker' in navigator) {
