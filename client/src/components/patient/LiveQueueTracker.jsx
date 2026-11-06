@@ -792,23 +792,34 @@ export const LiveQueueTracker = () => {
                 </button>
               )}
 
-              {['booked', 'confirmed', 'on_the_way', 'nearby', 'not_arrived', 'checked_in', 'waiting', 'called'].includes(appointment?.status) && !appointment?.lateReported && !['missed', 'no_show', 'completed'].includes(appointment?.status) && (
-                <button
-                  onClick={() => handleAction(`/appointments/${activeApptId}/late`, { lateReason: 'Traffic / Running late' })}
-                  disabled={actionLoading}
-                  className="px-3.5 py-2 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-xl shadow transition-all flex items-center gap-1.5 disabled:opacity-50"
-                >
-                  <Clock className="w-3.5 h-3.5" />
-                  <span>I'll Be Late</span>
-                </button>
-              )}
+              {['checked_in', 'waiting'].includes(appointment?.status) || Boolean(appointment?.checkedInAt) ? (
+                <div className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold rounded-xl">
+                  <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Hospital Check-In Confirmed</span>
+                </div>
+              ) : (
+                <>
+                  {['booked', 'confirmed', 'on_the_way', 'nearby', 'not_arrived'].includes(appointment?.status) && !appointment?.lateReported && !['missed', 'no_show', 'completed'].includes(appointment?.status) && (
+                    <button
+                      onClick={() => handleAction(`/appointments/${activeApptId}/late`, { lateReason: 'Traffic / Running late' })}
+                      disabled={actionLoading}
+                      className="px-3.5 py-2 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-xl shadow transition-all flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      <Clock className="w-3.5 h-3.5" />
+                      <span>I'll Be Late</span>
+                    </button>
+                  )}
 
-              <button
-                onClick={() => navigate('/book-appointment')}
-                className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-200 transition-all flex items-center gap-1.5"
-              >
-                <span>Find Shorter Wait</span>
-              </button>
+                  {!['called', 'in_consultation', 'completed', 'missed', 'no_show'].includes(appointment?.status) && (
+                    <button
+                      onClick={() => navigate('/book-appointment')}
+                      className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-200 transition-all flex items-center gap-1.5"
+                    >
+                      <span>Find Shorter Wait</span>
+                    </button>
+                  )}
+                </>
+              )}
 
               {(['missed', 'not_arrived', 'late'].includes(appointment?.status) || appointment?.isMissed) && (
                 <button

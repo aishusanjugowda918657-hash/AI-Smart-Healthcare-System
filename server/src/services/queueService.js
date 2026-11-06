@@ -143,7 +143,7 @@ export async function computeQueueSnapshot(doctorId, date, { db = assertDbConnec
 
   const activeStatuses = [
     'booked', 'confirmed', 'on_the_way', 'nearby', 'checked_in', 'waiting',
-    'called', 'in_consultation', 'not_arrived', 'late', 'rejoined'
+    'called', 'in_consultation', 'not_arrived', 'late', 'rejoined', 'on_hold'
   ];
 
   const apptsSnap = await db
@@ -471,11 +471,26 @@ export async function computeQueueSnapshot(doctorId, date, { db = assertDbConnec
       ? `Consultations running ~${Math.round((timeFactor - 1) * 100)}% slower today`
       : null);
 
+  const onHoldConsultations = allAppts
+    .filter((a) => a.status === 'on_hold' || a.isHeldByDoctor)
+    .map((a) => ({
+      id: a.id,
+      displayId: a.displayId,
+      tokenNumber: a.tokenNumber || a.tokenLabel,
+      tokenLabel: a.tokenLabel || a.tokenNumber,
+      patientName: a.patientName || a.patientProfile?.fullName || 'Patient',
+      patientHealthId: a.patientHealthId,
+      heldAt: a.heldAt,
+      holdReason: a.holdReason || 'Consultation on hold',
+      status: 'on_hold'
+    }));
+
   const computedQueueData = {
     ...queueData,
     doctorId,
     date,
     currentAppointmentId,
+    onHoldConsultations,
     timeFactor,
     completedCount: completedAppts.length,
     delayMin,
@@ -494,6 +509,7 @@ export async function computeQueueSnapshot(doctorId, date, { db = assertDbConnec
     currentAppointmentId,
     readyCandidates: enrichedReadyCandidates,
     notCheckedIn: enrichedNotCheckedIn,
+    onHoldConsultations,
     totalActive: allAppts.length,
     timeFactor,
     delayMin,
@@ -520,6 +536,7 @@ export async function calculateQueueReadOnly(doctorId, date) {
       currentConsultation: null,
       readyCandidates: [],
       notCheckedIn: [],
+      onHoldConsultations: [],
       totalActive: 0,
       isReadOnly: true
     };
@@ -530,10 +547,11 @@ export async function calculateQueueReadOnly(doctorId, date) {
   const snapshot = await computeQueueSnapshot(doctorId, date, { db, now });
 
   return {
-    queue: { ...snapshot.queueData, isReadOnly: true },
+    queue: { ...snapshot.queueData, onHoldConsultations: snapshot.onHoldConsultations, isReadOnly: true },
     currentConsultation: snapshot.currentConsultation,
     readyCandidates: snapshot.readyCandidates,
     notCheckedIn: snapshot.notCheckedIn,
+    onHoldConsultations: snapshot.onHoldConsultations || [],
     totalActive: snapshot.totalActive,
     isReadOnly: true
   };

@@ -1,4 +1,5 @@
 import { assertDbConnected } from '../config/firebase.js';
+import { AppError } from '../utils/errors.js';
 import { calculatePriorityScore, sortQueueTokens } from '../services/tokenPriorityEngine.js';
 import { calculateWaitingTime, parseFirestoreDate } from '../services/waitingTimeCalculator.js';
 import { clock } from '../utils/clock.js';
@@ -157,7 +158,12 @@ export const callNextPatient = async (req, res, next) => {
         }
       }
       if (doc.exists) {
-        nextToken = { id: doc.id, ...doc.data() };
+        const tData = doc.data();
+        const normStatus = (tData.status || '').toLowerCase();
+        if (['missed', 'completed', 'cancelled', 'no_show'].includes(normStatus)) {
+          throw new AppError('INVALID_STATE', `Token is already marked '${normStatus}' and cannot be called directly.`, 400);
+        }
+        nextToken = { id: doc.id, ...tData };
       }
     }
 
@@ -166,7 +172,7 @@ export const callNextPatient = async (req, res, next) => {
         .collection('tokens')
         .where('doctorUid', '==', doctorUid)
         .where('date', '==', date)
-        .where('status', '==', 'waiting')
+        .where('status', 'in', ['waiting', 'rejoined', 'checked_in'])
         .get();
 
       if (snapshot.empty) {

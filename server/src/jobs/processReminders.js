@@ -6,7 +6,7 @@
 
 import { assertDbConnected } from '../config/firebase.js';
 import { notify } from '../services/notify.js';
-import { parseSlotTimeToDate } from '../utils/timezoneDate.js';
+import { parseSlotTimeToDate, getHospitalTodayStr } from '../utils/timezoneDate.js';
 import { buildPatientMedicineNotification, parseTabletCount } from '../domain/packetNotifications.js';
 
 export async function processRemindersJob({ nowOverride, batchSize = 100, maxBatches = 1 } = {}) {
@@ -156,15 +156,18 @@ export async function processRemindersJob({ nowOverride, batchSize = 100, maxBat
               let isPastAppt = false;
               const apptDate = aptData.date;
               const slotTime = aptData.timeSlot || aptData.bookedStartAt;
-              if (apptDate && slotTime) {
+              const todayStr = getHospitalTodayStr(now);
+              if (apptDate && apptDate < todayStr) {
+                isPastAppt = true;
+              } else if (apptDate && slotTime) {
                 const apptDateObj = parseSlotTimeToDate(apptDate, slotTime);
                 if (apptDateObj && apptDateObj.getTime() <= nowMs) {
                   isPastAppt = true;
                 }
               }
 
-              if (['cancelled', 'completed', 'no_show', 'rescheduled'].includes(aptStatus)) {
-                const reason = `Appointment in status ${aptStatus}`;
+              if (['cancelled', 'completed', 'no_show', 'rescheduled', 'deleted'].includes(aptStatus) || aptData.isDeleted) {
+                const reason = `Appointment in status ${aptStatus || 'deleted'}`;
                 for (const item of items) {
                   groupBatch.update(item.doc.ref, {
                     status: 'cancelled',

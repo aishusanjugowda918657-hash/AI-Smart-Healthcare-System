@@ -415,16 +415,149 @@ export const holdToken = async (req, res, next) => {
     await assertDoctorOwnership(req, apt.doctorId);
 
     const now = clock.now();
+    const nowIso = now.toISOString();
+    const reason = req.body?.reason || 'Doctor placed consultation on hold';
 
     await apptRef.update({
+      status: 'on_hold',
       isHeldByDoctor: true,
-      heldAt: now.toISOString(),
+      heldAt: nowIso,
+      heldBy: req.user ? req.user.uid : null,
+      holdReason: reason,
       updatedAt: now
     });
 
+    // Also update associated token
+    try {
+      const tokRef = db.collection('tokens').doc(`tok-${apt.id || id}`);
+      const tSnap = await tokRef.get();
+      if (tSnap.exists) {
+        await tokRef.update({ status: 'on_hold', isHeldByDoctor: true, heldAt: nowIso, updatedAt: now });
+      } else {
+        const qTokens = await db.collection('tokens').where('appointmentId', '==', apt.id || id).limit(1).get();
+        if (!qTokens.empty) {
+          await qTokens.docs[0].ref.update({ status: 'on_hold', isHeldByDoctor: true, heldAt: nowIso, updatedAt: now });
+        }
+      }
+    } catch (tokErr) {
+      console.warn('Hold token status update warning:', tokErr.message);
+    }
+
+    // Release current room lock if this was the active room patient
+    try {
+      const lockRef = db.collection('counters').doc(`token_lock_${apt.doctorId}_${apt.date}`);
+      const lockSnap = await lockRef.get();
+      if (lockSnap.exists && lockSnap.data().currentApptId === (apt.id || id)) {
+        await lockRef.update({ currentApptId: null, lastHeldAt: nowIso });
+      }
+    } catch (lErr) {}
+
     await recalculateQueue(apt.doctorId, apt.date);
 
-    res.status(200).json(formatSuccessResponse({ id, isHeldByDoctor: true }));
+    await writeAuditLog({
+      action: 'CONSULTATION_HELD',
+      actorUid: req.user ? req.user.uid : 'doctor',
+      actorRole: req.user ? req.user.role : 'doctor',
+      targetType: 'appointment',
+      targetId: apt.id || id,
+      reason
+    });
+
+    res.status(200).json(formatSuccessResponse({ id: apt.id || id, status: 'on_hold', isHeldByDoctor: true }));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * POST /api/queue/resume/:id
+ * Doctor resumes an on-hold consultation when the examination room is free.
+ */
+export const resumeConsultation = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const db = assertDbConnected();
+    let apptRef = db.collection('appointments').doc(id);
+    let snap = await apptRef.get();
+
+    if (!snap.exists) {
+      const dSnap = await db.collection('appointments').where('displayId', '==', id).limit(1).get();
+      if (!dSnap.empty) {
+        apptRef = dSnap.docs[0].ref;
+        snap = dSnap.docs[0];
+      } else {
+        throw new AppError('NOT_FOUND', 'Appointment not found.', 404);
+      }
+    }
+
+    const apt = snap.data();
+    await assertDoctorOwnership(req, apt.doctorId);
+
+    const currentStatus = (apt.status || '').toLowerCase();
+    if (currentStatus !== 'on_hold' && !apt.isHeldByDoctor) {
+      throw new AppError('INVALID_STATE', `Appointment is not on hold (current status: '${apt.status}').`, 400);
+    }
+
+    const now = clock.now();
+    const nowIso = now.toISOString();
+
+    // Check if room currently has another active consultation
+    const activeApptsSnap = await db.collection('appointments')
+      .where('doctorId', '==', apt.doctorId)
+      .where('date', '==', apt.date)
+      .where('status', 'in', ['in_consultation', 'in_room'])
+      .get();
+
+    const activeOther = activeApptsSnap.docs.filter((d) => d.id !== (apt.id || id));
+    if (activeOther.length > 0) {
+      throw new AppError('ROOM_OCCUPIED', 'Cannot resume consultation: another patient is currently in consultation. Please complete or hold the active patient first.', 409);
+    }
+
+    await apptRef.update({
+      status: 'in_consultation',
+      isHeldByDoctor: false,
+      resumedAt: nowIso,
+      updatedAt: now
+    });
+
+    // Update associated token
+    try {
+      const tokRef = db.collection('tokens').doc(`tok-${apt.id || id}`);
+      const tSnap = await tokRef.get();
+      if (tSnap.exists) {
+        await tokRef.update({ status: 'serving', isHeldByDoctor: false, resumedAt: nowIso, updatedAt: now });
+      } else {
+        const qTokens = await db.collection('tokens').where('appointmentId', '==', apt.id || id).limit(1).get();
+        if (!qTokens.empty) {
+          await qTokens.docs[0].ref.update({ status: 'serving', isHeldByDoctor: false, resumedAt: nowIso, updatedAt: now });
+        }
+      }
+    } catch (tokErr) {
+      console.warn('Resume consultation token update warning:', tokErr.message);
+    }
+
+    // Set current active room appointment in lock
+    try {
+      const lockRef = db.collection('counters').doc(`token_lock_${apt.doctorId}_${apt.date}`);
+      await lockRef.set({ currentApptId: apt.id || id, lastResumedAt: nowIso }, { merge: true });
+    } catch (lErr) {}
+
+    await recalculateQueue(apt.doctorId, apt.date);
+
+    await writeAuditLog({
+      action: 'CONSULTATION_RESUMED',
+      actorUid: req.user ? req.user.uid : 'doctor',
+      actorRole: req.user ? req.user.role : 'doctor',
+      targetType: 'appointment',
+      targetId: apt.id || id
+    });
+
+    res.status(200).json(formatSuccessResponse({
+      id: apt.id || id,
+      status: 'in_consultation',
+      isHeldByDoctor: false,
+      resumedAt: nowIso
+    }, 'Consultation resumed successfully.'));
   } catch (error) {
     next(error);
   }
@@ -501,6 +634,8 @@ export const finishConsultation = async (req, res, next) => {
     // Update appointment status to COMPLETED
     await apptRef.update({
       status: 'completed',
+      isHeldByDoctor: false,
+      heldAt: null,
       consultEndAt: nowIso,
       actualDurationMinutes: durationMin,
       live: null,

@@ -58,6 +58,7 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
   const [currentConsultation, setCurrentConsultation] = useState(null);
   const [readyCandidates, setReadyCandidates] = useState([]);
   const [notCheckedIn, setNotCheckedIn] = useState([]);
+  const [onHoldConsultations, setOnHoldConsultations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [actionMessage, setActionMessage] = useState('');
@@ -80,6 +81,7 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
         setCurrentConsultation(res.data.data.currentConsultation);
         setReadyCandidates(res.data.data.readyCandidates || []);
         setNotCheckedIn(res.data.data.notCheckedIn || []);
+        setOnHoldConsultations(res.data.data.onHoldConsultations || res.data.data.queue?.onHoldConsultations || []);
         setError(null);
       } else {
         setError(res.data?.error?.message || 'Failed to fetch doctor queue');
@@ -270,6 +272,21 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
       if (res.data?.success) {
         setActionMessage(`Token ${tokenText || id} placed on hold.`);
         fetchQueue();
+      }
+    } catch (err) {
+      setError(err.response?.data?.message || err.message);
+    }
+  };
+
+  const handleResumeConsultation = async (id, tokenText) => {
+    try {
+      setActionMessage('');
+      const res = await API.post(`/queue/resume/${id}`);
+      if (res.data?.success) {
+        setActionMessage(`Consultation resumed for ${tokenText || id}.`);
+        fetchQueue();
+      } else {
+        setError(res.data?.error?.message || 'Failed to resume consultation');
       }
     } catch (err) {
       setError(err.response?.data?.message || err.message);
@@ -550,6 +567,13 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
                           Finish Consultation
                         </button>
                         <button
+                          onClick={() => handleHoldToken(currentConsultation.id, currentConsultation.tokenLabel)}
+                          className="px-3 py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 font-semibold text-xs rounded-lg transition"
+                          title="Place consultation on hold to attend emergency or await tests"
+                        >
+                          Hold Consultation
+                        </button>
+                        <button
                           onClick={() => handleNoShow(currentConsultation.id)}
                           className="px-3 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-semibold text-xs rounded-lg transition"
                           title="Mark patient as No-Show if they failed to arrive"
@@ -571,6 +595,51 @@ export default function DoctorQueueScreen({ doctorId: propDoctorId, doctorName: 
                 >
                   Call Next Patient
                 </button>
+              </div>
+            )}
+
+            {/* On Hold Consultations Section */}
+            {onHoldConsultations.length > 0 && (
+              <div className="mt-4 pt-4 border-t border-slate-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse" />
+                    <h4 className="text-xs font-bold text-amber-900 uppercase tracking-wider">
+                      On Hold Consultations ({onHoldConsultations.length})
+                    </h4>
+                  </div>
+                  <span className="text-[10px] font-semibold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
+                    Resume When Room Free
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {onHoldConsultations.map((hApt) => {
+                    const roomOccupied = Boolean(currentConsultation && ['in_consultation', 'in_room'].includes(currentConsultation.status));
+                    return (
+                      <div key={hApt.id} className="p-3 bg-amber-50/50 rounded-xl border border-amber-200 flex items-center justify-between shadow-sm">
+                        <div>
+                          <div className="flex items-center space-x-2">
+                            <span className="font-mono text-xs font-bold text-amber-900 bg-amber-100 px-1.5 py-0.5 rounded">
+                              {hApt.tokenLabel || hApt.tokenNumber}
+                            </span>
+                            <span className="text-xs font-bold text-slate-800">{hApt.patientName}</span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 mt-0.5">
+                            Reason: {hApt.holdReason || 'Placed on hold by doctor'}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => handleResumeConsultation(hApt.id, hApt.tokenLabel || hApt.tokenNumber)}
+                          disabled={roomOccupied}
+                          className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-40 disabled:hover:bg-amber-600 text-white font-bold text-xs rounded-lg shadow-sm transition"
+                          title={roomOccupied ? 'Finish or hold active patient before resuming' : 'Resume this consultation'}
+                        >
+                          Resume Consultation
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </div>

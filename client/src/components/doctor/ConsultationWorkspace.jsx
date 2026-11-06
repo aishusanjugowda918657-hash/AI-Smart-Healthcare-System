@@ -262,12 +262,14 @@ export const ConsultationWorkspace = () => {
   const [diagnosisNotes, setDiagnosisNotes] = useState('');
   const [advice, setAdvice] = useState('');
   const [symptoms, setSymptoms] = useState('');
+  const [consultationMode, setConsultationMode] = useState('quick'); // 'quick' (default 4 core fields) | 'full'
 
   // Digital Prescription State
   const [includePrescription, setIncludePrescription] = useState(false);
   const [medicines, setMedicines] = useState([]);
   const [verifiedByDoctor, setVerifiedByDoctor] = useState(false);
   const [showRxPreview, setShowRxPreview] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
 
   // Follow-up State
   const [followUpRequired, setFollowUpRequired] = useState(false);
@@ -549,6 +551,56 @@ export const ConsultationWorkspace = () => {
     setFollowUpDate(d.toISOString().split('T')[0]);
   };
 
+  // ── AI-Assisted Smart Prescription Suggestions ─────────────────────────────
+  const handleAiSuggest = async () => {
+    try {
+      setAiLoading(true);
+      setMessage(null);
+      const res = await API.post('/prescriptions/ai-suggest', {
+        patientHealthId,
+        diagnosis: diagnosisNotes,
+        symptoms: `${chiefComplaint} ${symptoms}`,
+        allergies: patientAllergies,
+        patientAge
+      });
+      if (res.data?.success && Array.isArray(res.data.suggestions)) {
+        const suggestions = res.data.suggestions;
+        setIncludePrescription(true);
+        setMedicines(suggestions.map((s) => ({
+          name: s.name,
+          strength: s.dosage,
+          dosage: s.dosage,
+          route: 'Oral',
+          frequency: s.frequency,
+          durationDays: String(s.durationDays),
+          timing: s.timing,
+          packet: s.packet,
+          tablets: s.tablets || 1,
+          quantity: computeQuantity(s.frequency, s.durationDays),
+          notes: s.reason || ''
+        })));
+        if (res.data.safetyAlerts?.length > 0) {
+          setMessage({
+            type: 'warning',
+            text: `AI generated suggestions with ${res.data.safetyAlerts.length} safety alert(s). Please review carefully.`
+          });
+        } else {
+          setMessage({
+            type: 'success',
+            text: 'AI prescription suggestions populated based on clinical context. Review and sign to approve.'
+          });
+        }
+      }
+    } catch (err) {
+      setMessage({
+        type: 'error',
+        text: err.response?.data?.message || err.message || 'Failed to generate AI prescription suggestions'
+      });
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   // ── Copy Health ID ─────────────────────────────────────────────────────────
   const copyHealthId = () => {
     if (!patientHealthId) return;
@@ -615,9 +667,11 @@ export const ConsultationWorkspace = () => {
             dosage: m.dosage.trim(),
             route: m.route || 'Oral',
             frequency: m.frequency,
-            reminderTimes: ['08:00 AM', '08:00 PM'],
+            reminderTimes: m.reminderTimes || ['08:00 AM', '08:00 PM'],
             timing: m.timing || 'after_food',
             durationDays: Number(m.durationDays) || 5,
+            packet: m.packet || m.packetLetter || (m.timing === 'before_food' ? 'A' : 'B'),
+            tablets: Number(m.tablets) || 1,
             quantity: Number(m.quantity) || computeQuantity(m.frequency, m.durationDays),
             notes: m.notes || ''
           })),
@@ -1193,16 +1247,43 @@ export const ConsultationWorkspace = () => {
               {/* SECTION 3: STRUCTURED CLINICAL DOCUMENTATION (SOAP)           */}
               {/* ──────────────────────────────────────────────────────────── */}
               <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-4">
-                <div className="flex items-center space-x-2 pb-3 border-b border-slate-100 text-indigo-900 font-extrabold text-xs uppercase tracking-wider">
-                  <FileText className="w-4 h-4 text-indigo-600" />
-                  <span>Section 3 — Clinical Documentation (SOAP Evaluation)</span>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
+                  <div className="flex items-center space-x-2 text-indigo-900 font-extrabold text-xs uppercase tracking-wider">
+                    <FileText className="w-4 h-4 text-indigo-600" />
+                    <span>Section 3 — Clinical Documentation ({consultationMode === 'quick' ? 'Quick Consultation' : 'Full Evaluation'})</span>
+                  </div>
+
+                  <div className="flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200 text-xs self-start sm:self-auto">
+                    <button
+                      type="button"
+                      onClick={() => setConsultationMode('quick')}
+                      className={`px-3 py-1 rounded-lg font-bold transition-all ${
+                        consultationMode === 'quick'
+                          ? 'bg-white text-indigo-700 shadow-sm'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Quick Consultation
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConsultationMode('full')}
+                      className={`px-3 py-1 rounded-lg font-bold transition-all ${
+                        consultationMode === 'full'
+                          ? 'bg-white text-indigo-700 shadow-sm'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Full Consultation
+                    </button>
+                  </div>
                 </div>
 
                 <div className="space-y-4 text-xs">
                   {/* Chief Complaint */}
                   <div>
                     <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                      Chief Complaint (CC) *
+                      Chief Complaint (CC) & Symptoms *
                     </label>
                     <input
                       type="text"
@@ -1213,34 +1294,36 @@ export const ConsultationWorkspace = () => {
                     />
                   </div>
 
-                  {/* History of Present Illness & Physical Examination */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                        History of Present Illness (HPI)
-                      </label>
-                      <textarea
-                        rows="3"
-                        value={hpi}
-                        onChange={(e) => setHpi(e.target.value)}
-                        placeholder="Onset, duration, severity, radiation, aggravating & relieving factors..."
-                        className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-semibold outline-none focus:ring-2 focus:ring-teal-500"
-                      />
-                    </div>
+                  {/* History of Present Illness & Physical Examination (Full Mode) */}
+                  {consultationMode === 'full' && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                          History of Present Illness (HPI)
+                        </label>
+                        <textarea
+                          rows="3"
+                          value={hpi}
+                          onChange={(e) => setHpi(e.target.value)}
+                          placeholder="Onset, duration, severity, radiation, aggravating & relieving factors..."
+                          className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-semibold outline-none focus:ring-2 focus:ring-teal-500"
+                        />
+                      </div>
 
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                        Physical Examination Findings
-                      </label>
-                      <textarea
-                        rows="3"
-                        value={examination}
-                        onChange={(e) => setExamination(e.target.value)}
-                        placeholder="General condition, cardiovascular, respiratory, abdominal exam..."
-                        className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-semibold outline-none focus:ring-2 focus:ring-teal-500"
-                      />
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                          Physical Examination Findings
+                        </label>
+                        <textarea
+                          rows="3"
+                          value={examination}
+                          onChange={(e) => setExamination(e.target.value)}
+                          placeholder="General condition, cardiovascular, respiratory, abdominal exam..."
+                          className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-semibold outline-none focus:ring-2 focus:ring-teal-500"
+                        />
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   {/* Assessment & Diagnosis (Required) */}
                   <div>
@@ -1300,6 +1383,17 @@ export const ConsultationWorkspace = () => {
                   </div>
 
                   <div className="flex items-center space-x-3">
+                    <button
+                      type="button"
+                      onClick={handleAiSuggest}
+                      disabled={aiLoading}
+                      className="px-3 py-1.5 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-xl transition-all flex items-center space-x-1.5 shadow-sm disabled:opacity-50"
+                      title="AI suggest medicines based on diagnosis and clinical presentation"
+                    >
+                      <Sparkles className={`w-3.5 h-3.5 ${aiLoading ? 'animate-spin' : ''}`} />
+                      <span>{aiLoading ? 'Generating...' : 'AI Suggest Prescriptions'}</span>
+                    </button>
+
                     {includePrescription && medicines.length > 0 && (
                       <button
                         type="button"
@@ -1431,8 +1525,8 @@ export const ConsultationWorkspace = () => {
                           </div>
                         </div>
 
-                        {/* Second Row: Duration, Quantity, Timing, Instructions */}
-                        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs pt-1">
+                        {/* Second Row: Duration, Packet Group, Tablets, Meal Timing, Instructions */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 text-xs pt-1">
                           {/* Duration Days */}
                           <div>
                             <label className="text-[10px] text-slate-500 font-bold uppercase block mb-1">
@@ -1449,21 +1543,39 @@ export const ConsultationWorkspace = () => {
                             />
                           </div>
 
-                          {/* Quantity */}
+                          {/* Packet Group */}
                           <div>
                             <label className="text-[10px] text-slate-500 font-bold uppercase block mb-1">
-                              Quantity
+                              Packet Group
+                            </label>
+                            <select
+                              value={med.packet || (med.timing === 'before_food' ? 'A' : 'B')}
+                              onChange={(e) => updateMedicine(idx, 'packet', e.target.value)}
+                              className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-semibold outline-none focus:ring-2 focus:ring-teal-500"
+                            >
+                              <option value="A">Packet A (Morning)</option>
+                              <option value="B">Packet B (Night)</option>
+                              <option value="C">Packet C (Afternoon)</option>
+                              <option value="D">Packet D (Special)</option>
+                            </select>
+                          </div>
+
+                          {/* Tablets per Dose */}
+                          <div>
+                            <label className="text-[10px] text-slate-500 font-bold uppercase block mb-1">
+                              Tablets / Dose
                             </label>
                             <input
                               type="number"
-                              value={med.quantity}
-                              onChange={(e) => updateMedicine(idx, 'quantity', e.target.value)}
-                              placeholder="10"
+                              min="1"
+                              value={med.tablets || 1}
+                              onChange={(e) => updateMedicine(idx, 'tablets', e.target.value)}
+                              placeholder="1"
                               className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-semibold outline-none focus:ring-2 focus:ring-teal-500"
                             />
                           </div>
 
-                          {/* Timing */}
+                          {/* Meal Timing */}
                           <div>
                             <label className="text-[10px] text-slate-500 font-bold uppercase block mb-1">
                               Meal Timing
@@ -1479,8 +1591,8 @@ export const ConsultationWorkspace = () => {
                             </select>
                           </div>
 
-                          {/* Notes */}
-                          <div>
+                          {/* Instructions */}
+                          <div className="lg:col-span-2">
                             <label className="text-[10px] text-slate-500 font-bold uppercase block mb-1">
                               Special Instructions
                             </label>
@@ -1488,7 +1600,7 @@ export const ConsultationWorkspace = () => {
                               type="text"
                               value={med.notes}
                               onChange={(e) => updateMedicine(idx, 'notes', e.target.value)}
-                              placeholder="e.g. Take with plenty of water"
+                              placeholder="e.g. Take with warm water"
                               className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-semibold outline-none focus:ring-2 focus:ring-teal-500"
                             />
                           </div>

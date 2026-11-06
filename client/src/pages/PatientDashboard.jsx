@@ -188,6 +188,51 @@ export const PatientDashboard = () => {
         />
       )}
 
+      {/* Prominent Emergency Escalation Alert Banner */}
+      {patientProfile?.emergencyAlert?.active && (
+        <div className="bg-gradient-to-r from-rose-700 via-rose-800 to-red-900 border-2 border-rose-400 text-white rounded-3xl p-5 sm:p-6 shadow-2xl space-y-4 animate-pulse">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-rose-500/50 pb-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center shrink-0">
+                <AlertCircle className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h2 className="text-lg sm:text-xl font-black tracking-wide text-white uppercase">
+                    🚨 Immediate Emergency Care Required
+                  </h2>
+                  <span className="px-2.5 py-0.5 bg-rose-950/80 text-rose-200 border border-rose-400 text-[10px] font-extrabold rounded-full uppercase tracking-wider">
+                    Severity: Critical
+                  </span>
+                </div>
+                <p className="text-xs text-rose-100 mt-0.5">
+                  Confirmed by: <span className="font-bold text-white">{patientProfile.emergencyAlert.confirmedByName || 'Clinical Triage Team'}</span> • {patientProfile.emergencyAlert.confirmedAt ? new Date(patientProfile.emergencyAlert.confirmedAt).toLocaleTimeString() : 'Recently'}
+                </p>
+              </div>
+            </div>
+
+            <a
+              href="tel:108"
+              className="px-4 py-2 bg-white hover:bg-rose-50 text-rose-800 font-extrabold text-xs rounded-xl shadow-lg flex items-center gap-2 transition-all shrink-0"
+            >
+              <Phone className="w-4 h-4 text-rose-600" />
+              Call Emergency (108)
+            </a>
+          </div>
+
+          <div className="bg-rose-950/60 border border-rose-400/40 rounded-2xl p-4 space-y-2 text-xs">
+            <p className="text-rose-100 font-medium">
+              <span className="font-bold text-white">Clinical Assessment: </span>
+              {patientProfile.emergencyAlert.rationale || 'High-risk red-flag symptoms identified during triage.'}
+            </p>
+            <p className="text-white font-bold bg-rose-900/80 p-2.5 rounded-xl border border-rose-500/50 flex items-center gap-2">
+              <span className="inline-block w-2 h-2 rounded-full bg-white shrink-0 animate-ping" />
+              <span>{patientProfile.emergencyAlert.instructions || 'Please proceed directly to the Emergency Room / Casualty immediately. Present your Health ID at the triage counter.'}</span>
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Welcome Banner */}
       <div className="bg-gradient-to-r from-indigo-700 via-indigo-800 to-teal-700 text-white rounded-3xl p-5 sm:p-8 shadow-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 min-w-0">
         <div className="min-w-0 flex-1">

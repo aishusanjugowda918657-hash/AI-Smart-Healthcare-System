@@ -7,6 +7,7 @@ import {
   callNextPatient,
   callSpecificToken,
   holdToken,
+  resumeConsultation,
   finishConsultation,
   extendConsultation,
   undoExtendConsultation,
@@ -40,6 +41,7 @@ router.post('/start/:id', requireAuth, requireRole('doctor', 'admin'), startCons
 router.post('/doctor/:doctorId/end-session', requireAuth, requireRole('doctor', 'admin'), endDoctorSession);
 router.post('/end-session', requireAuth, requireRole('doctor', 'admin'), endDoctorSession);
 router.post('/hold/:id', requireAuth, holdToken);
+router.post('/resume/:id', requireAuth, requireRole('doctor', 'admin'), resumeConsultation);
 router.post('/finish', requireAuth, finishConsultation);
 router.post('/extend', requireAuth, requireRole('doctor', 'admin'), extendConsultation);
 router.post('/undo-extend', requireAuth, requireRole('doctor', 'admin'), undoExtendConsultation);

@@ -147,9 +147,38 @@ export const AppointmentBookingForm = () => {
     setTriageLoading(true);
     const combinedReason = `${reasonChips.join(', ')}. ${reasonText}`.trim();
 
+    let activeHealthId = patientProfile?.healthId || patientProfile?.patientHealthId || '';
+    let activePatientName = patientProfile?.fullName || currentUser?.displayName || 'Self';
+    let activePhone = patientProfile?.phone || currentUser?.phoneNumber || '';
+    let activeAge = patientProfile?.age || '';
+    let activePatientType = 'REGISTERED PATIENT';
+
+    if (patientType === 'family' && selectedFamilyId) {
+      const member = familyMembers.find((f) => f.id === selectedFamilyId);
+      if (member) {
+        activeHealthId = member.healthId || '';
+        activePatientName = member.fullName || member.name;
+        activePhone = member.phone || activePhone;
+        activeAge = member.age || '';
+        activePatientType = 'REGISTERED PATIENT';
+      }
+    } else if (patientType === 'temp' && tempPatient.name) {
+      activeHealthId = '';
+      activePatientName = tempPatient.name;
+      activePhone = tempPatient.phone || '';
+      activeAge = tempPatient.age || '';
+      activePatientType = 'WALK-IN / UNREGISTERED';
+    }
+
     try {
       const res = await API.post('/booking/triage', {
         reasonText: combinedReason || 'Routine consultation',
+        patientHealthId: activeHealthId,
+        patientName: activePatientName,
+        phone: activePhone,
+        age: activeAge,
+        patientType: activePatientType,
+        patientUid: currentUser?.uid || null,
         answers: {
           type: isFollowup === 'yes' ? 'followup' : 'new',
           duration: symptomDays,
@@ -743,9 +772,6 @@ export const AppointmentBookingForm = () => {
           </div>
           <p className="text-xs text-slate-300">
             Suggested Department: <span className="font-bold text-slate-100 uppercase">{formatDepartmentName(triageData?.departmentId)}</span> • Urgency: <span className="font-bold text-emerald-400 uppercase">{triageData?.urgencySuggested}</span>
-          </p>
-          <p className="text-xs text-slate-400 italic">
-            "{triageData?.followUpQuestion || 'No additional urgent symptoms detected.'}"
           </p>
         </div>
       )}

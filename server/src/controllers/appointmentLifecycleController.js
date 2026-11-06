@@ -955,6 +955,10 @@ export const reportLate = async (req, res, next) => {
       throw new AppError('INVALID_STATE', `Cannot report late for appointment with status '${apt.status}'.`, 400);
     }
 
+    if (normStatus === 'checked_in' || apt.checkedInAt) {
+      throw new AppError('ALREADY_CHECKED_IN', 'Cannot report late after hospital check-in.', 400);
+    }
+
     const now = clock.now();
     const nowIso = now.toISOString();
     const settings = await getGlobalSettings();
@@ -1149,12 +1153,12 @@ export const rejoinQueue = async (req, res, next) => {
       // Place strictly after 3rd waiting candidate
       const targetCand = sortedWaiting[2];
       const targetMs = getCandidateTimeMs(targetCand);
-      orderOverrideAt = new Date(targetMs + 1000).toISOString();
+      orderOverrideAt = new Date(Math.max(now.getTime(), targetMs) + 1000).toISOString();
     } else if (sortedWaiting.length > 0) {
       // Place after the last waiting candidate
       const lastCand = sortedWaiting[sortedWaiting.length - 1];
       const lastMs = getCandidateTimeMs(lastCand);
-      orderOverrideAt = new Date(lastMs + 1000).toISOString();
+      orderOverrideAt = new Date(Math.max(now.getTime(), lastMs) + 1000).toISOString();
     } else {
       orderOverrideAt = nowIso;
     }

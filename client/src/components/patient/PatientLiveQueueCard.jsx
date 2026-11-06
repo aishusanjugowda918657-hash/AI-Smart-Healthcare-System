@@ -303,29 +303,40 @@ export default function PatientLiveQueueCard({ appointmentId, onOpenFindShorterW
         </div>
 
         {/* Secondary Actions Row */}
-        <div className="grid grid-cols-3 gap-2">
-          <button
-            onClick={handleOnMyWay}
-            disabled={isCheckedIn || isOnTheWay}
-            className="py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold text-xs rounded-lg border border-blue-200 transition disabled:opacity-50"
-          >
-            I'm On My Way
-          </button>
+        {isCheckedIn ? (
+          <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-center space-y-1">
+            <div className="flex items-center justify-center space-x-1.5 text-emerald-800 text-xs font-bold">
+              <span>✓ Hospital Check-In Confirmed</span>
+            </div>
+            <p className="text-[11px] text-emerald-600">
+              You are checked in at the clinic. Token <strong>{appointment.tokenLabel || appointment.tokenNumber}</strong> • Position #{live.position || 1}
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              onClick={handleOnMyWay}
+              disabled={isCheckedIn || isOnTheWay}
+              className="py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold text-xs rounded-lg border border-blue-200 transition disabled:opacity-50"
+            >
+              I'm On My Way
+            </button>
 
-          <button
-            onClick={() => setShowLateInput(!showLateInput)}
-            className="py-2 bg-amber-50 hover:bg-amber-100 text-amber-700 font-semibold text-xs rounded-lg border border-amber-200 transition"
-          >
-            I'll Be Late
-          </button>
+            <button
+              onClick={() => setShowLateInput(!showLateInput)}
+              className="py-2 bg-amber-50 hover:bg-amber-100 text-amber-700 font-semibold text-xs rounded-lg border border-amber-200 transition"
+            >
+              I'll Be Late
+            </button>
 
-          <button
-            onClick={() => onOpenFindShorterWait && onOpenFindShorterWait(appointment.departmentId)}
-            className="py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 font-semibold text-xs rounded-lg border border-slate-300 transition"
-          >
-            Shorter Wait?
-          </button>
-        </div>
+            <button
+              onClick={() => onOpenFindShorterWait && onOpenFindShorterWait(appointment.departmentId)}
+              className="py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 font-semibold text-xs rounded-lg border border-slate-300 transition"
+            >
+              Shorter Wait?
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

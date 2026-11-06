@@ -53,7 +53,12 @@ function sameSlotWindow(a, b) {
 export function effectiveLevel(appointment, now, cfg = { fairnessBumpMin: 30 }) {
   let level = appointment.clinicalLevel || ClinicalLevel.ROUTINE;
   if (level === 1) {
-    const refTime = appointment.orderOverrideAt || appointment.rejoinedAt || appointment.bookedStartAt;
+    let refTime;
+    if (appointment.status === 'rejoined' || appointment.rejoinedAt) {
+      refTime = appointment.rejoinedAt || appointment.orderOverrideAt;
+    } else {
+      refTime = appointment.orderOverrideAt || appointment.bookedStartAt;
+    }
     const lateMin = minutesBetween(refTime, now, appointment.date);
     if (lateMin >= (cfg.fairnessBumpMin || 30)) {
       level = ClinicalLevel.URGENT; // 2

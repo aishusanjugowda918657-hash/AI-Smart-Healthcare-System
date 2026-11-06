@@ -12,7 +12,9 @@ export const writeAuditLog = async ({
   targetType,
   targetId,
   healthId = null,
-  requestId = null
+  requestId = null,
+  details = null,
+  ...rest
 }) => {
   try {
     const db = getDb();
@@ -25,8 +27,10 @@ export const writeAuditLog = async ({
       targetType,
       targetId: String(targetId),
       healthId: healthId || null,
+      details: details || null,
       at: new Date(),
-      requestId: requestId || null
+      requestId: requestId || null,
+      ...rest
     });
   } catch (err) {
     console.error('Failed to write audit log:', err.message);

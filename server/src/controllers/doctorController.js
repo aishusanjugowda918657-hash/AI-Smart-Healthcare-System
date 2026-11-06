@@ -130,7 +130,15 @@ export const getDoctors = async (req, res, next) => {
 
     let query = db.collection('doctors');
     if (departmentId) {
-      query = query.where('departmentId', '==', departmentId);
+      const cleanDeptId = departmentId.toString().trim();
+      const lowerDeptId = cleanDeptId.toLowerCase();
+      const upperDeptId = cleanDeptId.toUpperCase();
+      const deptVariants = Array.from(new Set([cleanDeptId, lowerDeptId, upperDeptId]));
+      if (deptVariants.length === 1) {
+        query = query.where('departmentId', '==', deptVariants[0]);
+      } else {
+        query = query.where('departmentId', 'in', deptVariants);
+      }
     }
 
     const snapshot = await query.get();
@@ -996,33 +1004,52 @@ export const doctorGetMyPatients = async (req, res, next) => {
         myDoctorSet.has(data.doctorUid) ||
         myDoctorSet.has(data.assignedDoctorId);
 
-      if (isDocMatch && statusLower === 'completed' && data.date && data.date >= oneYearAgoStr) {
-        const hId = data.patientHealthId;
+      const rawDate = data.date
+        ? (data.date.toDate ? data.date.toDate().toISOString().split('T')[0] : String(data.date).split('T')[0])
+        : null;
+
+      if (isDocMatch && statusLower === 'completed' && rawDate && rawDate >= oneYearAgoStr) {
+        const hId = data.patientHealthId || data.healthId;
         if (hId) {
-          if (!patientVisits.has(hId) || data.date > patientVisits.get(hId)) {
-            patientVisits.set(hId, data.date);
+          if (!patientVisits.has(hId) || rawDate > (patientVisits.get(hId)?.date || '')) {
+            patientVisits.set(hId, { date: rawDate, patientName: data.patientName || 'Patient' });
           }
         }
       }
     });
 
-    const uniqueHealthIds = Array.from(patientVisits.keys()).slice(0, 20);
+    const uniqueHealthIds = Array.from(patientVisits.keys()).slice(0, 50);
 
     const patients = await Promise.all(
       uniqueHealthIds.map(async (healthId) => {
+        let pData = null;
         const pSnap = await db.collection('patients').doc(healthId).get();
-        const pData = pSnap.exists ? pSnap.data() : { name: 'Patient' };
-        const computedYears = calculateAge(pData.dob);
-        const age = computedYears !== null ? `${computedYears} years` : (pData.age || 'N/A');
+        if (pSnap.exists) {
+          pData = pSnap.data();
+        } else {
+          const qSnap = await db.collection('patients').where('patientHealthId', '==', healthId).limit(1).get();
+          if (!qSnap.empty) {
+            pData = qSnap.docs[0].data();
+          } else {
+            const qSnap2 = await db.collection('patients').where('healthId', '==', healthId).limit(1).get();
+            if (!qSnap2.empty) pData = qSnap2.docs[0].data();
+          }
+        }
+
+        const apptInfo = patientVisits.get(healthId) || {};
+        const fallbackName = apptInfo.patientName || 'Patient';
+        const finalName = pData?.fullName || pData?.name || fallbackName;
+        const computedYears = pData ? calculateAge(pData.dob) : null;
+        const age = computedYears !== null ? `${computedYears} years` : (pData?.age || 'N/A');
 
         return {
           healthId,
           patientHealthId: healthId,
-          name: pData.name || pData.fullName || 'Patient',
-          fullName: pData.name || pData.fullName || 'Patient',
+          name: finalName,
+          fullName: finalName,
           age,
-          gender: pData.gender || 'other',
-          lastVisitDate: patientVisits.get(healthId) || 'Recent'
+          gender: pData?.gender || 'other',
+          lastVisitDate: apptInfo.date || 'Recent'
         };
       })
     );

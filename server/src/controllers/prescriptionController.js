@@ -59,6 +59,184 @@ export const searchMedicines = async (req, res, next) => {
 };
 
 /**
+ * AI-Assisted Smart Prescription Suggestions (PRD F9)
+ * Maps clinical context (symptoms, diagnosis, chief complaint) to relevant medications from master catalogue.
+ * Validates against patient allergies and contraindications.
+ * Returns structured candidate medications with standard dosages, schedules, packet groups, and rationale.
+ */
+export const aiSuggestMedicines = async (req, res, next) => {
+  try {
+    const {
+      patientHealthId,
+      diagnosis = '',
+      symptoms = '',
+      complaints = '',
+      allergies = [],
+      patientAge = null,
+      patientConditions = []
+    } = req.body;
+
+    const masterList = medicinesConfig.medicines || [];
+    const queryContext = `${diagnosis} ${symptoms} ${complaints}`.toLowerCase();
+
+    // Map common clinical terms to drug classes / indications
+    const suggestionRules = [
+      {
+        keywords: ['fever', 'pyrexia', 'headache', 'body ache', 'pain', 'myalgia'],
+        genericName: 'Paracetamol',
+        reason: 'Analgesic and antipyretic for relief of fever and mild-to-moderate pain.',
+        frequency: 'Twice Daily (1-0-1)',
+        timing: 'after_food',
+        durationDays: 5,
+        packet: 'A'
+      },
+      {
+        keywords: ['bacterial', 'infection', 'throat infection', 'tonsillitis', 'bronchitis', 'pharyngitis'],
+        genericName: 'Amoxicillin',
+        reason: 'Broad-spectrum beta-lactam antibiotic for bacterial upper respiratory infection.',
+        frequency: 'Twice Daily (1-0-1)',
+        timing: 'after_food',
+        durationDays: 7,
+        packet: 'A'
+      },
+      {
+        keywords: ['cough', 'cold', 'allergy', 'sneezing', 'rhinitis', 'urticaria'],
+        genericName: 'Cetirizine',
+        reason: 'Second-generation antihistamine for allergic rhinitis, sneezing, and runny nose.',
+        frequency: 'Once Daily (0-0-1)',
+        timing: 'after_food',
+        durationDays: 5,
+        packet: 'B'
+      },
+      {
+        keywords: ['acidity', 'gerd', 'reflux', 'gastritis', 'heartburn', 'peptic'],
+        genericName: 'Pantoprazole',
+        reason: 'Proton pump inhibitor to suppress gastric acid production and prevent stomach irritation.',
+        frequency: 'Once Daily (1-0-0)',
+        timing: 'before_food',
+        durationDays: 7,
+        packet: 'A'
+      },
+      {
+        keywords: ['hypertension', 'high blood pressure', 'bp', 'elevated bp'],
+        genericName: 'Telmisartan',
+        reason: 'Angiotensin II receptor blocker for blood pressure control and cardiovascular protection.',
+        frequency: 'Once Daily (1-0-0)',
+        timing: 'before_food',
+        durationDays: 30,
+        packet: 'A'
+      },
+      {
+        keywords: ['diabetes', 'hyperglycemia', 'high sugar', 'type 2 diabetes'],
+        genericName: 'Metformin',
+        reason: 'Biguanide antihyperglycemic agent for glycemic management in Type 2 Diabetes.',
+        frequency: 'Twice Daily (1-0-1)',
+        timing: 'after_food',
+        durationDays: 30,
+        packet: 'B'
+      },
+      {
+        keywords: ['asthma', 'wheezing', 'breathlessness', 'bronchospasm'],
+        genericName: 'Salbutamol',
+        reason: 'Short-acting beta-2 agonist for rapid bronchodilation and wheezing relief.',
+        frequency: 'As Needed (PRN)',
+        timing: 'after_food',
+        durationDays: 5,
+        packet: 'C'
+      },
+      {
+        keywords: ['severe pain', 'inflammation', 'joint pain', 'sprain', 'arthritis'],
+        genericName: 'Ibuprofen',
+        reason: 'Non-steroidal anti-inflammatory drug (NSAID) for inflammatory pain and swelling.',
+        frequency: 'Twice Daily (1-0-1)',
+        timing: 'after_food',
+        durationDays: 3,
+        packet: 'B'
+      }
+    ];
+
+    // Determine matched suggestions
+    const matchedSuggestions = [];
+    const addedGenerics = new Set();
+
+    for (const rule of suggestionRules) {
+      const isMatched = rule.keywords.some((kw) => queryContext.includes(kw));
+      if (isMatched && !addedGenerics.has(rule.genericName.toLowerCase())) {
+        const catalogMed = masterList.find(
+          (m) =>
+            m.name.toLowerCase().includes(rule.genericName.toLowerCase()) ||
+            m.activeIngredient.toLowerCase().includes(rule.genericName.toLowerCase())
+        );
+
+        if (catalogMed) {
+          addedGenerics.add(rule.genericName.toLowerCase());
+          matchedSuggestions.push({
+            id: `sug-${matchedSuggestions.length + 1}`,
+            name: catalogMed.name,
+            activeIngredient: catalogMed.activeIngredient,
+            brandNames: catalogMed.brandNames || [],
+            dosage: catalogMed.standardDosages?.[0] || '500 mg',
+            frequency: rule.frequency,
+            durationDays: rule.durationDays,
+            timing: rule.timing,
+            packet: rule.packet,
+            tablets: 1,
+            reason: rule.reason,
+            warnings: catalogMed.contraindications || [],
+            drugClass: catalogMed.drugClass
+          });
+        }
+      }
+    }
+
+    // Default to Paracetamol if no specific match
+    if (matchedSuggestions.length === 0) {
+      const paracetamol = masterList.find((m) => m.name.toLowerCase().includes('paracetamol')) || masterList[0];
+      if (paracetamol) {
+        matchedSuggestions.push({
+          id: 'sug-1',
+          name: paracetamol.name,
+          activeIngredient: paracetamol.activeIngredient,
+          brandNames: paracetamol.brandNames || [],
+          dosage: paracetamol.standardDosages?.[0] || '500 mg',
+          frequency: 'Twice Daily (1-0-1)',
+          durationDays: 3,
+          timing: 'after_food',
+          packet: 'A',
+          tablets: 1,
+          reason: 'Symptomatic comfort and antipyretic/analgesic support.',
+          warnings: paracetamol.contraindications || [],
+          drugClass: paracetamol.drugClass
+        });
+      }
+    }
+
+    // Run safety evaluation for the proposed suggestions
+    const safetyResult = evaluatePrescriptionSafety({
+      candidateMedicines: matchedSuggestions,
+      existingMedicines: [],
+      patientAllergies: allergies,
+      patientAge,
+      patientConditions
+    });
+
+    res.status(200).json({
+      success: true,
+      suggestions: matchedSuggestions,
+      clinicalContext: {
+        diagnosis,
+        symptoms,
+        complaints
+      },
+      safetyAlerts: safetyResult.alerts || [],
+      overrideRequired: safetyResult.overrideRequired || false
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * Perform Clinical Safety Check for Proposed Prescription
  */
 export const checkPrescriptionSafety = async (req, res, next) => {
@@ -158,6 +336,25 @@ export const createDigitalPrescription = async (req, res, next) => {
     }
 
     const db = assertDbConnected();
+
+    // Idempotency: prevent duplicate prescription creation if already issued for this appointment
+    if (appointmentId) {
+      const existingRxSnap = await db.collection('prescriptions')
+        .where('appointmentId', '==', appointmentId)
+        .where('status', 'in', ['ISSUED', 'ACTIVE', 'active', 'issued'])
+        .limit(1)
+        .get();
+
+      if (!existingRxSnap.empty) {
+        const existingRx = { id: existingRxSnap.docs[0].id, ...existingRxSnap.docs[0].data() };
+        return res.status(200).json({
+          success: true,
+          message: 'Prescription already issued for this appointment.',
+          data: existingRx,
+          prescription: existingRx
+        });
+      }
+    }
 
     // Resolve canonical doctor ID from trusted server profile if not on req.user
     if (!doctorId && doctorUid) {
@@ -1265,24 +1462,30 @@ export const verifyPrescription = async (req, res, next) => {
     const rxData = rxDoc.data();
 
     // The pharmacy sees nothing else (no medical records, diagnosis, notes, symptoms)
+    const pharmacyItems = (rxData.medicines || rxData.items || []).map((m) => ({
+      id: m.id,
+      name: m.name,
+      dosage: m.dosage || m.dose || '500 mg',
+      frequency: m.frequency || m.frequencyCode || 'Twice Daily',
+      durationDays: Number(m.durationDays ?? m.days) || 5,
+      timing: m.timing || 'after_food',
+      packet: m.packet || m.packetLetter || 'A',
+      tablets: m.tablets || m.tabletCount || 1,
+      status: m.status || 'ACTIVE',
+      notes: m.notes || ''
+    }));
+
     const safePharmacyData = {
       id: rxDoc.id,
       valid: true,
       prescriptionId: rxData.prescriptionId,
       verificationCode: rxData.verificationCode || rxData.verifyCode,
       patientName: rxData.patientName,
+      patientHealthId: rxData.patientHealthId,
       doctorName: rxData.doctorName,
       date: rxData.date,
-      items: (rxData.medicines || []).map((m) => ({
-        name: m.name,
-        dosage: m.dosage,
-        frequency: m.frequency,
-        durationDays: m.durationDays,
-        timing: m.timing || 'after_food',
-        packet: m.packet || m.packetLetter || 'A',
-        tablets: m.tablets || m.tabletCount || 1,
-        status: m.status || 'ACTIVE'
-      })),
+      items: pharmacyItems,
+      medicines: pharmacyItems,
       packetGrouping: rxData.packetGrouping || null,
       dispenseStatus: rxData.dispenseStatus || 'PENDING',
       dispensedAt: rxData.dispensedAt || null
@@ -1344,6 +1547,15 @@ export const dispensePrescription = async (req, res, next) => {
       });
     }
 
+    const medicinesToDispense = rxData.medicines || rxData.items || [];
+    if (!Array.isArray(medicinesToDispense) || medicinesToDispense.length === 0) {
+      return res.status(400).json({
+        success: false,
+        code: 'CANNOT_DISPENSE_EMPTY',
+        message: 'Prescription contains no medicines to dispense.'
+      });
+    }
+
     const now = new Date();
     await db.collection('prescriptions').doc(targetDocId).update({
       dispenseStatus: 'DISPENSED',
@@ -1362,15 +1574,20 @@ export const dispensePrescription = async (req, res, next) => {
       timestamp: now
     });
 
+    const dispensedPayload = {
+      ...rxData,
+      id: targetDocId,
+      items: medicinesToDispense,
+      medicines: medicinesToDispense,
+      dispenseStatus: 'DISPENSED',
+      dispensedAt: now.toISOString(),
+      dispensedByUid: pharmacistUid
+    };
+
     res.status(200).json({
       success: true,
       message: `Prescription ${rxData.prescriptionId} marked as DISPENSED.`,
-      data: {
-        ...rxData,
-        dispenseStatus: 'DISPENSED',
-        dispensedAt: now.toISOString(),
-        dispensedByUid: pharmacistUid
-      }
+      data: dispensedPayload
     });
   } catch (error) {
     next(error);

@@ -69,40 +69,95 @@ export const performTriage = async (req, res, next) => {
     //    On final failure: log reqId + return alertStatus:'failed' — patient still gets
     //    the emergency message, safety is never compromised.
     let alertStatus = 'none';
+    let alertId = null;
     if (mergedTriage.redFlag) {
-      const alertId = `alert_triage_${Date.now()}`;
-      const alertDoc = {
-        id: alertId,
-        healthId: req.body.patientHealthId || 'pending',
-        patientName: req.body.patientName || 'Patient',
-        riskLevel: 'high',
-        reasons: [`Triage Red Flag: ${reasonText}`],
-        status: 'open',
-        kind: 'urgent',
-        createdAt: new Date()
-      };
+      const incomingHealthId = (req.body.patientHealthId && req.body.patientHealthId !== 'pending' && req.body.patientHealthId !== 'Pending')
+        ? req.body.patientHealthId.trim()
+        : null;
+      const incomingPatientName = req.body.patientName ? req.body.patientName.trim() : null;
+      const incomingPhone = req.body.phone || req.body.patientPhone || null;
+      const incomingAge = req.body.age || req.body.patientAge || null;
+      const incomingUid = req.body.patientUid || null;
+      const incomingCategory = req.body.patientType || (
+        req.body.isDemo || (incomingHealthId && (incomingHealthId.startsWith('TEST') || incomingHealthId.startsWith('DEMO')))
+          ? 'TEST / DEMO'
+          : (incomingHealthId ? 'REGISTERED PATIENT' : 'WALK-IN / UNREGISTERED')
+      );
 
-      const MAX_ALERT_ATTEMPTS = 3;
-      const ALERT_RETRY_DELAY_MS = 500;
-      let alertWritten = false;
+      // Deduplication check: prevent duplicate active alerts for the same patient / triage event
+      let existingAlert = null;
+      if (incomingHealthId) {
+        const snap = await db.collection('alerts')
+          .where('healthId', '==', incomingHealthId)
+          .where('status', 'in', ['open', 'acknowledged'])
+          .limit(1)
+          .get();
+        if (!snap.empty) existingAlert = snap.docs[0];
+      }
+      if (!existingAlert && incomingUid) {
+        const snap = await db.collection('alerts')
+          .where('patientUid', '==', incomingUid)
+          .where('status', 'in', ['open', 'acknowledged'])
+          .limit(1)
+          .get();
+        if (!snap.empty) existingAlert = snap.docs[0];
+      }
+      if (!existingAlert && incomingPhone) {
+        const snap = await db.collection('alerts')
+          .where('phone', '==', incomingPhone)
+          .where('status', 'in', ['open', 'acknowledged'])
+          .limit(1)
+          .get();
+        if (!snap.empty) existingAlert = snap.docs[0];
+      }
 
-      for (let attempt = 1; attempt <= MAX_ALERT_ATTEMPTS; attempt++) {
-        try {
-          await db.collection('alerts').doc(alertId).set(alertDoc);
-          alertWritten = true;
-          alertStatus = 'created';
-          break;
-        } catch (alertErr) {
-          if (attempt < MAX_ALERT_ATTEMPTS) {
-            await new Promise((r) => setTimeout(r, ALERT_RETRY_DELAY_MS * attempt));
-          } else {
-            const reqId = req.id || req.headers?.['x-request-id'] || 'unknown';
-            console.error(
-              `❌ [triage] alert write FAILED after ${MAX_ALERT_ATTEMPTS} attempts ` +
-              `[reqId=${reqId}] [alertId=${alertId}]:`,
-              alertErr.message
-            );
-            alertStatus = 'failed';
+      if (existingAlert) {
+        alertStatus = 'existing';
+        alertId = existingAlert.id;
+      } else {
+        alertId = `alert_triage_${Date.now()}`;
+        const matchedRuleName = ruleResult?.redFlagReason || (ruleResult?.matchedRules && ruleResult.matchedRules[0]) || 'Emergency Red Flag Detected';
+        const alertDoc = {
+          id: alertId,
+          alertId,
+          healthId: incomingHealthId || 'Pending',
+          patientUid: incomingUid,
+          patientName: incomingPatientName || (incomingCategory === 'WALK-IN / UNREGISTERED' ? 'Walk-in Patient' : 'Registered Patient'),
+          phone: incomingPhone,
+          age: incomingAge,
+          category: incomingCategory,
+          riskLevel: 'high',
+          severity: 'EMERGENCY',
+          reasons: Array.isArray(reasonText) ? reasonText : [`Triage Red Flag: ${reasonText}`],
+          matchedRule: matchedRuleName,
+          matchedRules: ruleResult?.matchedRules || [matchedRuleName],
+          allergies: req.body.allergies || null,
+          status: 'open',
+          kind: 'urgent',
+          appointmentId: req.body.appointmentId || null,
+          createdAt: clock.now(),
+          updatedAt: clock.now()
+        };
+
+        const MAX_ALERT_ATTEMPTS = 3;
+        const ALERT_RETRY_DELAY_MS = 500;
+        for (let attempt = 1; attempt <= MAX_ALERT_ATTEMPTS; attempt++) {
+          try {
+            await db.collection('alerts').doc(alertId).set(alertDoc);
+            alertStatus = 'created';
+            break;
+          } catch (alertErr) {
+            if (attempt < MAX_ALERT_ATTEMPTS) {
+              await new Promise((r) => setTimeout(r, ALERT_RETRY_DELAY_MS * attempt));
+            } else {
+              const reqId = req.id || req.headers?.['x-request-id'] || 'unknown';
+              console.error(
+                `❌ [triage] alert write FAILED after ${MAX_ALERT_ATTEMPTS} attempts ` +
+                `[reqId=${reqId}] [alertId=${alertId}]:`,
+                alertErr.message
+              );
+              alertStatus = 'failed';
+            }
           }
         }
       }
@@ -111,7 +166,8 @@ export const performTriage = async (req, res, next) => {
     res.status(200).json(formatSuccessResponse({
       ...mergedTriage,
       expectedDurationMin,
-      alertStatus
+      alertStatus,
+      alertId
     }));
   } catch (error) {
     next(error);
@@ -1043,7 +1099,7 @@ export const createAppointment = async (req, res, next) => {
 };
 
 /**
- * GET /api/triage/alerts
+ * GET /api/booking/alerts
  * Nurse / Staff triage red flag alert queue
  */
 export const getTriageAlerts = async (req, res, next) => {
@@ -1054,7 +1110,22 @@ export const getTriageAlerts = async (req, res, next) => {
       .where('kind', '==', 'urgent')
       .get();
 
-    const alerts = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+    let alerts = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+    // Keep active alerts: open, acknowledged, or confirmed (filter out resolved and routine)
+    alerts = alerts.filter((a) => ['open', 'acknowledged', 'confirmed'].includes(a.status || 'open'));
+
+    // Sort by createdAt descending
+    alerts.sort((a, b) => {
+      const getMs = (val) => {
+        if (!val) return 0;
+        if (val._seconds) return val._seconds * 1000;
+        if (val.toDate) return val.toDate().getTime();
+        return new Date(val).getTime() || 0;
+      };
+      return getMs(b.createdAt) - getMs(a.createdAt);
+    });
+
     res.status(200).json(formatSuccessResponse(alerts));
   } catch (error) {
     next(error);
@@ -1062,7 +1133,7 @@ export const getTriageAlerts = async (req, res, next) => {
 };
 
 /**
- * POST /api/triage/alerts/:id/acknowledge
+ * POST /api/booking/alerts/:id/acknowledge
  */
 export const acknowledgeTriageAlert = async (req, res, next) => {
   try {
@@ -1070,13 +1141,317 @@ export const acknowledgeTriageAlert = async (req, res, next) => {
     const db = assertDbConnected();
 
     const alertRef = db.collection('alerts').doc(id);
+    const snap = await alertRef.get();
+    if (!snap.exists) {
+      throw new AppError('NOT_FOUND', `Alert '${id}' not found.`, 404);
+    }
+
+    const acknowledgedAt = new Date().toISOString();
+    const acknowledgedBy = req.user.uid;
+    const acknowledgedByName = req.user.name || req.user.fullName || req.user.email || 'Nurse Staff';
+
     await alertRef.update({
-      status: 'resolved',
-      resolvedBy: req.user.uid,
-      resolvedAt: new Date()
+      status: 'acknowledged',
+      acknowledged: true,
+      acknowledgedBy,
+      acknowledgedByName,
+      acknowledgedAt,
+      updatedAt: clock.now()
     });
 
-    res.status(200).json(formatSuccessResponse({ message: `Alert '${id}' acknowledged.` }));
+    await writeAuditLog({
+      actorUid: req.user.uid,
+      actorRole: req.user.role,
+      action: 'ACKNOWLEDGE_TRIAGE_ALERT',
+      targetType: 'alert',
+      targetId: id,
+      healthId: snap.data().healthId || null,
+      details: {
+        alertId: id,
+        acknowledgedBy,
+        acknowledgedByName,
+        acknowledgedAt
+      }
+    });
+
+    res.status(200).json(formatSuccessResponse({
+      id,
+      status: 'acknowledged',
+      acknowledgedAt,
+      message: `Alert '${id}' acknowledged.`
+    }));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * POST /api/booking/alerts/:id/confirm-emergency
+ */
+export const confirmEmergencyAlert = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { rationale } = req.body;
+
+    if (!rationale || !rationale.trim()) {
+      throw new AppError('REASON_REQUIRED', 'Clinical rationale is mandatory to confirm emergency.', 400);
+    }
+
+    if (!['nurse', 'doctor', 'admin'].includes(req.user.role)) {
+      throw new AppError('FORBIDDEN', 'Only authorized clinical roles (nurse, doctor, admin) can confirm emergency.', 403);
+    }
+
+    const db = assertDbConnected();
+    const alertRef = db.collection('alerts').doc(id);
+    const snap = await alertRef.get();
+    if (!snap.exists) {
+      throw new AppError('NOT_FOUND', `Alert '${id}' not found.`, 404);
+    }
+
+    const alertData = snap.data();
+    const confirmedAt = new Date().toISOString();
+    const confirmedBy = req.user.uid;
+    const confirmedByName = req.user.name || req.user.fullName || req.user.email || 'Nurse Staff';
+    const cleanRationale = rationale.trim();
+
+    // 1. Update alert
+    await alertRef.update({
+      severity: 'EMERGENCY',
+      status: 'confirmed',
+      confirmed: true,
+      confirmedBy,
+      confirmedByName,
+      confirmedAt,
+      rationale: cleanRationale,
+      updatedAt: clock.now()
+    });
+
+    // 2. Update appointment if exists
+    if (alertData.appointmentId) {
+      try {
+        const apptRef = db.collection('appointments').doc(alertData.appointmentId);
+        const apptSnap = await apptRef.get();
+        if (apptSnap.exists) {
+          await apptRef.update({
+            clinicalLevel: 3,
+            urgencySuggested: 'emergency',
+            priority: 'emergency',
+            clinicalLevelVerifiedBy: req.user.uid,
+            clinicalOverrideReason: cleanRationale,
+            emergencyConfirmedAt: confirmedAt,
+            updatedAt: clock.now()
+          });
+        }
+      } catch (apptErr) {
+        console.warn('⚠️ Could not update appointment for alert:', apptErr.message);
+      }
+    }
+
+    // 3. Update patient doc with active emergency alert (if patientUid exists)
+    const patientUid = alertData.patientUid;
+    if (patientUid) {
+      try {
+        await db.collection('patients').doc(patientUid).set({
+          emergencyAlert: {
+            active: true,
+            alertId: id,
+            severity: 'EMERGENCY',
+            confirmedAt,
+            confirmedByName,
+            rationale: cleanRationale,
+            instructions: 'Please proceed directly to the Emergency Room / Casualty immediately. Present your Health ID at the triage counter.'
+          }
+        }, { merge: true });
+      } catch (pErr) {
+        console.warn('⚠️ Could not update patient emergencyAlert:', pErr.message);
+      }
+    }
+
+    // 4. Send in-app and push notification to patient (if patientUid exists)
+    if (patientUid) {
+      try {
+        await notify({
+          uids: [patientUid],
+          title: '🚨 Emergency Medical Alert Confirmed',
+          body: `Emergency care confirmed by ${confirmedByName}: Please proceed directly to the Emergency Room / Casualty immediately.`,
+          privacyBody: 'Urgent: Emergency medical attention required. Please see staff.',
+          type: 'EMERGENCY_ALERT_CONFIRMED',
+          urgent: true,
+          groupKey: `emergency_alert_confirmed_${id}`,
+          data: {
+            alertId: id,
+            severity: 'EMERGENCY',
+            confirmedAt,
+            instructions: 'Please proceed directly to the Emergency Room / Casualty immediately.'
+          }
+        });
+      } catch (notifErr) {
+        console.warn('⚠️ Could not send patient emergency notification:', notifErr.message);
+      }
+    }
+
+    // 5. Notify clinical team / doctors (broadcast)
+    try {
+      const doctorsSnap = await db.collection('users').where('role', 'in', ['doctor', 'nurse']).get();
+      const clinicalUids = doctorsSnap.docs.map(d => d.id).filter(uid => uid !== req.user.uid);
+      if (clinicalUids.length > 0) {
+        await notify({
+          uids: clinicalUids.slice(0, 10),
+          title: '🚨 Emergency Triage Confirmed',
+          body: `Emergency confirmed for ${alertData.patientName} (${alertData.healthId || 'Walk-in'}). Rationale: ${cleanRationale}`,
+          privacyBody: 'Clinical Alert: Emergency confirmed.',
+          type: 'EMERGENCY_TRIAGE_ESCALATION',
+          urgent: true,
+          groupKey: `clinical_team_alert_${id}`,
+          data: { alertId: id, severity: 'EMERGENCY' }
+        });
+      }
+    } catch (teamNotifErr) {
+      console.warn('⚠️ Clinical team notification notice:', teamNotifErr.message);
+    }
+
+    // 6. Write immutable audit log
+    await writeAuditLog({
+      actorUid: req.user.uid,
+      actorRole: req.user.role,
+      action: 'CONFIRM_EMERGENCY',
+      targetType: 'alert',
+      targetId: id,
+      healthId: alertData.healthId || null,
+      details: {
+        alertId: id,
+        confirmedBy,
+        confirmedByName,
+        confirmedAt,
+        rationale: cleanRationale,
+        appointmentId: alertData.appointmentId || null,
+        patientUid: patientUid || null
+      }
+    });
+
+    res.status(200).json(formatSuccessResponse({
+      id,
+      severity: 'EMERGENCY',
+      status: 'confirmed',
+      confirmedAt,
+      message: 'Emergency confirmed successfully and patient escalated.'
+    }));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * POST /api/booking/alerts/:id/adjust-level
+ */
+export const adjustTriageAlertLevel = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { level, rationale } = req.body;
+
+    if (!rationale || !rationale.trim()) {
+      throw new AppError('REASON_REQUIRED', 'Clinical rationale is mandatory for triage level adjustment.', 400);
+    }
+
+    const canonicalLevel = String(level).toUpperCase();
+    if (!['URGENT', 'ROUTINE'].includes(canonicalLevel)) {
+      throw new AppError('VALIDATION_ERROR', 'level must be URGENT or ROUTINE.', 400);
+    }
+
+    if (!['nurse', 'doctor', 'admin'].includes(req.user.role)) {
+      throw new AppError('FORBIDDEN', 'Only authorized clinical roles (nurse, doctor, admin) can adjust triage level.', 403);
+    }
+
+    const db = assertDbConnected();
+    const alertRef = db.collection('alerts').doc(id);
+    const snap = await alertRef.get();
+    if (!snap.exists) {
+      throw new AppError('NOT_FOUND', `Alert '${id}' not found.`, 404);
+    }
+
+    const alertData = snap.data();
+    const adjustedAt = new Date().toISOString();
+    const adjustedBy = req.user.uid;
+    const adjustedByName = req.user.name || req.user.fullName || req.user.email || 'Nurse Staff';
+    const cleanRationale = rationale.trim();
+
+    const status = canonicalLevel === 'URGENT' ? 'downgraded_urgent' : 'downgraded_routine';
+
+    // 1. Update alert
+    await alertRef.update({
+      severity: canonicalLevel,
+      status,
+      adjustedBy,
+      adjustedByName,
+      adjustedAt,
+      rationale: cleanRationale,
+      updatedAt: clock.now()
+    });
+
+    // 2. Update appointment if exists
+    if (alertData.appointmentId) {
+      try {
+        const apptRef = db.collection('appointments').doc(alertData.appointmentId);
+        const apptSnap = await apptRef.get();
+        if (apptSnap.exists) {
+          const clinicalLevel = canonicalLevel === 'URGENT' ? 2 : 1;
+          const urgencySuggested = canonicalLevel === 'URGENT' ? 'urgent' : 'routine';
+          await apptRef.update({
+            clinicalLevel,
+            urgencySuggested,
+            priority: urgencySuggested,
+            clinicalLevelVerifiedBy: req.user.uid,
+            clinicalOverrideReason: cleanRationale,
+            updatedAt: clock.now()
+          });
+        }
+      } catch (apptErr) {
+        console.warn('⚠️ Could not update appointment for alert:', apptErr.message);
+      }
+    }
+
+    // 3. Clear active emergency alert on patient doc if exists
+    if (alertData.patientUid) {
+      try {
+        await db.collection('patients').doc(alertData.patientUid).set({
+          emergencyAlert: {
+            active: false,
+            deactivatedAt: adjustedAt,
+            rationale: cleanRationale,
+            downgradedTo: canonicalLevel
+          }
+        }, { merge: true });
+      } catch (pErr) {
+        // non-critical
+      }
+    }
+
+    // 4. Write immutable audit log
+    await writeAuditLog({
+      actorUid: req.user.uid,
+      actorRole: req.user.role,
+      action: `DOWNGRADE_TO_${canonicalLevel}`,
+      targetType: 'alert',
+      targetId: id,
+      healthId: alertData.healthId || null,
+      details: {
+        alertId: id,
+        newLevel: canonicalLevel,
+        adjustedBy,
+        adjustedByName,
+        adjustedAt,
+        rationale: cleanRationale,
+        appointmentId: alertData.appointmentId || null
+      }
+    });
+
+    res.status(200).json(formatSuccessResponse({
+      id,
+      severity: canonicalLevel,
+      status,
+      adjustedAt,
+      message: `Triage level adjusted to ${canonicalLevel}.`
+    }));
   } catch (error) {
     next(error);
   }
@@ -1111,6 +1486,7 @@ export const overrideClinicalLevel = async (req, res, next) => {
     await apptRef.update({
       clinicalLevel: Number(clinicalLevel),
       urgencySuggested: urgencyMap[clinicalLevel],
+      priority: Number(clinicalLevel) === 3 ? 'emergency' : urgencyMap[clinicalLevel],
       clinicalLevelVerifiedBy: req.user.uid,
       clinicalOverrideReason: reason.trim(),
       updatedAt: new Date()

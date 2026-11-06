@@ -1,6 +1,7 @@
 import express from 'express';
 import {
   searchMedicines,
+  aiSuggestMedicines,
   checkPrescriptionSafety,
   createDigitalPrescription,
   updateDigitalPrescription,
@@ -25,6 +26,7 @@ import { requireRole } from '../middleware/roleMiddleware.js';
 const router = express.Router();
 
 router.get('/medicines/search', requireAuth, searchMedicines);
+router.post('/ai-suggest', requireAuth, requireRole('doctor', 'admin'), aiSuggestMedicines);
 router.post('/check-safety', requireAuth, checkPrescriptionSafety);
 
 router.get('/templates', requireAuth, requireRole('doctor', 'admin'), getDoctorTemplates);

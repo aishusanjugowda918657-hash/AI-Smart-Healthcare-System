@@ -183,51 +183,77 @@ export const PharmacyVerifyPage = () => {
           </div>
 
           {/* Prescribed Items (Pharmacy Safe) */}
-          <div className="space-y-3">
-            <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-              Prescribed Medications ({rxData.medicines?.length || 0})
-            </h3>
-            <div className="divide-y border border-slate-200 rounded-2xl overflow-hidden">
-              {(rxData.medicines || []).map((m, idx) => (
-                <div key={idx} className="p-4 bg-slate-50 flex items-center justify-between">
-                  <div>
-                    <h4 className="text-xs font-bold text-slate-900">{m.name}</h4>
-                    <p className="text-[11px] text-slate-500">
-                      Dosage: <strong className="text-slate-700">{m.dosage}</strong> • Frequency:{' '}
-                      <strong className="text-slate-700">{m.frequency}</strong> • Duration:{' '}
-                      <strong className="text-slate-700">{m.durationDays} days</strong>
-                    </p>
-                    {m.notes && <p className="text-[10px] text-slate-500 italic mt-0.5">Note: {m.notes}</p>}
+          {(() => {
+            const medList = rxData.medicines || rxData.items || [];
+            return (
+              <div className="space-y-3">
+                <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  Prescribed Medications ({medList.length})
+                </h3>
+                {medList.length === 0 ? (
+                  <div className="p-6 bg-slate-50 border border-slate-200 rounded-2xl text-center text-xs text-slate-500">
+                    No medications listed in this prescription.
                   </div>
-                  <span className="px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-xs font-mono font-bold text-slate-700">
-                    {m.dosage}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
+                ) : (
+                  <div className="divide-y border border-slate-200 rounded-2xl overflow-hidden">
+                    {medList.map((m, idx) => {
+                      const packet = m.packet || m.packetLetter || 'A';
+                      const tabletCount = m.tablets || m.tabletCount || 1;
+                      return (
+                        <div key={idx} className="p-4 bg-slate-50 flex items-center justify-between">
+                          <div className="space-y-1">
+                            <div className="flex items-center space-x-2">
+                              <span className="px-2 py-0.5 bg-indigo-100 text-indigo-800 text-[10px] font-bold rounded-md font-mono">
+                                Packet {packet}
+                              </span>
+                              <h4 className="text-xs font-bold text-slate-900">{m.name}</h4>
+                            </div>
+                            <p className="text-[11px] text-slate-500">
+                              Dosage: <strong className="text-slate-700">{m.dosage}</strong> • Frequency:{' '}
+                              <strong className="text-slate-700">{m.frequency}</strong> • Duration:{' '}
+                              <strong className="text-slate-700">{m.durationDays} days</strong> • Timing:{' '}
+                              <strong className="text-slate-700">{(m.timing || 'after_food').replace('_', ' ')}</strong>
+                            </p>
+                            <p className="text-[11px] text-indigo-700 font-medium">
+                              Quantity per dose: {tabletCount} tablet{tabletCount > 1 ? 's' : ''}
+                            </p>
+                            {m.notes && <p className="text-[10px] text-slate-500 italic">Note: {m.notes}</p>}
+                          </div>
+                          <span className="px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-xs font-mono font-bold text-slate-700">
+                            {m.dosage}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
 
-          {/* Pharmacy Actions */}
-          <div className="pt-4 border-t flex justify-end">
-            <button
-              onClick={handleDispense}
-              disabled={dispensing || rxData.dispenseStatus === 'DISPENSED'}
-              className={`px-6 py-3 font-bold text-xs rounded-2xl shadow-md transition-all flex items-center space-x-2 ${
-                rxData.dispenseStatus === 'DISPENSED'
-                  ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                  : 'bg-emerald-600 hover:bg-emerald-700 text-white'
-              }`}
-            >
-              <CheckCircle2 className="w-4 h-4" />
-              <span>
-                {dispensing
-                  ? 'Recording Dispense...'
-                  : rxData.dispenseStatus === 'DISPENSED'
-                  ? 'Already Dispensed'
-                  : 'Confirm & Dispense Medication'}
-              </span>
-            </button>
-          </div>
+                {/* Pharmacy Actions */}
+                <div className="pt-4 border-t flex justify-end">
+                  <button
+                    onClick={handleDispense}
+                    disabled={dispensing || rxData.dispenseStatus === 'DISPENSED' || medList.length === 0}
+                    className={`px-6 py-3 font-bold text-xs rounded-2xl shadow-md transition-all flex items-center space-x-2 ${
+                      rxData.dispenseStatus === 'DISPENSED' || medList.length === 0
+                        ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                        : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                    }`}
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>
+                      {dispensing
+                        ? 'Recording Dispense...'
+                        : rxData.dispenseStatus === 'DISPENSED'
+                        ? 'Already Dispensed'
+                        : medList.length === 0
+                        ? 'Cannot Dispense: Empty Prescription'
+                        : 'Confirm & Dispense Medication'}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
     </div>

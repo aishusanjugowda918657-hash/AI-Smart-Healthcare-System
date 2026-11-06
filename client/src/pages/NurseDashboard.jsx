@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import API from '../services/api';
 import {
-  AlertTriangle, Phone, CheckCircle2, ShieldAlert, ArrowDownCircle,
+  AlertTriangle, CheckCircle2, ShieldAlert, ArrowDownCircle,
   ArrowUpCircle, Search, RefreshCw, XCircle, User, Clock, FileText
 } from 'lucide-react';
 
@@ -54,30 +54,35 @@ export const NurseDashboard = () => {
   const handleExecuteLevelChange = async (e) => {
     e.preventDefault();
     if (!actionReason.trim()) {
-      setActionError('Clinical reason is mandatory for triage level adjustment.');
+      setActionError('Clinical rationale is mandatory for triage level adjustment.');
+      return;
+    }
+
+    if (actionModal.type === 'upgrade' && (!actionModal.apptId || !actionModal.apptId.trim())) {
+      setActionError('Appointment ID is required to upgrade appointment priority.');
       return;
     }
 
     setActionSubmitting(true);
     setActionError('');
     try {
-      if (actionModal.type === 'upgrade') {
-        await API.post('/queue/emergency', {
-          appointmentId: actionModal.apptId,
+      if (actionModal.type === 'confirm') {
+        await API.post(`/booking/alerts/${actionModal.alertId}/confirm-emergency`, {
+          rationale: actionReason.trim()
+        });
+        setActionSuccess(`Emergency confirmed for ${actionModal.patientName || 'patient'}. Escalation notification dispatched.`);
+      } else if (actionModal.type === 'urgent' || actionModal.type === 'routine') {
+        await API.post(`/booking/alerts/${actionModal.alertId}/adjust-level`, {
+          level: actionModal.type.toUpperCase(),
+          rationale: actionReason.trim()
+        });
+        setActionSuccess(`Triage level downgraded to ${actionModal.type.toUpperCase()} for ${actionModal.patientName || 'patient'}.`);
+      } else if (actionModal.type === 'upgrade') {
+        await API.post(`/appointments/${actionModal.apptId.trim()}/level`, {
+          clinicalLevel: 3,
           reason: actionReason.trim()
         });
-        setActionSuccess(`Patient upgraded to Emergency successfully.`);
-      } else {
-        const levelMap = { confirm: 3, urgent: 2, routine: 1 };
-        await API.post(`/appointments/${actionModal.apptId}/level`, {
-          clinicalLevel: levelMap[actionModal.type],
-          reason: actionReason.trim()
-        });
-        setActionSuccess(`Triage level updated to ${actionModal.type.toUpperCase()}.`);
-      }
-
-      if (actionModal.alertId) {
-        await API.post(`/booking/alerts/${actionModal.alertId}/acknowledge`).catch(() => {});
+        setActionSuccess(`Appointment ${actionModal.apptId.trim()} upgraded to Emergency.`);
       }
 
       setActionModal(null);
@@ -85,6 +90,7 @@ export const NurseDashboard = () => {
       fetchAlerts();
     } catch (err) {
       setActionError(err.response?.data?.error?.message || err.response?.data?.message || 'Failed to update clinical level.');
+      // Keep modal open and preserve actionReason on error!
     } finally {
       setActionSubmitting(false);
     }
@@ -108,7 +114,7 @@ export const NurseDashboard = () => {
 
         <div className="flex items-center gap-3">
           <button
-            onClick={() => setActionModal({ type: 'upgrade', apptId: '4PJiq2HJyU8ihe3NXirR', patientName: 'zz-qa-Patient One' })}
+            onClick={() => setActionModal({ type: 'upgrade', alertId: null, apptId: '', patientName: 'Manual Entry' })}
             className="flex items-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-rose-500/20 transition-all"
           >
             <ArrowUpCircle className="w-4 h-4" />
@@ -153,7 +159,7 @@ export const NurseDashboard = () => {
             Active Clinical Triage Alerts
           </h3>
           <span className="px-2.5 py-0.5 bg-slate-800 text-slate-400 text-xs rounded-full">
-            {alerts.length} Pending
+            {alerts.length} Active
           </span>
         </div>
 
@@ -172,22 +178,52 @@ export const NurseDashboard = () => {
               >
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-slate-800/60 pb-3">
                   <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-full bg-rose-500/20 text-rose-400 flex items-center justify-center font-bold text-xs shrink-0">
-                      EMG
+                    <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${
+                      alert.severity === 'EMERGENCY' || alert.riskLevel === 'high'
+                        ? 'bg-rose-500/20 text-rose-400'
+                        : 'bg-amber-500/20 text-amber-400'
+                    }`}>
+                      {alert.severity === 'EMERGENCY' || alert.riskLevel === 'high' ? 'EMG' : 'URG'}
                     </div>
                     <div>
-                      <p className="font-bold text-slate-100 text-sm">
-                        {alert.patientName || 'Patient'} • Age: {alert.age || '31'}
-                      </p>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-bold text-slate-100 text-sm">
+                          {alert.patientName || (alert.category === 'WALK-IN / UNREGISTERED' ? 'Walk-in Patient' : 'Patient')}
+                        </p>
+                        <span className="text-xs text-slate-400">
+                          • {alert.age ? `${alert.age} yrs` : 'Age: N/A'}
+                        </span>
+                        <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full uppercase tracking-wider ${
+                          alert.category === 'TEST / DEMO'
+                            ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                            : alert.category === 'WALK-IN / UNREGISTERED'
+                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                            : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                        }`}>
+                          {alert.category || 'REGISTERED PATIENT'}
+                        </span>
+                      </div>
                       <p className="text-xs text-slate-400 font-mono mt-0.5">
-                        Health ID: {alert.healthId || 'PHI-2026-JTGM5K-P'} • Phone: {alert.phone || '+91 98765 43210'}
+                        Health ID: {alert.healthId && alert.healthId !== 'Pending' ? alert.healthId : 'Pending / Walk-in'} • Phone: {alert.phone || 'Not provided'}
                       </p>
                     </div>
                   </div>
 
-                  <span className="px-2.5 py-1 bg-rose-500/10 text-rose-300 border border-rose-500/30 text-[11px] font-bold rounded-lg uppercase">
-                    Risk: {alert.riskLevel || 'High'}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {alert.status === 'acknowledged' && (
+                      <span className="px-2.5 py-1 bg-sky-500/10 text-sky-300 border border-sky-500/30 text-[11px] font-bold rounded-lg uppercase">
+                        Acknowledged
+                      </span>
+                    )}
+                    {alert.status === 'confirmed' && (
+                      <span className="px-2.5 py-1 bg-rose-500/20 text-rose-300 border border-rose-500/40 text-[11px] font-bold rounded-lg uppercase">
+                        Confirmed Emergency
+                      </span>
+                    )}
+                    <span className="px-2.5 py-1 bg-rose-500/10 text-rose-300 border border-rose-500/30 text-[11px] font-bold rounded-lg uppercase">
+                      Severity: {alert.severity || 'EMERGENCY'}
+                    </span>
+                  </div>
                 </div>
 
                 {/* Clinical Details */}
@@ -195,18 +231,20 @@ export const NurseDashboard = () => {
                   <div>
                     <span className="text-slate-400 font-semibold block mb-0.5">Reported Symptoms:</span>
                     <span className="text-rose-200 font-medium">
-                      {Array.isArray(alert.reasons) ? alert.reasons.join(', ') : alert.reasons || 'Severe chest pain from morning, breathlessness'}
+                      {Array.isArray(alert.reasons) ? alert.reasons.join(', ') : alert.reasons || 'Acute emergency symptoms reported'}
                     </span>
                   </div>
                   <div>
                     <span className="text-slate-400 font-semibold block mb-0.5">Matched Rule:</span>
                     <span className="text-amber-300 font-medium">
-                      RED_FLAG_CARDIOVASCULAR (Chest Pain + Acute Onset)
+                      {alert.matchedRule || (Array.isArray(alert.matchedRules) ? alert.matchedRules.join(', ') : 'Clinical Red Flag Detected')}
                     </span>
                   </div>
                   <div>
                     <span className="text-slate-400 font-semibold block mb-0.5">Allergies:</span>
-                    <span className="text-slate-200">Penicillin (Severe)</span>
+                    <span className="text-slate-200">
+                      {alert.allergies ? (Array.isArray(alert.allergies) ? alert.allergies.join(', ') : alert.allergies) : 'None reported'}
+                    </span>
                   </div>
                   <div>
                     <span className="text-slate-400 font-semibold block mb-0.5">Time Flagged:</span>
@@ -214,6 +252,12 @@ export const NurseDashboard = () => {
                       {alert.createdAt ? new Date(alert.createdAt._seconds ? alert.createdAt._seconds * 1000 : alert.createdAt).toLocaleTimeString() : 'Just now'}
                     </span>
                   </div>
+                  {alert.rationale && (
+                    <div className="md:col-span-2 bg-slate-950/40 p-2.5 rounded-lg border border-slate-800">
+                      <span className="text-slate-400 font-semibold block mb-0.5">Clinical Rationale:</span>
+                      <span className="text-emerald-300 font-medium">{alert.rationale}</span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Clinical Action Buttons */}
@@ -221,18 +265,12 @@ export const NurseDashboard = () => {
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => handleAcknowledge(alert.id)}
-                      className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors"
+                      disabled={alert.status === 'acknowledged' || alert.status === 'confirmed'}
+                      className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors"
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" />
-                      Acknowledge
+                      {alert.status === 'acknowledged' ? 'Acknowledged' : 'Acknowledge'}
                     </button>
-                    <a
-                      href={`tel:${alert.phone || '+919876543210'}`}
-                      className="px-3.5 py-2 bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/30 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors"
-                    >
-                      <Phone className="w-3.5 h-3.5" />
-                      Call Patient
-                    </a>
                   </div>
 
                   <div className="flex items-center gap-2">
@@ -240,10 +278,11 @@ export const NurseDashboard = () => {
                       onClick={() => setActionModal({
                         type: 'confirm',
                         alertId: alert.id,
-                        apptId: alert.appointmentId || '4PJiq2HJyU8ihe3NXirR',
+                        apptId: alert.appointmentId || null,
                         patientName: alert.patientName || 'Patient'
                       })}
-                      className="px-3.5 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow transition-all flex items-center gap-1.5"
+                      disabled={alert.status === 'confirmed'}
+                      className="px-3.5 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow transition-all flex items-center gap-1.5"
                     >
                       <ArrowUpCircle className="w-3.5 h-3.5" />
                       Confirm Emergency
@@ -252,7 +291,7 @@ export const NurseDashboard = () => {
                       onClick={() => setActionModal({
                         type: 'urgent',
                         alertId: alert.id,
-                        apptId: alert.appointmentId || '4PJiq2HJyU8ihe3NXirR',
+                        apptId: alert.appointmentId || null,
                         patientName: alert.patientName || 'Patient'
                       })}
                       className="px-3.5 py-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 font-bold text-xs rounded-xl transition-colors"
@@ -263,7 +302,7 @@ export const NurseDashboard = () => {
                       onClick={() => setActionModal({
                         type: 'routine',
                         alertId: alert.id,
-                        apptId: alert.appointmentId || '4PJiq2HJyU8ihe3NXirR',
+                        apptId: alert.appointmentId || null,
                         patientName: alert.patientName || 'Patient'
                       })}
                       className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl transition-colors"
@@ -299,6 +338,22 @@ export const NurseDashboard = () => {
             </p>
 
             <form onSubmit={handleExecuteLevelChange} className="space-y-4">
+              {actionModal.type === 'upgrade' && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    Appointment ID <span className="text-rose-400">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={actionModal.apptId || ''}
+                    onChange={(e) => setActionModal({ ...actionModal, apptId: e.target.value })}
+                    placeholder="e.g. apt_1729000 or appointment document ID"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs text-slate-200 focus:outline-none focus:border-rose-500"
+                  />
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1.5">
                   Clinical Rationale / Reason <span className="text-rose-400">*</span>
