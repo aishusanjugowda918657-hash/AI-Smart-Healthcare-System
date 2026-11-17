@@ -145,7 +145,7 @@ export const PATIENT_CHAT_TOOL_DECLARATIONS = [
         departmentId: { type: 'STRING', description: 'Doctor department ID' },
         reasonText: { type: 'STRING', description: 'Patient stated reason for visit' }
       },
-      required: ['doctorId', 'date', 'timeSlot', 'slotId']
+      required: ['doctorId', 'date', 'timeSlot', 'slotId', 'reasonText']
     }
   },
   {
@@ -222,7 +222,7 @@ export async function executePatientChatTool(toolName, args, context) {
 
       return {
         appointmentId: active.id,
-        tokenNumber: active.tokenNumber || active.queueNumber || active.tokenLabel || 'T-001',
+        tokenNumber: active.tokenNumber || active.queueNumber || active.tokenLabel || null,
         tokenLabel: active.tokenLabel || active.tokenNumber,
         status: active.status,
         doctorName: active.doctorName || 'Doctor',
