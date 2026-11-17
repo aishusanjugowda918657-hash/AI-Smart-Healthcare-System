@@ -105,7 +105,14 @@ export const ChatbotPage = () => {
       setLastInputMode(mode);
 
       if (!disclaimerChecked) {
-        const consentMessage = 'Please acknowledge the health disclaimer using the checkbox before I submit this action.';
+        const consentMessages = {
+          en: 'Please acknowledge the health disclaimer using the checkbox before I submit this action.',
+          kn: 'ಈ ಕ್ರಮವನ್ನು ಮುಂದುವರಿಸುವ ಮೊದಲು ದಯವಿಟ್ಟು ಆರೋಗ್ಯ ಸೂಚನೆಯನ್ನು ಒಪ್ಪಿಕೊಂಡು ಚೆಕ್‌ಬಾಕ್ಸ್ ಆಯ್ಕೆಮಾಡಿ.',
+          hi: 'इस कार्रवाई से पहले कृपया स्वास्थ्य अस्वीकरण को स्वीकार करने के लिए चेकबॉक्स चुनें।',
+          te: 'ఈ చర్యను కొనసాగించే ముందు దయచేసి ఆరోగ్య ప్రకటనను అంగీకరించడానికి చెక్‌బాక్స్‌ను ఎంచుకోండి.',
+          ta: 'இந்தச் செயலைத் தொடர்வதற்கு முன், சுகாதார மறுப்பை ஏற்க செக்பாக்ஸைத் தேர்ந்தெடுக்கவும்.'
+        };
+        const consentMessage = consentMessages[selectedLang.split('-')[0]] || consentMessages.en;
         setMessages((prev) => [...prev, {
           id: `ai-${Date.now()}`, sender: 'ai', text: consentMessage, inputMode: mode
         }]);
@@ -237,7 +244,8 @@ export const ChatbotPage = () => {
     try {
       const res = await API.post('/ai/chat/confirm', {
         confirmToken: pendingConfirm.confirmToken,
-        disclaimerAccepted: true
+        disclaimerAccepted: true,
+        language: selectedLang.split('-')[0]
       });
 
       const confirmText = res.data.message || 'Action executed successfully.';
