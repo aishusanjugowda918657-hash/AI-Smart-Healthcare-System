@@ -252,11 +252,10 @@ export const aiChatConfirm = async (req, res, next) => {
     if (pendingTokenData.userId !== req.user?.uid) {
       return res.status(403).json({ success: false, message: 'You are not authorized to confirm this action.' });
     }
-    const tokenData = consumeConfirmToken(confirmToken);
-
     if (!disclaimerAccepted) {
-      return res.status(400).json({ success: false, message: 'Booking requires health disclaimer acceptance.' });
+      return res.status(400).json({ success: false, message: 'Please accept the health disclaimer before confirming this action.' });
     }
+    const tokenData = consumeConfirmToken(confirmToken);
 
     if (tokenData.type === 'BOOKING') {
       const result = await invokePatientAppointmentController(createAppointment, {
