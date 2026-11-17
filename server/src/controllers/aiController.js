@@ -47,6 +47,7 @@ function formatPatientQuickReply(language, type, data = {}) {
       yourTurn: 'It is your turn now.',
       wait: `Your estimated wait is ${low} to ${high} minutes.`,
       waitUnavailable: 'A live waiting-time estimate is not available right now.',
+      queueCount: (count) => `${count} patients are currently in the queue. ${text.waitUnavailable}`,
       timings: `${doctor} OPD timings: ${data.timings}. Lunch break: ${data.lunchBreak}.`,
       staff: 'I have noted your request. Please approach the hospital reception for assistance.'
     },
@@ -56,6 +57,7 @@ function formatPatientQuickReply(language, type, data = {}) {
       yourTurn: 'ಈಗ ನಿಮ್ಮ ಸರದಿ ಬಂದಿದೆ.',
       wait: `ನಿಮ್ಮ ಅಂದಾಜು ಕಾಯುವ ಸಮಯ ${low} ರಿಂದ ${high} ನಿಮಿಷಗಳು.`,
       waitUnavailable: 'ಪ್ರಸ್ತುತ ನೇರ ಕಾಯುವ ಸಮಯದ ಮಾಹಿತಿ ಲಭ್ಯವಿಲ್ಲ.',
+      queueCount: (count) => `ಪ್ರಸ್ತುತ ಸರದಿಯಲ್ಲಿ ${count} ರೋಗಿಗಳಿದ್ದಾರೆ. ${text.waitUnavailable}`,
       timings: `${doctor} ಅವರ OPD ಸಮಯ: ${data.timings}. ಊಟದ ವಿರಾಮ: ${data.lunchBreak}.`,
       staff: 'ನಿಮ್ಮ ವಿನಂತಿಯನ್ನು ಗಮನಿಸಿದ್ದೇನೆ. ಸಹಾಯಕ್ಕಾಗಿ ದಯವಿಟ್ಟು ಆಸ್ಪತ್ರೆಯ ಸ್ವಾಗತ ಕೌಂಟರ್‌ಗೆ ಹೋಗಿ.'
     },
@@ -65,6 +67,7 @@ function formatPatientQuickReply(language, type, data = {}) {
       yourTurn: 'अब आपकी बारी है।',
       wait: `आपका अनुमानित प्रतीक्षा समय ${low} से ${high} मिनट है।`,
       waitUnavailable: 'अभी लाइव प्रतीक्षा समय उपलब्ध नहीं है।',
+      queueCount: (count) => `अभी कतार में ${count} मरीज हैं। ${text.waitUnavailable}`,
       timings: `${doctor} का OPD समय: ${data.timings}। लंच ब्रेक: ${data.lunchBreak}।`,
       staff: 'आपका अनुरोध दर्ज कर लिया है। सहायता के लिए कृपया अस्पताल के रिसेप्शन पर जाएँ।'
     },
@@ -74,6 +77,7 @@ function formatPatientQuickReply(language, type, data = {}) {
       yourTurn: 'ఇప్పుడు మీ వంతు వచ్చింది.',
       wait: `మీ అంచనా వేచి ఉండే సమయం ${low} నుండి ${high} నిమిషాలు.`,
       waitUnavailable: 'ప్రస్తుతం ప్రత్యక్ష వేచి ఉండే సమయ సమాచారం అందుబాటులో లేదు.',
+      queueCount: (count) => `ప్రస్తుతం క్యూలో ${count} మంది రోగులు ఉన్నారు. ${text.waitUnavailable}`,
       timings: `${doctor} OPD సమయాలు: ${data.timings}. భోజన విరామం: ${data.lunchBreak}.`,
       staff: 'మీ అభ్యర్థనను నమోదు చేశాను. సహాయం కోసం ఆసుపత్రి రిసెప్షన్‌ను సంప్రదించండి.'
     },
@@ -83,6 +87,7 @@ function formatPatientQuickReply(language, type, data = {}) {
       yourTurn: 'இப்போது உங்கள் முறை.',
       wait: `உங்கள் மதிப்பிடப்பட்ட காத்திருப்பு நேரம் ${low} முதல் ${high} நிமிடங்கள்.`,
       waitUnavailable: 'தற்போது நேரடி காத்திருப்பு நேரம் கிடைக்கவில்லை.',
+      queueCount: (count) => `தற்போது வரிசையில் ${count} நோயாளிகள் உள்ளனர். ${text.waitUnavailable}`,
       timings: `${doctor} OPD நேரம்: ${data.timings}. மதிய உணவு இடைவேளை: ${data.lunchBreak}.`,
       staff: 'உங்கள் கோரிக்கை பதிவு செய்யப்பட்டது. உதவிக்கு மருத்துவமனை வரவேற்பை அணுகவும்.'
     }
@@ -99,7 +104,7 @@ function formatPatientQuickReply(language, type, data = {}) {
       const count = data.currentQueueLength;
       return count === null || count === undefined
         ? text.waitUnavailable
-        : `${count} patients are currently in the queue. ${text.waitUnavailable}`;
+        : text.queueCount(count);
     }
     return low === 0 ? text.yourTurn : text.wait;
   }
