@@ -83,9 +83,9 @@ export const ChatbotPage = () => {
     const mode = inputModeOverride || (transcript && transcript.trim() === query.trim() ? 'voice' : 'text');
     const normalizedQuery = query.toLowerCase().trim();
     const affirmativeReplies = new Set([
-      'yes', 'yes please', 'yeah', 'yep', 'confirm', 'confirm it', 'book it', 'go ahead',
+      'yes', 'yes please', 'yeah', 'yep', 'okay', 'ok', 'confirm', 'confirm it', 'book it', 'go ahead',
       'ಹೌದು', 'ಹೌದು ಬುಕ್ ಮಾಡಿ', 'ಮಾಡಿ', 'ಸರಿ',
-      'हाँ', 'हां', 'हाँ बुक करें', 'कर दीजिए',
+      'हाँ', 'हां', 'ठीक है', 'हाँ बुक करें', 'कर दीजिए',
       'అవును', 'అవును బుక్ చేయండి', 'చేయండి', 'సరే',
       'ஆம்', 'சரி', 'ஆம் பதிவு செய்யுங்கள்'
     ]);
@@ -128,13 +128,13 @@ export const ChatbotPage = () => {
       cancelSpeech();
       setMessages((prev) => [...prev,
         { id: `user-${Date.now()}`, sender: 'user', text: query, inputMode: mode },
-        { id: `ai-${Date.now()}`, sender: 'ai', text: "Okay. I won't make that change.", inputMode: mode }
+        { id: `ai-${Date.now()}`, sender: 'ai', text: cancelMessage, inputMode: mode }
       ]);
       setInput('');
       setTranscript('');
       setPendingConfirm(null);
       setLastInputMode(mode);
-      if (mode === 'voice' && speakerEnabled && !privacyMode) speak("Okay. I won't make that change.");
+      if (mode === 'voice' && speakerEnabled && !privacyMode) speak(cancelMessage);
       return;
     }
 
