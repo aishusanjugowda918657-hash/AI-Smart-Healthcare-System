@@ -24,6 +24,7 @@ export const ChatbotPage = () => {
   const messagesEndRef = useRef(null);
 
   const {
+    lang,
     isListening,
     transcript,
     setTranscript,
