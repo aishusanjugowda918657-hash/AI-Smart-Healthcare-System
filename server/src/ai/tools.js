@@ -106,13 +106,12 @@ export const PATIENT_CHAT_TOOL_DECLARATIONS = [
   },
   {
     name: 'find_doctors',
-    description: 'List real active doctors for a department. Ask the patient which department or specialty they need before calling this tool.',
+    description: 'List real active doctors, optionally filtered by department. Use this after asking the patient about their reason for visit and preferred doctor or specialty.',
     parameters: {
       type: 'OBJECT',
       properties: {
         departmentId: { type: 'STRING', description: 'Department ID, such as dept-gen or dept-card' }
-      },
-      required: ['departmentId']
+      }
     }
   },
   {
@@ -286,21 +285,20 @@ export async function executePatientChatTool(toolName, args, context) {
           ['checked_in', 'called', 'in_consultation', 'rejoined', 'waiting'].includes(d.data().status)
         ).length;
 
-        const estimatedMin = Math.round(queueLength * 12); // 12-min dept average fallback
         return {
-          estimatedWaitMinutes: estimatedMin,
-          waitMinLow: estimatedMin,
-          waitMinHigh: estimatedMin + 10,
+          estimatedWaitMinutes: null,
+          waitMinLow: null,
+          waitMinHigh: null,
           currentQueueLength: queueLength,
-          message: `Current estimated wait time is approximately ${estimatedMin} to ${estimatedMin + 10} minutes (${queueLength} patients in queue).`
+          message: `There are currently ${queueLength} patients in the queue, but a live waiting-time estimate is not available yet.`
         };
       } catch {
         return {
-          estimatedWaitMinutes: 15,
-          waitMinLow: 10,
-          waitMinHigh: 20,
+          estimatedWaitMinutes: null,
+          waitMinLow: null,
+          waitMinHigh: null,
           currentQueueLength: null,
-          message: 'Estimated wait time is approximately 10 to 20 minutes.'
+          message: 'Live waiting-time information is temporarily unavailable. Please check with reception.'
         };
       }
     }
