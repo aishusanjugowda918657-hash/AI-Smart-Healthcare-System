@@ -272,7 +272,10 @@ export const aiChat = async (req, res, next) => {
 
     // 4. GEMINI FUNCTION CALLING LOOP (runWithTools) – only if AI is available
     if (!flags.ai) {
-      // AI off → return help topic chips or fallback
+      // AI off → preserve safe help guidance; do not invoke Gemini for booking conversations.
+      if (forceConversationalBooking) {
+        return res.status(200).json(getHelpReplyById('book_appointment', language));
+      }
       if (!helpResult.matched) {
         return res.status(200).json({
           ...helpResult.reply,
