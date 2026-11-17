@@ -22,6 +22,7 @@ export function useSarvamSpeech(initialLang = 'en-IN') {
   }, [initialLang]);
 
   const recorderRef = useRef(null);
+  const recordingTimerRef = useRef(null);
   const streamRef = useRef(null);
   const chunksRef = useRef([]);
   const audioRef = useRef(null);
@@ -83,6 +84,7 @@ export function useSarvamSpeech(initialLang = 'en-IN') {
       };
 
       recorder.onstop = async () => {
+        if (recordingTimerRef.current) clearTimeout(recordingTimerRef.current);
         setIsListening(false);
         releaseMicrophone();
 
@@ -124,6 +126,10 @@ export function useSarvamSpeech(initialLang = 'en-IN') {
       };
 
       recorder.start();
+      recordingTimerRef.current = setTimeout(() => {
+        if (recorder.state === 'recording') recorder.stop();
+        setSupportMessage('Recording stopped at 28 seconds. Please send the transcript or record a shorter message.');
+      }, 28000);
       setIsListening(true);
       setLastInputMode('voice');
     } catch (error) {
@@ -137,6 +143,7 @@ export function useSarvamSpeech(initialLang = 'en-IN') {
   }, [isListening, releaseMicrophone]);
 
   const stopListening = useCallback(() => {
+    if (recordingTimerRef.current) clearTimeout(recordingTimerRef.current);
     if (recorderRef.current?.state === 'recording') {
       recorderRef.current.stop();
     }
@@ -206,6 +213,7 @@ export function useSarvamSpeech(initialLang = 'en-IN') {
 
   useEffect(() => () => {
     if (recorderRef.current?.state === 'recording') recorderRef.current.stop();
+    if (recordingTimerRef.current) clearTimeout(recordingTimerRef.current);
     releaseMicrophone();
     cancelSpeech();
   }, [releaseMicrophone, cancelSpeech]);
