@@ -107,7 +107,7 @@ export async function speakVoice(req, res, next) {
         text,
         model: process.env.SARVAM_TTS_MODEL || 'bulbul:v3',
         language_code: languageCode,
-        speaker: process.env.SARVAM_TTS_SPEAKER || 'shubh',
+        speaker: process.env.SARVAM_TTS_SPEAKER || ({ 'en-IN': 'ratan', 'hi-IN': 'shubh', 'kn-IN': 'shubh', 'te-IN': 'shubh', 'ta-IN': 'ratan' })[languageCode] || 'shubh',
         output_audio_codec: 'wav',
         speech_sample_rate: 24000,
         pace: 1
