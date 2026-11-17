@@ -112,6 +112,7 @@ export function useSarvamSpeech(initialLang = 'en-IN') {
 
           setTranscript(recognized);
           setLastInputMode('voice');
+          setSupportMessage('');
 
           const detected = response.data?.languageCode;
           if (detected && ['en-IN', 'hi-IN', 'kn-IN', 'te-IN', 'ta-IN'].includes(detected)) {
