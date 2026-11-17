@@ -12,7 +12,7 @@ export const ChatbotPage = () => {
     {
       id: 'msg-1',
       sender: 'ai',
-      text: "Hello! I am your AI Smart Healthcare Assistant. I can help answer hospital questions, check queue token status, and guide booking.\n\nAI assistant. It does not give medical advice.",
+      text: "Hello! I’m TARA, your healthcare companion. ❤️\n\nI can help you find doctors, book or manage appointments, check your token and waiting time, and answer general hospital questions.\n\nI’m an AI assistant and do not diagnose or prescribe medicines.",
       inputMode: 'text' // initial message, no voice
     }
   ]);
@@ -292,8 +292,8 @@ export const ChatbotPage = () => {
             <Bot className="w-6 h-6 text-teal-200" />
           </div>
           <div>
-            <h2 className="font-bold text-base tracking-tight">AI Assistant</h2>
-            <p className="text-xs text-teal-200">It does not give medical advice</p>
+            <h2 className="font-bold text-base tracking-tight">TARA</h2>
+            <p className="text-xs text-teal-200">ನಿಮ್ಮ ಆರೋಗ್ಯದ ಗೆಳತಿ · Your healthcare companion</p>
           </div>
         </div>
 
@@ -349,7 +349,7 @@ export const ChatbotPage = () => {
       <div className="bg-amber-50 px-4 py-2 border-b border-amber-200 flex items-center justify-between text-[11px] text-amber-900 font-medium">
         <div className="flex items-center space-x-2">
           <ShieldAlert className="w-4 h-4 text-amber-600 flex-shrink-0" />
-          <span>AI Assistant: Answers hospital questions & guided actions. Does not diagnose or prescribe.</span>
+          <span>TARA can answer hospital questions and guide appointment actions. She does not diagnose or prescribe.</span>
         </div>
         {supportMessage && (
           <span className="text-xs text-rose-600 font-semibold">{supportMessage}</span>
@@ -493,7 +493,7 @@ export const ChatbotPage = () => {
               <Sparkles className="w-4 h-4" />
             </div>
             <div className="bg-slate-100 text-slate-500 rounded-2xl p-3 text-xs italic">
-              AI Assistant is thinking...
+              TARA is thinking...
             </div>
           </div>
         )}
@@ -550,7 +550,7 @@ export const ChatbotPage = () => {
             type="text"
             value={transcript || input}
             onChange={handleInputChange}
-            placeholder="Type or tap mic to speak..."
+            placeholder="Talk to TARA or type your message..."
             className="flex-1 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-teal-500 focus:bg-white"
           />
 
