@@ -18,13 +18,13 @@ export const ChatbotPage = () => {
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [selectedLang, setSelectedLang] = useState('en-IN');
   const [pendingConfirm, setPendingConfirm] = useState(null);
   const [disclaimerChecked, setDisclaimerChecked] = useState(false);
   const messagesEndRef = useRef(null);
 
   const {
     lang,
+    setLang,
     isListening,
     transcript,
     setTranscript,
@@ -47,11 +47,7 @@ export const ChatbotPage = () => {
     markTextInput,
     markVoiceInput,
     shouldSpeak
-  } = useSarvamSpeech(selectedLang);
-
-  useEffect(() => {
-    if (lang !== selectedLang) setSelectedLang(lang);
-  }, [lang, selectedLang]);
+  } = useSarvamSpeech('en-IN');
 
   const quickChips = [
     { label: 'Book Appointment', text: 'Book Appointment' },
@@ -101,7 +97,7 @@ export const ChatbotPage = () => {
       te: 'సరే. నేను ఈ మార్పు చేయను.',
       ta: 'சரி. இந்த மாற்றத்தை நான் செய்யமாட்டேன்.'
     };
-    const cancelMessage = cancelMessages[selectedLang.split('-')[0]] || cancelMessages.en;
+    const cancelMessage = cancelMessages[lang.split('-')[0]] || cancelMessages.en;
 
     // A spoken/typed yes or no applies to the pending confirmed action, not a new AI question.
     if (pendingConfirm && affirmativeReplies.has(normalizedQuery)) {
@@ -121,7 +117,7 @@ export const ChatbotPage = () => {
           te: 'ఈ చర్యను కొనసాగించే ముందు దయచేసి ఆరోగ్య ప్రకటనను అంగీకరించడానికి చెక్‌బాక్స్‌ను ఎంచుకోండి.',
           ta: 'இந்தச் செயலைத் தொடர்வதற்கு முன், சுகாதார மறுப்பை ஏற்க செக்பாக்ஸைத் தேர்ந்தெடுக்கவும்.'
         };
-        const consentMessage = consentMessages[selectedLang.split('-')[0]] || consentMessages.en;
+        const consentMessage = consentMessages[lang.split('-')[0]] || consentMessages.en;
         setMessages((prev) => [...prev, {
           id: `ai-${Date.now()}`, sender: 'ai', text: consentMessage, inputMode: mode
         }]);
@@ -160,7 +156,7 @@ export const ChatbotPage = () => {
     try {
       const res = await API.post('/ai/chat', {
         message: query,
-        language: (mode === 'voice' ? lang : selectedLang).split('-')[0],
+        language: (mode === 'voice' ? lang : lang).split('-')[0],
         inputMode: mode, // sent to server (server ignores for logic, only a UI hint)
         history: messages.map(m => ({ role: m.sender === 'user' ? 'user' : 'model', text: m.text }))
       });
@@ -254,7 +250,7 @@ export const ChatbotPage = () => {
       const res = await API.post('/ai/chat/confirm', {
         confirmToken: pendingConfirm.confirmToken,
         disclaimerAccepted: true,
-        language: selectedLang.split('-')[0]
+        language: lang.split('-')[0]
       });
 
       const confirmText = res.data.message || 'Action executed successfully.';
@@ -304,7 +300,7 @@ export const ChatbotPage = () => {
         <div className="flex items-center space-x-2">
           {/* Language Selector */}
           <select
-            value={selectedLang}
+            value={lang}
             onChange={(e) => setSelectedLang(e.target.value)}
             className="px-2.5 py-1.5 bg-white/10 hover:bg-white/20 border border-white/20 rounded-xl text-xs font-semibold text-white outline-none"
           >
@@ -522,7 +518,7 @@ export const ChatbotPage = () => {
         <div className="px-4 py-2 bg-rose-50 border-t border-rose-200 flex items-center justify-between text-xs text-rose-800">
           <div className="flex items-center space-x-2">
             <span className="w-2.5 h-2.5 rounded-full bg-rose-600 animate-ping" />
-            <span className="font-bold">Listening ({selectedLang})...</span>
+            <span className="font-bold">Listening ({lang})...</span>
             <span className="italic truncate max-w-xs">{transcript || 'Speak now...'}</span>
           </div>
           <button onClick={toggleListening} className="text-xs font-bold underline">Done</button>
