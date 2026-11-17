@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bot, Send, ShieldAlert, Sparkles, User, RefreshCw, Mic, MicOff, Volume2, VolumeX, Eye, EyeOff, CheckCircle2, Square } from 'lucide-react';
 import { AI_DISCLAIMER_TEXT } from '../utils/constants';
-import { useSpeech } from '../hooks/useSpeech';
+import { useSarvamSpeech } from '../hooks/useSarvamSpeech';
 import API from '../services/api';
 import MarkdownRenderer from '../components/common/MarkdownRenderer';
 
@@ -46,7 +46,7 @@ export const ChatbotPage = () => {
     markTextInput,
     markVoiceInput,
     shouldSpeak
-  } = useSpeech(selectedLang);
+  } = useSarvamSpeech(selectedLang);
 
   const quickChips = [
     { label: 'Book Appointment', text: 'Book Appointment' },
@@ -240,6 +240,7 @@ export const ChatbotPage = () => {
             <option value="hi-IN" className="text-slate-900">हिन्दी (Hindi)</option>
             <option value="kn-IN" className="text-slate-900">ಕನ್ನಡ (Kannada)</option>
             <option value="ta-IN" className="text-slate-900">தமிழ் (Tamil)</option>
+            <option value="te-IN" className="text-slate-900">తెలుగు (Telugu)</option>
           </select>
 
           {/* Speaker Toggle */}
