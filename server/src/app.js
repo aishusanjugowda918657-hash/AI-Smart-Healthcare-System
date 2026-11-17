@@ -36,6 +36,7 @@ import queueRoutes from './routes/queue.routes.js';
 import reportRoutes from './routes/report.routes.js';
 import visitRoutes from './routes/visit.routes.js';
 import voiceRoutes from './routes/voice.routes.js';
+import supportRequestRoutes from './routes/supportRequest.routes.js';
 
 const app = express();
 
@@ -188,6 +189,7 @@ app.post('/alerts/:id/snooze', requireAuth, requireRole('doctor', 'admin'), snoo
 app.post('/api/alerts/:id/send-reminder', requireAuth, requireRole('doctor', 'admin'), sendPatientReminderAlert);
 app.post('/alerts/:id/send-reminder', requireAuth, requireRole('doctor', 'admin'), sendPatientReminderAlert);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/support-requests', supportRequestRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/voice', voiceRoutes);
 app.use('/api/admin', adminRoutes);
