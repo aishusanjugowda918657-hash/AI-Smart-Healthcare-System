@@ -41,6 +41,7 @@ export async function createPatientSupportRequest({ patientUid, category = 'GENE
   const patientData = patientSnap.exists ? patientSnap.data() : {};
   const userData = userSnap.exists ? userSnap.data() : {};
   const patientName = patientData.fullName || patientData.name || userData.fullName || userData.displayName || userData.name || 'Patient';
+  const patientPhone = patientData.phone || patientData.phoneNumber || patientData.mobile || userData.phone || userData.phoneNumber || userData.mobile || null;
   const now = clock.now();
   const requestRef = db.collection('supportRequests').doc();
 
@@ -48,6 +49,7 @@ export async function createPatientSupportRequest({ patientUid, category = 'GENE
     id: requestRef.id,
     patientUid,
     patientName,
+    patientPhone,
     category: safeCategory,
     status: 'pending',
     notificationStatus: 'pending',
@@ -85,10 +87,9 @@ export async function createPatientSupportRequest({ patientUid, category = 'GENE
   return {
     id: requestRef.id,
     patientName,
+    patientPhone,
     category: safeCategory,
     status: 'pending',
     notificationSent
   };
 }
-
-export const isSupportCategory = (category) => SUPPORT_CATEGORIES.has(category);
