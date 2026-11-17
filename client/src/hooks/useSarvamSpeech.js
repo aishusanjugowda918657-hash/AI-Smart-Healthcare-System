@@ -101,8 +101,6 @@ export function useSarvamSpeech(initialLang = 'en-IN') {
         if (recordingTimerRef.current) clearTimeout(recordingTimerRef.current);
         setIsListening(false);
         releaseMicrophone();
-        if (stopRequestedRef.current) return;
-
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' });
         if (!blob.size) return;
 
