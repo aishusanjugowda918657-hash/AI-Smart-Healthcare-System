@@ -50,7 +50,8 @@ vi.mock('../src/ai/tools.js', async (importOriginal) => {
       if (toolName === 'escalate_to_staff') {
         return {
           success: true,
-          message: 'Your request has been escalated to the reception desk.'
+          requestId: 'support-request-test',
+          notificationSent: true
         };
       }
       return actual.executePatientChatTool(toolName, args, context);
@@ -203,7 +204,7 @@ describe('Chatbot Appointment Help & Step-by-Step Guidance', () => {
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.aiSource).toBe('quick_chip');
-      expect(res.body.message).toContain('escalated');
+      expect(res.body.message).toContain('sent to Reception');
     });
 
     it('Emergency pre-check takes absolute precedence over how-to questions', async () => {
