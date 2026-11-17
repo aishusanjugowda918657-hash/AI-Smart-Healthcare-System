@@ -81,6 +81,55 @@ export const ChatbotPage = () => {
 
     // Determine input mode for this message
     const mode = inputModeOverride || (transcript && transcript.trim() === query.trim() ? 'voice' : 'text');
+    const normalizedQuery = query.toLowerCase().trim();
+    const affirmativeReplies = new Set([
+      'yes', 'yes please', 'yeah', 'yep', 'confirm', 'confirm it', 'book it', 'go ahead',
+      'ಹೌದು', 'ಹೌದು ಬುಕ್ ಮಾಡಿ', 'ಮಾಡಿ', 'ಸರಿ',
+      'हाँ', 'हां', 'हाँ बुक करें', 'कर दीजिए',
+      'అవును', 'అవును బుక్ చేయండి', 'చేయండి', 'సరే',
+      'ஆம்', 'சரி', 'ஆம் பதிவு செய்யுங்கள்'
+    ]);
+    const negativeReplies = new Set([
+      'no', 'no thanks', 'cancel', 'dont', "don't", 'ಬೇಡ', 'ಇಲ್ಲ',
+      'नहीं', 'मत करो', 'வேண்டாம்', 'இல்லை', 'వద్దు', 'కాదు'
+    ]);
+
+    // A spoken/typed yes or no applies to the pending confirmed action, not a new AI question.
+    if (pendingConfirm && affirmativeReplies.has(normalizedQuery)) {
+      cancelSpeech();
+      setMessages((prev) => [...prev, {
+        id: `user-${Date.now()}`, sender: 'user', text: query, inputMode: mode
+      }]);
+      setInput('');
+      setTranscript('');
+      setLastInputMode(mode);
+
+      if (!disclaimerChecked) {
+        const consentMessage = 'Please acknowledge the health disclaimer using the checkbox before I submit this action.';
+        setMessages((prev) => [...prev, {
+          id: `ai-${Date.now()}`, sender: 'ai', text: consentMessage, inputMode: mode
+        }]);
+        if (mode === 'voice' && speakerEnabled && !privacyMode) speak(consentMessage);
+        return;
+      }
+
+      await handleConfirmAction(mode === 'voice');
+      return;
+    }
+
+    if (pendingConfirm && negativeReplies.has(normalizedQuery)) {
+      cancelSpeech();
+      setMessages((prev) => [...prev,
+        { id: `user-${Date.now()}`, sender: 'user', text: query, inputMode: mode },
+        { id: `ai-${Date.now()}`, sender: 'ai', text: "Okay. I won't make that change.", inputMode: mode }
+      ]);
+      setInput('');
+      setTranscript('');
+      setPendingConfirm(null);
+      setLastInputMode(mode);
+      if (mode === 'voice' && speakerEnabled && !privacyMode) speak("Okay. I won't make that change.");
+      return;
+    }
 
     // Cancel any ongoing speech when sending a new message
     cancelSpeech();
@@ -181,7 +230,7 @@ export const ChatbotPage = () => {
     }
   };
 
-  const handleConfirmAction = async () => {
+  const handleConfirmAction = async (speakConfirmation = lastInputMode === 'voice') => {
     if (!pendingConfirm || !disclaimerChecked) return;
 
     setLoading(true);
@@ -201,7 +250,8 @@ export const ChatbotPage = () => {
           inputMode: 'text'
         }
       ]);
-      // Confirmation is a text action, never auto-speak
+      // Speak the actual server-confirmed result when the patient is using voice.
+      if (speakConfirmation && speakerEnabled && !privacyMode) speak(confirmText);
       setPendingConfirm(null);
       setDisclaimerChecked(false);
     } catch (err) {
