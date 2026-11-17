@@ -7,6 +7,7 @@
 import { assertDbConnected } from '../config/firebase.js';
 import { getSlots } from '../controllers/slotController.js';
 import { getHospitalTodayStr } from '../utils/timezoneDate.js';
+import { createPatientSupportRequest } from '../services/patientSupportService.js';
 
 // In-memory store for pending confirmation tokens (10-minute expiry)
 const pendingConfirmations = new Map();
@@ -176,11 +177,11 @@ export const PATIENT_CHAT_TOOL_DECLARATIONS = [
   },
   {
     name: 'escalate_to_staff',
-    description: 'Escalate a request to hospital receptionist or staff desk.',
+    description: 'Create a patient support request for the Reception desk. Do not include symptoms or clinical details; choose a broad category.',
     parameters: {
       type: 'OBJECT',
       properties: {
-        reason: { type: 'STRING', description: 'Reason for escalation' }
+        category: { type: 'STRING', description: 'One of GENERAL_ASSISTANCE, APPOINTMENT_HELP, QUEUE_HELP, or TECHNICAL_SUPPORT.' }
       }
     }
   },
@@ -516,10 +517,10 @@ export async function executePatientChatTool(toolName, args, context) {
     }
 
     case 'escalate_to_staff': {
-      return {
-        escalated: true,
-        message: 'Staff has been notified. Please approach Reception Counter 2 for immediate assistance.'
-      };
+      return createPatientSupportRequest({
+        patientUid: userId,
+        category: args.category || 'GENERAL_ASSISTANCE'
+      });
     }
 
     case 'mark_dose_taken': {
