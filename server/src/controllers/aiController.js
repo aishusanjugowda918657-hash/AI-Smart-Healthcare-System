@@ -49,7 +49,8 @@ function formatPatientQuickReply(language, type, data = {}) {
       waitUnavailable: 'A live waiting-time estimate is not available right now.',
       queueCount: (count) => `${count} patients are currently in the queue. ${text.waitUnavailable}`,
       timings: `${doctor} OPD timings: ${data.timings}. Lunch break: ${data.lunchBreak}.`,
-      staff: 'I have noted your request. Please approach the hospital reception for assistance.'
+      staffSent: 'Your request has been sent to Reception. They will assist you as soon as possible.',
+      staffFailed: 'Your request was saved, but Reception could not be notified. Please contact the hospital reception directly.'
     },
     kn: {
       noAppointment: 'ಇಂದು ನಿಮಗೆ ಯಾವುದೇ ಅಪಾಯಿಂಟ್ಮೆಂಟ್ ನಿಗದಿಯಾಗಿಲ್ಲ.',
@@ -59,7 +60,8 @@ function formatPatientQuickReply(language, type, data = {}) {
       waitUnavailable: 'ಪ್ರಸ್ತುತ ನೇರ ಕಾಯುವ ಸಮಯದ ಮಾಹಿತಿ ಲಭ್ಯವಿಲ್ಲ.',
       queueCount: (count) => `ಪ್ರಸ್ತುತ ಸರದಿಯಲ್ಲಿ ${count} ರೋಗಿಗಳಿದ್ದಾರೆ. ${text.waitUnavailable}`,
       timings: `${doctor} ಅವರ OPD ಸಮಯ: ${data.timings}. ಊಟದ ವಿರಾಮ: ${data.lunchBreak}.`,
-      staff: 'ನಿಮ್ಮ ವಿನಂತಿಯನ್ನು ಗಮನಿಸಿದ್ದೇನೆ. ಸಹಾಯಕ್ಕಾಗಿ ದಯವಿಟ್ಟು ಆಸ್ಪತ್ರೆಯ ಸ್ವಾಗತ ಕೌಂಟರ್‌ಗೆ ಹೋಗಿ.'
+      staffSent: 'ನಿಮ್ಮ ವಿನಂತಿಯನ್ನು ರಿಸೆಪ್ಷನ್‌ಗೆ ಕಳುಹಿಸಲಾಗಿದೆ. ಅವರು ಸಾಧ್ಯವಾದಷ್ಟು ಬೇಗ ನಿಮಗೆ ಸಹಾಯ ಮಾಡುತ್ತಾರೆ.',
+      staffFailed: 'ನಿಮ್ಮ ವಿನಂತಿಯನ್ನು ಉಳಿಸಲಾಗಿದೆ, ಆದರೆ ರಿಸೆಪ್ಷನ್‌ಗೆ ಮಾಹಿತಿ ನೀಡಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ. ದಯವಿಟ್ಟು ಆಸ್ಪತ್ರೆಯ ರಿಸೆಪ್ಷನ್ ಸಂಪರ್ಕಿಸಿ.'
     },
     hi: {
       noAppointment: 'आज आपके लिए कोई अपॉइंटमेंट निर्धारित नहीं है।',
@@ -69,7 +71,8 @@ function formatPatientQuickReply(language, type, data = {}) {
       waitUnavailable: 'अभी लाइव प्रतीक्षा समय उपलब्ध नहीं है।',
       queueCount: (count) => `अभी कतार में ${count} मरीज हैं। ${text.waitUnavailable}`,
       timings: `${doctor} का OPD समय: ${data.timings}। लंच ब्रेक: ${data.lunchBreak}।`,
-      staff: 'आपका अनुरोध दर्ज कर लिया है। सहायता के लिए कृपया अस्पताल के रिसेप्शन पर जाएँ।'
+      staffSent: 'आपका अनुरोध रिसेप्शन को भेज दिया गया है। वे जल्द ही आपकी सहायता करेंगे।',
+      staffFailed: 'आपका अनुरोध सहेजा गया है, लेकिन रिसेप्शन को सूचना नहीं भेजी जा सकी। कृपया अस्पताल के रिसेप्शन से संपर्क करें।'
     },
     te: {
       noAppointment: 'ఈరోజు మీకు అపాయింట్‌మెంట్ లేదు.',
@@ -79,7 +82,8 @@ function formatPatientQuickReply(language, type, data = {}) {
       waitUnavailable: 'ప్రస్తుతం ప్రత్యక్ష వేచి ఉండే సమయ సమాచారం అందుబాటులో లేదు.',
       queueCount: (count) => `ప్రస్తుతం క్యూలో ${count} మంది రోగులు ఉన్నారు. ${text.waitUnavailable}`,
       timings: `${doctor} OPD సమయాలు: ${data.timings}. భోజన విరామం: ${data.lunchBreak}.`,
-      staff: 'మీ అభ్యర్థనను నమోదు చేశాను. సహాయం కోసం ఆసుపత్రి రిసెప్షన్‌ను సంప్రదించండి.'
+      staffSent: 'మీ అభ్యర్థన రిసెప్షన్‌కు పంపబడింది. వారు త్వరలో మీకు సహాయం చేస్తారు.',
+      staffFailed: 'మీ అభ్యర్థన సేవ్ చేయబడింది, కానీ రిసెప్షన్‌కు సమాచారం పంపలేకపోయాము. దయచేసి ఆసుపత్రి రిసెప్షన్‌ను సంప్రదించండి.'
     },
     ta: {
       noAppointment: 'இன்று உங்களுக்கு எந்த சந்திப்பும் திட்டமிடப்படவில்லை.',
@@ -89,7 +93,8 @@ function formatPatientQuickReply(language, type, data = {}) {
       waitUnavailable: 'தற்போது நேரடி காத்திருப்பு நேரம் கிடைக்கவில்லை.',
       queueCount: (count) => `தற்போது வரிசையில் ${count} நோயாளிகள் உள்ளனர். ${text.waitUnavailable}`,
       timings: `${doctor} OPD நேரம்: ${data.timings}. மதிய உணவு இடைவேளை: ${data.lunchBreak}.`,
-      staff: 'உங்கள் கோரிக்கை பதிவு செய்யப்பட்டது. உதவிக்கு மருத்துவமனை வரவேற்பை அணுகவும்.'
+      staffSent: 'உங்கள் கோரிக்கை வரவேற்புக்கு அனுப்பப்பட்டுள்ளது. அவர்கள் விரைவில் உங்களுக்கு உதவுவார்கள்.',
+      staffFailed: 'உங்கள் கோரிக்கை சேமிக்கப்பட்டது, ஆனால் வரவேற்புக்கு அறிவிக்க முடியவில்லை. மருத்துவமனை வரவேற்பைத் தொடர்புகொள்ளவும்.'
     }
   };
   const text = copy[language] || copy.en;
@@ -109,7 +114,7 @@ function formatPatientQuickReply(language, type, data = {}) {
     return low === 0 ? text.yourTurn : text.wait;
   }
   if (type === 'DOCTOR_TIMINGS') return text.timings;
-  if (type === 'TALK_TO_STAFF') return text.staff;
+  if (type === 'TALK_TO_STAFF') return data.notificationSent ? text.staffSent : text.staffFailed;
   return text.waitUnavailable;
 }
 
@@ -183,13 +188,17 @@ export const aiChat = async (req, res, next) => {
 
     // 3. RULE PRE-CHECK: Quick-Chip Intents (4 languages) -> NO Gemini Call
     const quickIntent = checkQuickChipIntent(message);
-    const forceConversationalBooking = quickIntent === 'BOOK_APPOINTMENT';
+    const isBookingHelpChip = message.trim().toLowerCase() === 'book appointment';
+    const isConversationalBookingRequest = !isHowTo && !isBookingHelpChip && /\\b(book|schedule|reserve|make)\\b.*\\b(appointment|slot|doctor)\\b/i.test(message);
+    const forceConversationalBooking = (quickIntent === 'BOOK_APPOINTMENT' && !isBookingHelpChip) || isConversationalBookingRequest;
     if (quickIntent) {
       const db = assertDbConnected();
       switch (quickIntent) {
         case 'BOOK_APPOINTMENT': {
-          // Voice and text booking requests must enter the conversational booking flow.
-          // Gemini will ask for the reason, doctor preference, date and a real available slot.
+          if (isBookingHelpChip) {
+            return res.status(200).json(getHelpReplyById('book_appointment', language));
+          }
+          // Natural booking requests continue through the existing conversational flow.
           break;
         }
 
