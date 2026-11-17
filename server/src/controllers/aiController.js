@@ -281,7 +281,7 @@ export const aiChatConfirm = async (req, res, next) => {
 
       return res.status(200).json({
         success: true,
-        message: 'Appointment confirmed and booked successfully.',
+        message: `Appointment booked successfully. Your appointment is with ${result.body.data?.doctorName || 'your selected doctor'} on ${result.body.data?.date || tokenData.date} at ${result.body.data?.bookedStartAt || result.body.data?.timeSlot || tokenData.timeSlot}. Your token number is ${result.body.data?.tokenLabel || result.body.data?.tokenNumber || 'not yet assigned'}.`,
         appointment: result.body.data,
         data: result.body.data
       });
