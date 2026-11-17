@@ -21,6 +21,7 @@ export const ChatbotPage = () => {
   const [pendingConfirm, setPendingConfirm] = useState(null);
   const [disclaimerChecked, setDisclaimerChecked] = useState(false);
   const [voiceSessionActive, setVoiceSessionActive] = useState(false);
+  const voiceSessionActiveRef = useRef(false);
   const autoSubmittedTranscriptRef = useRef('');
   const messagesEndRef = useRef(null);
 
@@ -62,20 +63,21 @@ export const ChatbotPage = () => {
 
   // Start a voice session only after the patient explicitly taps the microphone.
   const beginVoiceSession = async () => {
-    if (voiceSessionActive) {
+    if (voiceSessionActiveRef.current) {
+      voiceSessionActiveRef.current = false;
       setVoiceSessionActive(false);
       stopSpeaking();
       stopListening();
       return;
     }
+    voiceSessionActiveRef.current = true;
     setVoiceSessionActive(true);
     const greeting = "Hello! I'm TARA, your healthcare companion. How can I help you today?";
     setMessages((prev) => [...prev, {
       id: `ai-greeting-${Date.now()}`, sender: 'ai', text: greeting, inputMode: 'voice'
     }]);
     await speak(greeting);
-    if (!privacyMode && speakerEnabled) startListening();
-    else startListening();
+    if (voiceSessionActiveRef.current) startListening();
   };
 
   // Voice transcripts are submitted automatically; no Done or Send tap is needed.
@@ -277,6 +279,7 @@ export const ChatbotPage = () => {
     setTranscript(val);
     // If user starts typing after mic, switch to text mode and cancel speech
     if (lastInputMode === 'voice') {
+      voiceSessionActiveRef.current = false;
       setVoiceSessionActive(false);
       stopListening();
       markTextInput();
@@ -562,7 +565,7 @@ export const ChatbotPage = () => {
             <span className="font-bold">Listening automatically ({lang})...</span>
             <span className="italic truncate max-w-xs">{transcript || 'Speak now...'}</span>
           </div>
-          <button onClick={() => { setVoiceSessionActive(false); stopListening(); }} className="text-xs font-bold underline">Stop</button>
+          <button onClick={() => { voiceSessionActiveRef.current = false; setVoiceSessionActive(false); stopListening(); }} className="text-xs font-bold underline">Stop</button>
         </div>
       )}
 
