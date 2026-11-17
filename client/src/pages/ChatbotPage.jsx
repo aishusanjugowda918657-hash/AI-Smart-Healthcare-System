@@ -46,7 +46,7 @@ export const ChatbotPage = () => {
     markTextInput,
     markVoiceInput,
     shouldSpeak
-  } = useSarvamSpeech(selectedLang);
+  } = useSarvamSpeech(selectedLang);\n\n  useEffect(() => {\n    if (lang !== selectedLang) setSelectedLang(lang);\n  }, [lang]);
 
   const quickChips = [
     { label: 'Book Appointment', text: 'Book Appointment' },
@@ -90,7 +90,7 @@ export const ChatbotPage = () => {
     try {
       const res = await API.post('/ai/chat', {
         message: query,
-        language: selectedLang.split('-')[0],
+        language: (mode === 'voice' ? lang : selectedLang).split('-')[0],
         inputMode: mode, // sent to server (server ignores for logic, only a UI hint)
         history: messages.map(m => ({ role: m.sender === 'user' ? 'user' : 'model', text: m.text }))
       });
