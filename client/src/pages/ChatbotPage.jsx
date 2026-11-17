@@ -301,7 +301,7 @@ export const ChatbotPage = () => {
           {/* Language Selector */}
           <select
             value={lang}
-            onChange={(e) => setSelectedLang(e.target.value)}
+            onChange={(e) => setLang(e.target.value)}
             className="px-2.5 py-1.5 bg-white/10 hover:bg-white/20 border border-white/20 rounded-xl text-xs font-semibold text-white outline-none"
           >
             <option value="en-IN" className="text-slate-900">English</option>
