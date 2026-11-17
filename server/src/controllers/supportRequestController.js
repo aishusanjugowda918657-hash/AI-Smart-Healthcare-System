@@ -35,6 +35,7 @@ export const getSupportRequests = async (req, res, next) => {
       return {
         id: doc.id,
         patientName: data.patientName || 'Patient',
+        patientPhone: data.patientPhone || null,
         category: data.category || 'GENERAL_ASSISTANCE',
         status: data.status || 'pending',
         notificationStatus: data.notificationStatus || 'pending',
