@@ -217,9 +217,9 @@ export async function executePatientChatTool(toolName, args, context) {
       const active = appts.find(a => ['checked_in', 'called', 'in_consultation'].includes(a.status)) || appts[0];
       const live = active.live || {};
 
-      const waitMinLow = live.waitMinLow ?? active.estimatedWaitMinutes ?? 15;
-      const waitMinHigh = live.waitMinHigh ?? (waitMinLow + 10);
-      const waitDisplay = waitMinLow === 0 ? 'No wait – it is your turn!' : `${waitMinLow} to ${waitMinHigh} minutes`;
+      const waitMinLow = live.waitMinLow ?? active.estimatedWaitMinutes ?? null;
+      const waitMinHigh = live.waitMinHigh ?? (waitMinLow !== null ? waitMinLow + 10 : null);
+      const waitDisplay = waitMinLow === null ? 'Waiting-time estimate is not available yet.' : (waitMinLow === 0 ? 'No wait – it is your turn!' : `${waitMinLow} to ${waitMinHigh} minutes`);
 
       return {
         appointmentId: active.id,
@@ -239,7 +239,7 @@ export async function executePatientChatTool(toolName, args, context) {
 
     case 'get_wait_time': {
       // Read live queue data for this patient's doctor/dept to return real wait estimates
-      const today = new Date().toISOString().split('T')[0];
+      const today = getHospitalTodayStr();
       try {
         // Get patient's own appointment to find their doctor + queue position
         const mySnap = await db.collection('appointments')
@@ -319,11 +319,9 @@ export async function executePatientChatTool(toolName, args, context) {
     }
 
     case 'find_doctors': {
-      if (!args.departmentId) return { error: 'Ask the patient for a department before searching doctors.' };
-      const snapshot = await db.collection('doctors')
-        .where('departmentId', '==', args.departmentId)
-        .limit(30)
-        .get();
+      let query = db.collection('doctors');
+      if (args.departmentId) query = query.where('departmentId', '==', args.departmentId);
+      const snapshot = await query.limit(50).get();
       const doctors = snapshot.docs
         .map((doc) => {
           const data = doc.data();
@@ -331,7 +329,7 @@ export async function executePatientChatTool(toolName, args, context) {
             doctorId: data.doctorId || doc.id,
             name: data.fullName || data.name || 'Doctor',
             specialization: data.specialization || data.specialty || '',
-            departmentId: data.departmentId || args.departmentId,
+            departmentId: data.departmentId || null,
             active: data.active !== false
           };
         })
