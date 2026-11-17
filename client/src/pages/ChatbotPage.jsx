@@ -154,7 +154,8 @@ export const ChatbotPage = () => {
         setMessages((prev) => [...prev, {
           id: `ai-${Date.now()}`, sender: 'ai', text: consentMessage, inputMode: mode
         }]);
-        if (mode === 'voice' && speakerEnabled && !privacyMode) speak(consentMessage);
+        if (mode === 'voice' && speakerEnabled && !privacyMode) await speak(consentMessage);
+        if (mode === 'voice' && voiceSessionActiveRef.current) startListening();
         return;
       }
 
@@ -172,7 +173,8 @@ export const ChatbotPage = () => {
       setTranscript('');
       setPendingConfirm(null);
       setLastInputMode(mode);
-      if (mode === 'voice' && speakerEnabled && !privacyMode) speak(cancelMessage);
+      if (mode === 'voice' && speakerEnabled && !privacyMode) await speak(cancelMessage);
+      if (mode === 'voice' && voiceSessionActiveRef.current) startListening();
       return;
     }
 
@@ -214,7 +216,7 @@ export const ChatbotPage = () => {
       if (mode === 'voice' && speakerEnabled && !privacyMode) {
         await speak(aiResponse);
       }
-      if (mode === 'voice' && voiceSessionActive) {
+      if (mode === 'voice' && voiceSessionActiveRef.current) {
         autoSubmittedTranscriptRef.current = '';
         startListening();
       }
@@ -308,7 +310,8 @@ export const ChatbotPage = () => {
         }
       ]);
       // Speak the actual server-confirmed result when the patient is using voice.
-      if (speakConfirmation && speakerEnabled && !privacyMode) speak(confirmText);
+      if (speakConfirmation && speakerEnabled && !privacyMode) await speak(confirmText);
+      if (speakConfirmation && voiceSessionActiveRef.current) startListening();
       setPendingConfirm(null);
       setDisclaimerChecked(false);
     } catch (err) {
@@ -583,7 +586,7 @@ export const ChatbotPage = () => {
             type="button"
             onClick={beginVoiceSession}
             className={`p-3 rounded-xl transition-all ${
-              isListening ? 'bg-rose-600 text-white animate-pulse' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+              voiceSessionActive ? 'bg-rose-600 text-white animate-pulse' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
             }`}
             title={voiceSessionActive ? 'Stop voice conversation' : 'Start voice conversation'}
           >
