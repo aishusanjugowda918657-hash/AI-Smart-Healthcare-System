@@ -143,7 +143,8 @@ export const PATIENT_CHAT_TOOL_DECLARATIONS = [
         timeSlot: { type: 'STRING', description: 'HH:mm' },
         slotId: { type: 'STRING', description: 'Exact slotId returned by find_slots' },
         departmentId: { type: 'STRING', description: 'Doctor department ID' },
-        reasonText: { type: 'STRING', description: 'Patient stated reason for visit' }
+        reasonText: { type: 'STRING', description: 'Patient stated reason for visit' },
+        doctorName: { type: 'STRING', description: 'Exact doctor name from find_doctors' }
       },
       required: ['doctorId', 'date', 'timeSlot', 'slotId', 'reasonText']
     }
@@ -196,8 +197,44 @@ export const PATIENT_CHAT_TOOL_DECLARATIONS = [
   }
 ];
 
+
+function getPatientActionMessage(language, action, details = {}) {
+  const doctor = details.doctorName || 'Doctor';
+  const date = details.date || '';
+  const time = details.time || '';
+  const token = details.token || '';
+  const messages = {
+    en: {
+      booking: `I will book your appointment with ${doctor} on ${date} at ${time}. Please confirm to proceed.`,
+      cancel: `I will cancel your appointment with ${doctor} on ${date}. Please confirm to proceed.`,
+      reschedule: `I will move your appointment with ${doctor} to ${date} at ${time}. Please confirm to proceed.`
+    },
+    kn: {
+      booking: `${date} ರಂದು ${time} ಗಂಟೆಗೆ ${doctor} ಅವರೊಂದಿಗೆ ಅಪಾಯಿಂಟ್ಮೆಂಟ್ ಬುಕ್ ಮಾಡುತ್ತೇನೆ. ಮುಂದುವರಿಸಲು ದೃಢೀಕರಿಸಿ.`,
+      cancel: `${date} ರಂದು ${doctor} ಅವರೊಂದಿಗಿನ ನಿಮ್ಮ ಅಪಾಯಿಂಟ್ಮೆಂಟ್ ರದ್ದು ಮಾಡುತ್ತೇನೆ. ದಯವಿಟ್ಟು ದೃಢೀಕರಿಸಿ.`,
+      reschedule: `${doctor} ಅವರೊಂದಿಗಿನ ನಿಮ್ಮ ಅಪಾಯಿಂಟ್ಮೆಂಟ್ ಅನ್ನು ${date} ರಂದು ${time} ಗಂಟೆಗೆ ಬದಲಾಯಿಸುತ್ತೇನೆ. ದಯವಿಟ್ಟು ದೃಢೀಕರಿಸಿ.`
+    },
+    hi: {
+      booking: `मैं ${date} को ${time} बजे ${doctor} के साथ आपकी अपॉइंटमेंट बुक करूँगा। कृपया पुष्टि करें।`,
+      cancel: `मैं ${date} की ${doctor} के साथ आपकी अपॉइंटमेंट रद्द करूँगा। कृपया पुष्टि करें।`,
+      reschedule: `मैं ${doctor} के साथ आपकी अपॉइंटमेंट ${date} को ${time} बजे के लिए बदलूँगा। कृपया पुष्टि करें।`
+    },
+    te: {
+      booking: `${date} న ${time} గంటలకు ${doctor} తో మీ అపాయింట్‌మెంట్ బుక్ చేస్తాను. దయచేసి నిర్ధారించండి.`,
+      cancel: `${date} న ${doctor} తో మీ అపాయింట్‌మెంట్‌ను రద్దు చేస్తాను. దయచేసి నిర్ధారించండి.`,
+      reschedule: `${doctor} తో మీ అపాయింట్‌మెంట్‌ను ${date} న ${time} గంటలకు మారుస్తాను. దయచేసి నిర్ధారించండి.`
+    },
+    ta: {
+      booking: `${date} அன்று ${time} மணிக்கு ${doctor} அவர்களுடன் உங்கள் சந்திப்பைப் பதிவு செய்கிறேன். உறுதிப்படுத்தவும்.`,
+      cancel: `${date} அன்று ${doctor} அவர்களுடனான உங்கள் சந்திப்பை ரத்து செய்கிறேன். உறுதிப்படுத்தவும்.`,
+      reschedule: `${doctor} அவர்களுடனான உங்கள் சந்திப்பை ${date} அன்று ${time} மணிக்கு மாற்றுகிறேன். உறுதிப்படுத்தவும்.`
+    }
+  };
+  return (messages[language] || messages.en)[action] || messages.en.booking;
+}
+
 export async function executePatientChatTool(toolName, args, context) {
-  const { userId, selectedPatientHealthId } = context;
+  const { userId, selectedPatientHealthId, language = 'en' } = context;
   const db = assertDbConnected();
 
   switch (toolName) {
@@ -409,6 +446,7 @@ export async function executePatientChatTool(toolName, args, context) {
         userId,
         patientHealthId: selectedPatientHealthId,
         doctorId: args.doctorId,
+        doctorName: args.doctorName || null,
         departmentId: args.departmentId || null,
         date: args.date,
         timeSlot: args.timeSlot,
@@ -420,7 +458,7 @@ export async function executePatientChatTool(toolName, args, context) {
         actionRequired: 'CONFIRM_BOOKING',
         confirmToken,
         summary: `Book appointment on ${args.date} at ${args.timeSlot} with Doctor ${args.doctorId}`,
-        message: `I will book an appointment on ${args.date} at ${args.timeSlot}. Please confirm to proceed.`
+        message: getPatientActionMessage(language, 'booking', { doctorName: args.doctorName, date: args.date, time: args.timeSlot })
       };
     }
 
@@ -444,7 +482,7 @@ export async function executePatientChatTool(toolName, args, context) {
         actionRequired: 'CONFIRM_CANCEL',
         confirmToken,
         summary: `Cancel appointment ${appointment.displayId || args.appointmentId}`,
-        message: `I will cancel your appointment with ${appointment.doctorName || 'the doctor'} on ${appointment.date}. Please confirm to proceed.`
+        message: getPatientActionMessage(language, 'cancel', { doctorName: appointment.doctorName, date: appointment.date })
       };
     }
 
@@ -473,7 +511,7 @@ export async function executePatientChatTool(toolName, args, context) {
         actionRequired: 'CONFIRM_RESCHEDULE',
         confirmToken,
         summary: `Reschedule appointment to ${args.newDate} at ${args.newTime}`,
-        message: `I will move your appointment to ${args.newDate} at ${args.newTime}. Please confirm to proceed.`
+        message: getPatientActionMessage(language, 'reschedule', { doctorName: appointment.doctorName, date: args.newDate, time: args.newTime })
       };
     }
 
