@@ -185,7 +185,7 @@ export const aiChat = async (req, res, next) => {
       messages: trimmedHistory.concat([{ role: 'user', content: message }]),
       tools: PATIENT_CHAT_TOOL_DECLARATIONS,
       toolHandler: executePatientChatTool,
-      context: { userId: uid, selectedPatientHealthId },
+      context: { userId: uid, selectedPatientHealthId, language },
       maxRounds: 5
     });
 
@@ -234,6 +234,7 @@ export const aiChat = async (req, res, next) => {
 export const aiChatConfirm = async (req, res, next) => {
   try {
     const { confirmToken, disclaimerAccepted = true } = req.body;
+    const language = ['en', 'kn', 'hi', 'te', 'ta'].includes(req.body.language) ? req.body.language : 'en';
 
     if (!confirmToken) {
       return res.status(400).json({ success: false, message: 'confirmToken is required.' });
@@ -279,7 +280,20 @@ export const aiChatConfirm = async (req, res, next) => {
 
       return res.status(200).json({
         success: true,
-        message: `Appointment booked successfully. Your appointment is with ${result.body.data?.doctorName || 'your selected doctor'} on ${result.body.data?.date || tokenData.date} at ${result.body.data?.bookedStartAt || result.body.data?.timeSlot || tokenData.timeSlot}. Your token number is ${result.body.data?.tokenLabel || result.body.data?.tokenNumber || 'not yet assigned'}.`,
+        message: (() => {
+          const doctor = result.body.data?.doctorName || 'Doctor';
+          const date = result.body.data?.date || tokenData.date;
+          const time = result.body.data?.bookedStartAt || result.body.data?.timeSlot || tokenData.timeSlot;
+          const token = result.body.data?.tokenLabel || result.body.data?.tokenNumber || '';
+          const messages = {
+            en: `Your appointment with ${doctor} is booked for ${date} at ${time}. Your token number is ${token}.`,
+            kn: `${doctor} ಅವರೊಂದಿಗೆ ${date} ರಂದು ${time} ಗಂಟೆಗೆ ನಿಮ್ಮ ಅಪಾಯಿಂಟ್ಮೆಂಟ್ ಬುಕ್ ಆಗಿದೆ. ನಿಮ್ಮ ಟೋಕನ್ ಸಂಖ್ಯೆ ${token}.`,
+            hi: `${doctor} के साथ आपकी अपॉइंटमेंट ${date} को ${time} बजे बुक हो गई है। आपका टोकन नंबर ${token} है।`,
+            te: `${doctor} తో మీ అపాయింట్‌మెంట్ ${date} న ${time} గంటలకు బుక్ అయింది. మీ టోకెన్ నంబర్ ${token}.`,
+            ta: `${doctor} அவர்களுடன் உங்கள் சந்திப்பு ${date} அன்று ${time} மணிக்கு பதிவு செய்யப்பட்டது. உங்கள் டோக்கன் எண் ${token}.`
+          };
+          return messages[language];
+        })(),
         appointment: result.body.data,
         data: result.body.data
       });
@@ -303,7 +317,7 @@ export const aiChatConfirm = async (req, res, next) => {
 
       return res.status(200).json({
         success: true,
-        message: 'Appointment cancelled successfully.',
+        message: ({ en: 'Your appointment has been cancelled.', kn: 'ನಿಮ್ಮ ಅಪಾಯಿಂಟ್ಮೆಂಟ್ ರದ್ದಾಗಿದೆ.', hi: 'आपकी अपॉइंटमेंट रद्द कर दी गई है।', te: 'మీ అపాయింట్‌మెంట్ రద్దు చేయబడింది.', ta: 'உங்கள் சந்திப்பு ரத்து செய்யப்பட்டது.' })[language],
         result: result.body.data
       });
     }
@@ -330,7 +344,7 @@ export const aiChatConfirm = async (req, res, next) => {
 
       return res.status(200).json({
         success: true,
-        message: 'Appointment rescheduled successfully.',
+        message: ({ en: `Your appointment has been rescheduled to ${tokenData.newDate} at ${tokenData.newTime}.`, kn: `ನಿಮ್ಮ ಅಪಾಯಿಂಟ್ಮೆಂಟ್ ${tokenData.newDate} ರಂದು ${tokenData.newTime} ಗಂಟೆಗೆ ಬದಲಾಯಿಸಲಾಗಿದೆ.`, hi: `आपकी अपॉइंटमेंट ${tokenData.newDate} को ${tokenData.newTime} बजे के लिए बदल दी गई है।`, te: `మీ అపాయింట్‌మెంట్ ${tokenData.newDate} న ${tokenData.newTime} గంటలకు మార్చబడింది.`, ta: `உங்கள் சந்திப்பு ${tokenData.newDate} அன்று ${tokenData.newTime} மணிக்கு மாற்றப்பட்டது.` })[language],
         result: result.body.data
       });
     }
