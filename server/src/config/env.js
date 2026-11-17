@@ -18,7 +18,7 @@ const envSchema = z.object({
   SARVAM_API_KEY: z.string().optional().default(''),
   SARVAM_STT_MODEL: z.string().default('saaras:v4'),
   SARVAM_TTS_MODEL: z.string().default('bulbul:v3'),
-  SARVAM_TTS_SPEAKER: z.string().default('shubh'),
+  SARVAM_TTS_SPEAKER: z.string().optional().default(''),
   FIREBASE_SERVICE_ACCOUNT_PATH: z.string().optional().default(''),
   FIREBASE_STORAGE_BUCKET: z.string().optional().default(''),
   CLIENT_ORIGIN: z.string().default('http://localhost:5173'),
