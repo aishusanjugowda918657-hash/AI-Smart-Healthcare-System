@@ -204,6 +204,7 @@ export function useSarvamSpeech(initialLang = 'en-IN') {
 
       await new Promise((resolve, reject) => {
         audio.onended = resolve;
+        audio.onpause = resolve;
         audio.onerror = () => reject(new Error('Audio playback failed'));
         audio.play().catch(reject);
       });
