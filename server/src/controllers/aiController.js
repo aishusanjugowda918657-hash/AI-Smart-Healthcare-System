@@ -15,7 +15,8 @@ import {
   executePatientChatTool,
   DOCTOR_AGENT_TOOL_DECLARATIONS,
   executeDoctorAgentTool,
-  consumeConfirmToken
+  consumeConfirmToken,
+  getConfirmTokenData
 } from '../ai/tools.js';
 import { assertDbConnected } from '../config/firebase.js';
 import { createAppointment } from './bookingController.js';
@@ -79,9 +80,13 @@ export const aiChat = async (req, res, next) => {
     // Never trust a client-supplied Health ID for patient-scoped tool queries.
     let selectedPatientHealthId = uid;
     if (uid) {
-      const patientProfile = await assertDbConnected().collection('patients').doc(uid).get();
-      if (patientProfile.exists && patientProfile.data().patientHealthId) {
-        selectedPatientHealthId = patientProfile.data().patientHealthId;
+      try {
+        const patientProfile = await assertDbConnected().collection('patients').doc(uid).get();
+        if (patientProfile.exists && patientProfile.data().patientHealthId) {
+          selectedPatientHealthId = patientProfile.data().patientHealthId;
+        }
+      } catch (profileError) {
+        console.warn('Patient Health ID lookup unavailable for AI chat:', profileError.message);
       }
     }
 
@@ -233,17 +238,21 @@ export const aiChat = async (req, res, next) => {
  */
 export const aiChatConfirm = async (req, res, next) => {
   try {
-    const { confirmToken, disclaimerAccepted = true } = req.body;
+    const { confirmToken, disclaimerAccepted = false } = req.body;
     const language = ['en', 'kn', 'hi', 'te', 'ta'].includes(req.body.language) ? req.body.language : 'en';
 
     if (!confirmToken) {
       return res.status(400).json({ success: false, message: 'confirmToken is required.' });
     }
 
-    const tokenData = consumeConfirmToken(confirmToken);
-    if (!tokenData) {
+    const pendingTokenData = getConfirmTokenData(confirmToken);
+    if (!pendingTokenData) {
       return res.status(400).json({ success: false, message: 'Invalid or expired confirmation token.' });
     }
+    if (pendingTokenData.userId !== req.user?.uid) {
+      return res.status(403).json({ success: false, message: 'You are not authorized to confirm this action.' });
+    }
+    const tokenData = consumeConfirmToken(confirmToken);
 
     if (!disclaimerAccepted) {
       return res.status(400).json({ success: false, message: 'Booking requires health disclaimer acceptance.' });
