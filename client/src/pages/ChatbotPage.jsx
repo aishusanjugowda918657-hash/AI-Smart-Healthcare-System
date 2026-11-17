@@ -46,7 +46,11 @@ export const ChatbotPage = () => {
     markTextInput,
     markVoiceInput,
     shouldSpeak
-  } = useSarvamSpeech(selectedLang);\n\n  useEffect(() => {\n    if (lang !== selectedLang) setSelectedLang(lang);\n  }, [lang]);
+  } = useSarvamSpeech(selectedLang);
+
+  useEffect(() => {
+    if (lang !== selectedLang) setSelectedLang(lang);
+  }, [lang, selectedLang]);
 
   const quickChips = [
     { label: 'Book Appointment', text: 'Book Appointment' },
