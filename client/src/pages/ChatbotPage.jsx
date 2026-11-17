@@ -20,6 +20,8 @@ export const ChatbotPage = () => {
   const [loading, setLoading] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState(null);
   const [disclaimerChecked, setDisclaimerChecked] = useState(false);
+  const [voiceSessionActive, setVoiceSessionActive] = useState(false);
+  const autoSubmittedTranscriptRef = useRef('');
   const messagesEndRef = useRef(null);
 
   const {
@@ -29,6 +31,8 @@ export const ChatbotPage = () => {
     transcript,
     setTranscript,
     toggleListening,
+    startListening,
+    stopListening,
     speak,
     isSpeaking,
     stopSpeaking,
@@ -55,6 +59,33 @@ export const ChatbotPage = () => {
     { label: 'Doctor Timings', text: 'Doctor Timings' },
     { label: 'Talk to Staff', text: 'Talk to Staff' }
   ];
+
+  // Start a voice session only after the patient explicitly taps the microphone.
+  const beginVoiceSession = async () => {
+    if (voiceSessionActive) {
+      setVoiceSessionActive(false);
+      stopSpeaking();
+      stopListening();
+      return;
+    }
+    setVoiceSessionActive(true);
+    const greeting = "Hello! I'm TARA, your healthcare companion. How can I help you today?";
+    setMessages((prev) => [...prev, {
+      id: `ai-greeting-${Date.now()}`, sender: 'ai', text: greeting, inputMode: 'voice'
+    }]);
+    await speak(greeting);
+    if (!privacyMode && speakerEnabled) startListening();
+    else startListening();
+  };
+
+  // Voice transcripts are submitted automatically; no Done or Send tap is needed.
+  useEffect(() => {
+    const spokenText = transcript.trim();
+    if (!voiceSessionActive || isListening || loading || !spokenText ||
+        autoSubmittedTranscriptRef.current === spokenText) return;
+    autoSubmittedTranscriptRef.current = spokenText;
+    handleSendMessage(spokenText, 'voice');
+  }, [transcript, voiceSessionActive, isListening, loading]);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -179,7 +210,11 @@ export const ChatbotPage = () => {
 
       // VOICE RULE: Speak ONLY if the user used the mic AND speaker is enabled AND not privacy mode
       if (mode === 'voice' && speakerEnabled && !privacyMode) {
-        speak(aiResponse);
+        await speak(aiResponse);
+      }
+      if (mode === 'voice' && voiceSessionActive) {
+        autoSubmittedTranscriptRef.current = '';
+        startListening();
       }
 
       if (data.confirmToken) {
@@ -204,7 +239,11 @@ export const ChatbotPage = () => {
       ]);
       // Only speak fallback if voice mode
       if (mode === 'voice' && speakerEnabled && !privacyMode) {
-        speak(fallbackText);
+        await speak(fallbackText);
+      }
+      if (mode === 'voice' && voiceSessionActive) {
+        autoSubmittedTranscriptRef.current = '';
+        startListening();
       }
     } finally {
       setLoading(false);
@@ -238,6 +277,8 @@ export const ChatbotPage = () => {
     setTranscript(val);
     // If user starts typing after mic, switch to text mode and cancel speech
     if (lastInputMode === 'voice') {
+      setVoiceSessionActive(false);
+      stopListening();
       markTextInput();
     }
   };
@@ -518,10 +559,10 @@ export const ChatbotPage = () => {
         <div className="px-4 py-2 bg-rose-50 border-t border-rose-200 flex items-center justify-between text-xs text-rose-800">
           <div className="flex items-center space-x-2">
             <span className="w-2.5 h-2.5 rounded-full bg-rose-600 animate-ping" />
-            <span className="font-bold">Listening ({lang})...</span>
+            <span className="font-bold">Listening automatically ({lang})...</span>
             <span className="italic truncate max-w-xs">{transcript || 'Speak now...'}</span>
           </div>
-          <button onClick={toggleListening} className="text-xs font-bold underline">Done</button>
+          <button onClick={() => { setVoiceSessionActive(false); stopListening(); }} className="text-xs font-bold underline">Stop</button>
         </div>
       )}
 
@@ -537,13 +578,13 @@ export const ChatbotPage = () => {
           {/* Mic Button */}
           <button
             type="button"
-            onClick={toggleListening}
+            onClick={beginVoiceSession}
             className={`p-3 rounded-xl transition-all ${
               isListening ? 'bg-rose-600 text-white animate-pulse' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
             }`}
-            title="Tap to talk"
+            title={voiceSessionActive ? 'Stop voice conversation' : 'Start voice conversation'}
           >
-            {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+            {voiceSessionActive ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
           </button>
 
           <input
