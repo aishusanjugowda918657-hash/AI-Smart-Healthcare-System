@@ -3,11 +3,11 @@ import StaffQrScanner from '../components/staff/StaffQrScanner';
 import API from '../services/api';
 import {
   UserPlus, Clock, AlertCircle, CheckCircle2, RotateCcw,
-  PauseCircle, XCircle, Search, ShieldAlert, ArrowRight, UserCheck
+  PauseCircle, XCircle, Search, ShieldAlert, ArrowRight, UserCheck, MessageCircle
 } from 'lucide-react';
 
 export const ReceptionDashboard = () => {
-  const [activeTab, setActiveTab] = useState('not-arrived'); // 'not-arrived' | 'late' | 'recently-cancelled'
+  const [activeTab, setActiveTab] = useState('not-arrived'); // queue tabs plus patient support requests
   const [showWalkinModal, setShowWalkinModal] = useState(false);
   const [walkinData, setWalkinData] = useState({
     name: '',
@@ -24,6 +24,8 @@ export const ReceptionDashboard = () => {
   const [notArrivedList, setNotArrivedList] = useState([]);
   const [lateOrMissedList, setLateOrMissedList] = useState([]);
   const [recentlyCancelled, setRecentlyCancelled] = useState([]);
+  const [supportRequests, setSupportRequests] = useState([]);
+  const [supportActionId, setSupportActionId] = useState('');
   const [loadingList, setLoadingList] = useState(false);
   const [actionError, setActionError] = useState('');
   const [actionSuccess, setActionSuccess] = useState('');
@@ -32,9 +34,10 @@ export const ReceptionDashboard = () => {
     setLoadingList(true);
     setActionError('');
     try {
-      const [overviewRes, cancelledRes] = await Promise.allSettled([
+      const [overviewRes, cancelledRes, supportRes] = await Promise.allSettled([
         API.get('/queue/reception-overview'),
-        API.get('/appointments/recently-cancelled')
+        API.get('/appointments/recently-cancelled'),
+        API.get('/support-requests')
       ]);
 
       if (overviewRes.status === 'fulfilled' && overviewRes.value.data?.data) {
@@ -44,6 +47,9 @@ export const ReceptionDashboard = () => {
 
       if (cancelledRes.status === 'fulfilled' && cancelledRes.value.data?.data) {
         setRecentlyCancelled(cancelledRes.value.data.data);
+      }
+      if (supportRes.status === 'fulfilled' && supportRes.value.data?.data) {
+        setSupportRequests(supportRes.value.data.data.requests || []);
       }
     } catch (err) {
       console.warn('Error loading reception data:', err.message);
@@ -138,6 +144,21 @@ export const ReceptionDashboard = () => {
     }
   };
 
+  const handleSupportRequestStatus = async (requestId, status) => {
+    setActionError('');
+    setActionSuccess('');
+    setSupportActionId(requestId);
+    try {
+      await API.patch(`/support-requests/${requestId}/status`, { status });
+      setActionSuccess(status === 'acknowledged' ? 'Support request acknowledged.' : 'Support request resolved.');
+      await fetchReceptionData();
+    } catch (err) {
+      setActionError(err.response?.data?.error?.message || err.response?.data?.message || 'Unable to update support request.');
+    } finally {
+      setSupportActionId('');
+    }
+  };
+
   const handleRejoinQueue = async (apptId) => {
     setActionError('');
     setActionSuccess('');
@@ -209,7 +230,8 @@ export const ReceptionDashboard = () => {
             {[
               { id: 'not-arrived', label: `Not arrived (${notArrivedList.length})` },
               { id: 'late', label: `Late / Missed (${lateOrMissedList.length})` },
-              { id: 'recently-cancelled', label: `Recently cancelled (${recentlyCancelled.length})` }
+              { id: 'recently-cancelled', label: `Recently cancelled (${recentlyCancelled.length})` },
+              { id: 'support-requests', label: `Patient requests (${supportRequests.filter((r) => r.status !== 'resolved').length})` }
             ].map((t) => (
               <button
                 key={t.id}
@@ -359,6 +381,60 @@ export const ReceptionDashboard = () => {
                   >
                     <RotateCcw className="w-3.5 h-3.5" /> Restore Appointment
                   </button>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+
+        {/* Tab 4: Patient support requests from TARA */}
+        {activeTab === 'support-requests' && (
+          <div className="space-y-3">
+            <p className="text-xs text-slate-400">
+              Patient assistance requests submitted through TARA. Clinical symptoms and medical details are not shown in this inbox.
+            </p>
+            {loadingList ? (
+              <div className="text-center py-8 text-xs text-slate-500">Loading patient requests...</div>
+            ) : supportRequests.length === 0 ? (
+              <div className="text-center py-8 text-xs text-slate-500">No patient support requests found.</div>
+            ) : (
+              supportRequests.map((request) => (
+                <div key={request.id} className="bg-slate-950/50 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <MessageCircle className="w-4 h-4 text-teal-400" />
+                      <p className="font-bold text-slate-200 text-sm">{request.patientName || 'Patient'}</p>
+                      <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${request.status === 'resolved' ? 'bg-emerald-950 text-emerald-300' : request.status === 'acknowledged' ? 'bg-sky-950 text-sky-300' : 'bg-amber-950 text-amber-300'}`}>
+                        {(request.status || 'pending').toUpperCase()}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400 mt-1">
+                      {String(request.category || 'GENERAL_ASSISTANCE').replaceAll('_', ' ')} • {request.createdAt ? new Date(request.createdAt).toLocaleString() : 'Time unavailable'}
+                    </p>
+                    {request.notificationStatus === 'failed' && (
+                      <p className="text-[11px] text-amber-300 mt-1">In-app notification delivery failed. This request is still saved here.</p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {request.status === 'pending' && (
+                      <button
+                        onClick={() => handleSupportRequestStatus(request.id, 'acknowledged')}
+                        disabled={supportActionId === request.id}
+                        className="px-3 py-2 bg-sky-500/20 hover:bg-sky-500/30 text-sky-200 border border-sky-500/30 text-xs font-semibold rounded-xl disabled:opacity-50"
+                      >
+                        {supportActionId === request.id ? 'Updating...' : 'Acknowledge'}
+                      </button>
+                    )}
+                    {request.status === 'acknowledged' && (
+                      <button
+                        onClick={() => handleSupportRequestStatus(request.id, 'resolved')}
+                        disabled={supportActionId === request.id}
+                        className="px-3 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-200 border border-emerald-500/30 text-xs font-semibold rounded-xl disabled:opacity-50"
+                      >
+                        {supportActionId === request.id ? 'Updating...' : 'Resolve'}
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))
             )}
