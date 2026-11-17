@@ -69,6 +69,12 @@ export const aiChat = async (req, res, next) => {
     }
 
     // Selected patient health ID defaults to logged-in user or provided healthId
+    // 1. RULE PRE-CHECK: Emergency Keywords (5 languages) - Takes absolute precedence.
+    // Do this before any database lookup so emergency guidance remains available during outages.
+    if (checkEmergencyKeywords(message)) {
+      return res.status(200).json(getEmergencyResponse(language));
+    }
+
     // Resolve the signed-in patient's canonical Health ID on the server.
     // Never trust a client-supplied Health ID for patient-scoped tool queries.
     let selectedPatientHealthId = uid;
@@ -77,11 +83,6 @@ export const aiChat = async (req, res, next) => {
       if (patientProfile.exists && patientProfile.data().patientHealthId) {
         selectedPatientHealthId = patientProfile.data().patientHealthId;
       }
-    }
-
-    // 1. RULE PRE-CHECK: Emergency Keywords (4 languages) - Takes absolute precedence
-    if (checkEmergencyKeywords(message)) {
-      return res.status(200).json(getEmergencyResponse(language));
     }
 
     // 2. HOW-TO / PROCEDURE PRE-CHECK:
@@ -96,16 +97,13 @@ export const aiChat = async (req, res, next) => {
 
     // 3. RULE PRE-CHECK: Quick-Chip Intents (4 languages) -> NO Gemini Call
     const quickIntent = checkQuickChipIntent(message);
+    const forceConversationalBooking = quickIntent === 'BOOK_APPOINTMENT';
     if (quickIntent) {
       const db = assertDbConnected();
       switch (quickIntent) {
         case 'BOOK_APPOINTMENT': {
-          // Return the same reply as the help article book_appointment (answer + numbered steps + actionButtons).
-          // Fake SELECT_DEPT_* chips removed.
-          const helpReply = getHelpReplyById('book_appointment', language) || searchHelp('book appointment', language)?.reply;
-          if (helpReply) {
-            return res.status(200).json(helpReply);
-          }
+          // Voice and text booking requests must enter the conversational booking flow.
+          // Gemini will ask for the reason, doctor preference, date and a real available slot.
           break;
         }
 
@@ -158,7 +156,7 @@ export const aiChat = async (req, res, next) => {
 
     // 4. HELP LIBRARY SEARCH (handles common questions without Gemini)
     const helpResult = searchHelp(message, language);
-    if (helpResult.matched) {
+    if (helpResult.matched && !forceConversationalBooking) {
       return res.status(200).json(helpResult.reply);
     }
 
