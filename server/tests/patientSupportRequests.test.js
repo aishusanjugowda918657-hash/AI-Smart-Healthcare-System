@@ -64,9 +64,8 @@ describe('TARA patient support requests', () => {
 
     const notificationSnap = await db.collection('notifications')
       .where('uid', '==', receptionUid)
-      .where('type', '==', 'PATIENT_SUPPORT_REQUEST')
       .get();
-    expect(notificationSnap.docs.some((doc) => doc.data().data?.supportRequestId === created.body.data.id)).toBe(true);
+    expect(notificationSnap.docs.some((doc) => doc.data().type === 'PATIENT_SUPPORT_REQUEST' && doc.data().data?.supportRequestId === created.body.data.id)).toBe(true);
   });
 
   it('allows Reception to acknowledge and then resolve a request', async () => {
