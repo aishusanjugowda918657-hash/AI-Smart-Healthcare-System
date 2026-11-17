@@ -393,7 +393,7 @@ export async function executePatientChatTool(toolName, args, context) {
         timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false
       });
       const availableSlots = allSlots
-        .filter((slot) => ['free', 'reserved'].includes(String(slot.status || '').toLowerCase()))
+        .filter((slot) => String(slot.status || '').toLowerCase() === 'free')
         .filter((slot) => targetDate !== getHospitalTodayStr() || slot.startAt > nowTime)
         .map((slot) => ({
           slotId: slot.id,
@@ -438,8 +438,8 @@ export async function executePatientChatTool(toolName, args, context) {
     }
 
     case 'prepare_booking': {
-      if (!args.slotId || !args.doctorId || !args.date || !args.timeSlot) {
-        return { error: 'A real slotId, doctorId, date and time are required before preparing a booking.' };
+      if (!args.slotId || !args.doctorId || !args.date || !args.timeSlot || !args.reasonText) {
+        return { error: 'A real slotId, doctorId, date, time and patient-stated reason are required before preparing a booking.' };
       }
       const confirmToken = storeConfirmToken({
         type: 'BOOKING',
@@ -457,7 +457,7 @@ export async function executePatientChatTool(toolName, args, context) {
       return {
         actionRequired: 'CONFIRM_BOOKING',
         confirmToken,
-        summary: `Book appointment on ${args.date} at ${args.timeSlot} with Doctor ${args.doctorId}`,
+        summary: `Book appointment with ${args.doctorName || args.doctorId} on ${args.date} at ${args.timeSlot}`,
         message: getPatientActionMessage(language, 'booking', { doctorName: args.doctorName, date: args.date, time: args.timeSlot })
       };
     }
