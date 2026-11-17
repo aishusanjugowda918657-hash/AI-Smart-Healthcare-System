@@ -32,6 +32,82 @@ import medicinesConfig from '../config/clinical/medicines.json' with { type: 'js
  * ----------------------------------------------------
  */
 
+
+function formatPatientQuickReply(language, type, data = {}) {
+  const token = data.tokenLabel || data.tokenNumber || '';
+  const status = String(data.status || '').replace(/_/g, ' ');
+  const doctor = data.doctorName || 'Doctor';
+  const low = data.waitMinLow ?? data.estimatedWaitMinutes ?? null;
+  const high = data.waitMinHigh ?? (low !== null ? low + 10 : null);
+
+  const copy = {
+    en: {
+      noAppointment: 'You do not have an appointment scheduled for today.',
+      token: `Your token is ${token || 'not available'}. Status: ${status || 'not available'}.`,
+      yourTurn: 'It is your turn now.',
+      wait: `Your estimated wait is ${low} to ${high} minutes.`,
+      waitUnavailable: 'A live waiting-time estimate is not available right now.',
+      timings: `${doctor} OPD timings: ${data.timings}. Lunch break: ${data.lunchBreak}.`,
+      staff: 'I have noted your request. Please approach the hospital reception for assistance.'
+    },
+    kn: {
+      noAppointment: 'ಇಂದು ನಿಮಗೆ ಯಾವುದೇ ಅಪಾಯಿಂಟ್ಮೆಂಟ್ ನಿಗದಿಯಾಗಿಲ್ಲ.',
+      token: `ನಿಮ್ಮ ಟೋಕನ್ ಸಂಖ್ಯೆ ${token || 'ಲಭ್ಯವಿಲ್ಲ'}. ಸ್ಥಿತಿ: ${status || 'ಲಭ್ಯವಿಲ್ಲ'}.`,
+      yourTurn: 'ಈಗ ನಿಮ್ಮ ಸರದಿ ಬಂದಿದೆ.',
+      wait: `ನಿಮ್ಮ ಅಂದಾಜು ಕಾಯುವ ಸಮಯ ${low} ರಿಂದ ${high} ನಿಮಿಷಗಳು.`,
+      waitUnavailable: 'ಪ್ರಸ್ತುತ ನೇರ ಕಾಯುವ ಸಮಯದ ಮಾಹಿತಿ ಲಭ್ಯವಿಲ್ಲ.',
+      timings: `${doctor} ಅವರ OPD ಸಮಯ: ${data.timings}. ಊಟದ ವಿರಾಮ: ${data.lunchBreak}.`,
+      staff: 'ನಿಮ್ಮ ವಿನಂತಿಯನ್ನು ಗಮನಿಸಿದ್ದೇನೆ. ಸಹಾಯಕ್ಕಾಗಿ ದಯವಿಟ್ಟು ಆಸ್ಪತ್ರೆಯ ಸ್ವಾಗತ ಕೌಂಟರ್‌ಗೆ ಹೋಗಿ.'
+    },
+    hi: {
+      noAppointment: 'आज आपके लिए कोई अपॉइंटमेंट निर्धारित नहीं है।',
+      token: `आपका टोकन नंबर ${token || 'उपलब्ध नहीं'} है। स्थिति: ${status || 'उपलब्ध नहीं'}।`,
+      yourTurn: 'अब आपकी बारी है।',
+      wait: `आपका अनुमानित प्रतीक्षा समय ${low} से ${high} मिनट है।`,
+      waitUnavailable: 'अभी लाइव प्रतीक्षा समय उपलब्ध नहीं है।',
+      timings: `${doctor} का OPD समय: ${data.timings}। लंच ब्रेक: ${data.lunchBreak}।`,
+      staff: 'आपका अनुरोध दर्ज कर लिया है। सहायता के लिए कृपया अस्पताल के रिसेप्शन पर जाएँ।'
+    },
+    te: {
+      noAppointment: 'ఈరోజు మీకు అపాయింట్‌మెంట్ లేదు.',
+      token: `మీ టోకెన్ నంబర్ ${token || 'అందుబాటులో లేదు'}. స్థితి: ${status || 'అందుబాటులో లేదు'}.`,
+      yourTurn: 'ఇప్పుడు మీ వంతు వచ్చింది.',
+      wait: `మీ అంచనా వేచి ఉండే సమయం ${low} నుండి ${high} నిమిషాలు.`,
+      waitUnavailable: 'ప్రస్తుతం ప్రత్యక్ష వేచి ఉండే సమయ సమాచారం అందుబాటులో లేదు.',
+      timings: `${doctor} OPD సమయాలు: ${data.timings}. భోజన విరామం: ${data.lunchBreak}.`,
+      staff: 'మీ అభ్యర్థనను నమోదు చేశాను. సహాయం కోసం ఆసుపత్రి రిసెప్షన్‌ను సంప్రదించండి.'
+    },
+    ta: {
+      noAppointment: 'இன்று உங்களுக்கு எந்த சந்திப்பும் திட்டமிடப்படவில்லை.',
+      token: `உங்கள் டோக்கன் எண் ${token || 'கிடைக்கவில்லை'}. நிலை: ${status || 'கிடைக்கவில்லை'}.`,
+      yourTurn: 'இப்போது உங்கள் முறை.',
+      wait: `உங்கள் மதிப்பிடப்பட்ட காத்திருப்பு நேரம் ${low} முதல் ${high} நிமிடங்கள்.`,
+      waitUnavailable: 'தற்போது நேரடி காத்திருப்பு நேரம் கிடைக்கவில்லை.',
+      timings: `${doctor} OPD நேரம்: ${data.timings}. மதிய உணவு இடைவேளை: ${data.lunchBreak}.`,
+      staff: 'உங்கள் கோரிக்கை பதிவு செய்யப்பட்டது. உதவிக்கு மருத்துவமனை வரவேற்பை அணுகவும்.'
+    }
+  };
+  const text = copy[language] || copy.en;
+
+  if (type === 'TOKEN_STATUS') {
+    if (data.status === 'no_appointment_today') return text.noAppointment;
+    const waitText = low === null ? text.waitUnavailable : (low === 0 ? text.yourTurn : text.wait);
+    return `${text.token} ${waitText}`;
+  }
+  if (type === 'WAIT_TIME') {
+    if (low === null) {
+      const count = data.currentQueueLength;
+      return count === null || count === undefined
+        ? text.waitUnavailable
+        : `${count} patients are currently in the queue. ${text.waitUnavailable}`;
+    }
+    return low === 0 ? text.yourTurn : text.wait;
+  }
+  if (type === 'DOCTOR_TIMINGS') return text.timings;
+  if (type === 'TALK_TO_STAFF') return text.staff;
+  return text.waitUnavailable;
+}
+
 async function invokePatientAppointmentController(controller, request) {
   return new Promise((resolve, reject) => {
     let statusCode = 200;
@@ -114,9 +190,7 @@ export const aiChat = async (req, res, next) => {
 
         case 'TOKEN_STATUS': {
           const result = await executePatientChatTool('get_token_status', {}, { userId: uid, selectedPatientHealthId });
-          const waitMsg = result.status === 'no_appointment_today'
-            ? result.message
-            : `Your token is **${result.tokenLabel || result.tokenNumber}** · Status: ${result.status?.replace('_', ' ')}. Estimated wait: **${result.waitDisplay || result.message || 'Waiting-time estimate unavailable'}**${result.reasonText ? '\n> ' + result.reasonText : ''}`;
+          const waitMsg = formatPatientQuickReply(language, 'TOKEN_STATUS', result);
           return res.status(200).json({
             success: true,
             language,
@@ -131,7 +205,7 @@ export const aiChat = async (req, res, next) => {
           return res.status(200).json({
             success: true,
             language,
-            message: result.message || `Estimated wait: approximately ${result.estimatedWaitMinutes} minutes.`,
+            message: formatPatientQuickReply(language, 'WAIT_TIME', result),
             waitData: result,
             aiSource: 'quick_chip'
           });
@@ -142,7 +216,7 @@ export const aiChat = async (req, res, next) => {
           return res.status(200).json({
             success: true,
             language,
-            message: `${result.doctorName} OPD Timings: ${result.timings}. Lunch break: ${result.lunchBreak}.`,
+            message: formatPatientQuickReply(language, 'DOCTOR_TIMINGS', result),
             aiSource: 'quick_chip'
           });
         }
@@ -152,7 +226,7 @@ export const aiChat = async (req, res, next) => {
           return res.status(200).json({
             success: true,
             language,
-            message: result.message,
+            message: formatPatientQuickReply(language, 'TALK_TO_STAFF', result),
             aiSource: 'quick_chip'
           });
         }
