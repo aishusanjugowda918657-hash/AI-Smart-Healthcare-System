@@ -17,7 +17,7 @@ export function useSarvamSpeech(initialLang = 'en-IN') {
   const [speakerEnabled, setSpeakerEnabled] = useState(true);
   const [lastInputMode, setLastInputMode] = useState('text');
 
-  const recorderRef = useRef(null);
+  useEffect(() => {\n    setLang(initialLang);\n  }, [initialLang]);\n\n  const recorderRef = useRef(null);
   const streamRef = useRef(null);
   const chunksRef = useRef([]);
   const audioRef = useRef(null);
