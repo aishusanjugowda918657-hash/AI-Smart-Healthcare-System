@@ -189,7 +189,7 @@ export const aiChat = async (req, res, next) => {
     // 3. RULE PRE-CHECK: Quick-Chip Intents (4 languages) -> NO Gemini Call
     const quickIntent = checkQuickChipIntent(message);
     const isBookingHelpChip = message.trim().toLowerCase() === 'book appointment';
-    const isConversationalBookingRequest = !isHowTo && !isBookingHelpChip && /\\b(book|schedule|reserve|make)\\b.*\\b(appointment|slot|doctor)\\b/i.test(message);
+    const isConversationalBookingRequest = !isHowTo && !isBookingHelpChip && /\b(book|schedule|reserve|make)\b.*\b(appointment|slot|doctor)\b/i.test(message);
     const forceConversationalBooking = (quickIntent === 'BOOK_APPOINTMENT' && !isBookingHelpChip) || isConversationalBookingRequest;
     if (quickIntent) {
       const db = assertDbConnected();
