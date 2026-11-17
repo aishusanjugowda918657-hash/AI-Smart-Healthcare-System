@@ -20,7 +20,7 @@ Set these variables in local `server/.env` and in the Render service environment
 SARVAM_API_KEY=your_sarvam_api_key
 SARVAM_STT_MODEL=saaras:v4
 SARVAM_TTS_MODEL=bulbul:v3
-SARVAM_TTS_SPEAKER=shubh
+SARVAM_TTS_SPEAKER=  # Optional; if omitted, a language-appropriate default voice is selected
 ```
 
 Never add the Sarvam key to a `VITE_*` variable or commit it to Git.
