@@ -19,7 +19,7 @@ import {
 } from '../ai/tools.js';
 import { assertDbConnected } from '../config/firebase.js';
 import { createAppointment } from './bookingController.js';
-import { cancelAppointment } from './appointmentController.js';
+import { cancelAppointment as cancelAppointmentLifecycle, rescheduleAppointment as rescheduleAppointmentLifecycle } from './appointmentLifecycleController.js';
 import { evaluatePrescriptionSafety } from '../domain/safety.js';
 import { searchHelp, getArticleSummaries, getHelpReplyById } from '../domain/helpSearch.js';
 import flags from '../config/flags.js';
@@ -30,6 +30,30 @@ import medicinesConfig from '../config/clinical/medicines.json' with { type: 'js
  * PATIENT CHATBOT (F14)
  * ----------------------------------------------------
  */
+
+async function invokePatientAppointmentController(controller, request) {
+  return new Promise((resolve, reject) => {
+    let statusCode = 200;
+    const response = {
+      status(code) {
+        statusCode = code;
+        return this;
+      },
+      json(body) {
+        resolve({ statusCode, body });
+        return this;
+      }
+    };
+
+    try {
+      const pending = controller(request, response, reject);
+      if (pending && typeof pending.catch === 'function') pending.catch(reject);
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
 export const aiChat = async (req, res, next) => {
   try {
     // inputMode is a UI hint sent by the client ('voice' or 'text'); server ignores it for logic
@@ -45,7 +69,15 @@ export const aiChat = async (req, res, next) => {
     }
 
     // Selected patient health ID defaults to logged-in user or provided healthId
-    const selectedPatientHealthId = patientHealthId || uid;
+    // Resolve the signed-in patient's canonical Health ID on the server.
+    // Never trust a client-supplied Health ID for patient-scoped tool queries.
+    let selectedPatientHealthId = uid;
+    if (uid) {
+      const patientProfile = await assertDbConnected().collection('patients').doc(uid).get();
+      if (patientProfile.exists && patientProfile.data().patientHealthId) {
+        selectedPatientHealthId = patientProfile.data().patientHealthId;
+      }
+    }
 
     // 1. RULE PRE-CHECK: Emergency Keywords (4 languages) - Takes absolute precedence
     if (checkEmergencyKeywords(message)) {
@@ -219,33 +251,89 @@ export const aiChatConfirm = async (req, res, next) => {
     }
 
     if (tokenData.type === 'BOOKING') {
-      const appointment = await createAppointment({
-        userId: tokenData.userId,
-        patientHealthId: tokenData.patientHealthId,
-        doctorId: tokenData.doctorId,
-        date: tokenData.date,
-        timeSlot: tokenData.timeSlot,
-        disclaimerAccepted: true
+      const result = await invokePatientAppointmentController(createAppointment, {
+        body: {
+          slotId: tokenData.slotId,
+          slotIds: [tokenData.slotId],
+          patientHealthId: tokenData.patientHealthId,
+          patientName: 'Patient',
+          doctorId: tokenData.doctorId,
+          departmentId: tokenData.departmentId || undefined,
+          date: tokenData.date,
+          reasonText: tokenData.reasonText || 'Routine checkup',
+          disclaimerAck: {
+            acknowledged: true,
+            at: new Date().toISOString(),
+            version: '1.0'
+          }
+        },
+        user: { uid: tokenData.userId, role: 'patient' },
+        requestId: req.requestId,
+        headers: req.headers
       });
+
+      if (result.statusCode >= 400 || !result.body?.success) {
+        return res.status(result.statusCode || 400).json(result.body || {
+          success: false,
+          message: 'Appointment booking could not be completed.'
+        });
+      }
 
       return res.status(200).json({
         success: true,
         message: 'Appointment confirmed and booked successfully.',
-        appointment
+        appointment: result.body.data,
+        data: result.body.data
       });
     }
 
     if (tokenData.type === 'CANCEL') {
-      const result = await cancelAppointment({
-        appointmentId: tokenData.appointmentId,
-        userId: tokenData.userId,
-        reason: 'Cancelled via AI Chatbot'
+      const result = await invokePatientAppointmentController(cancelAppointmentLifecycle, {
+        params: { id: tokenData.appointmentId },
+        body: { reason: 'Cancelled via AI Healthcare Assistant' },
+        user: { uid: tokenData.userId, role: 'patient' },
+        requestId: req.requestId,
+        headers: req.headers
       });
+
+      if (result.statusCode >= 400 || !result.body?.success) {
+        return res.status(result.statusCode || 400).json(result.body || {
+          success: false,
+          message: 'Appointment cancellation could not be completed.'
+        });
+      }
 
       return res.status(200).json({
         success: true,
         message: 'Appointment cancelled successfully.',
-        result
+        result: result.body.data
+      });
+    }
+
+    if (tokenData.type === 'RESCHEDULE') {
+      const result = await invokePatientAppointmentController(rescheduleAppointmentLifecycle, {
+        params: { id: tokenData.appointmentId },
+        body: {
+          newSlotId: tokenData.newSlotId,
+          newDate: tokenData.newDate,
+          newTime: tokenData.newTime
+        },
+        user: { uid: tokenData.userId, role: 'patient' },
+        requestId: req.requestId,
+        headers: req.headers
+      });
+
+      if (result.statusCode >= 400 || !result.body?.success) {
+        return res.status(result.statusCode || 400).json(result.body || {
+          success: false,
+          message: 'Appointment rescheduling could not be completed.'
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'Appointment rescheduled successfully.',
+        result: result.body.data
       });
     }
 
