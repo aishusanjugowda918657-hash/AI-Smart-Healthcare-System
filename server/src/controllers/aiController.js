@@ -111,7 +111,7 @@ export const aiChat = async (req, res, next) => {
           const result = await executePatientChatTool('get_token_status', {}, { userId: uid, selectedPatientHealthId });
           const waitMsg = result.status === 'no_appointment_today'
             ? result.message
-            : `Your token is **${result.tokenLabel || result.tokenNumber}** · Status: ${result.status?.replace('_', ' ')}. Estimated wait: **${result.waitDisplay || `~${result.estimatedWaitMinutes} minutes`}**${result.reasonText ? '\n> ' + result.reasonText : ''}`;
+            : `Your token is **${result.tokenLabel || result.tokenNumber}** · Status: ${result.status?.replace('_', ' ')}. Estimated wait: **${result.waitDisplay || result.message || 'Waiting-time estimate unavailable'}**${result.reasonText ? '\n> ' + result.reasonText : ''}`;
           return res.status(200).json({
             success: true,
             language,
