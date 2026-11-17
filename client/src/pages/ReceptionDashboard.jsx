@@ -409,7 +409,7 @@ export const ReceptionDashboard = () => {
                       </span>
                     </div>
                     <p className="text-xs text-slate-400 mt-1">
-                      {String(request.category || 'GENERAL_ASSISTANCE').replaceAll('_', ' ')} • {request.createdAt ? new Date(request.createdAt).toLocaleString() : 'Time unavailable'}
+                      {String(request.category || 'GENERAL_ASSISTANCE').replaceAll('_', ' ')}{request.patientPhone ? ` • ${request.patientPhone}` : ''} • {request.createdAt ? new Date(request.createdAt).toLocaleString() : 'Time unavailable'}
                     </p>
                     {request.notificationStatus === 'failed' && (
                       <p className="text-[11px] text-amber-300 mt-1">In-app notification delivery failed. This request is still saved here.</p>
