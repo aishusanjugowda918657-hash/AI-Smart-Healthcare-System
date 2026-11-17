@@ -1,4 +1,4 @@
-import { beforeAll, afterAll, describe, expect, it } from 'vitest';
+import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
 import supertest from 'supertest';
 import app from '../src/app.js';
 import { assertDbConnected } from '../src/config/firebase.js';
