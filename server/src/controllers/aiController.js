@@ -15,11 +15,12 @@ import {
   executePatientChatTool,
   DOCTOR_AGENT_TOOL_DECLARATIONS,
   executeDoctorAgentTool,
-  consumeConfirmToken
+  consumeConfirmToken,
+  getConfirmTokenData
 } from '../ai/tools.js';
 import { assertDbConnected } from '../config/firebase.js';
 import { createAppointment } from './bookingController.js';
-import { cancelAppointment } from './appointmentController.js';
+import { cancelAppointment as cancelAppointmentLifecycle, rescheduleAppointment as rescheduleAppointmentLifecycle } from './appointmentLifecycleController.js';
 import { evaluatePrescriptionSafety } from '../domain/safety.js';
 import { searchHelp, getArticleSummaries, getHelpReplyById } from '../domain/helpSearch.js';
 import flags from '../config/flags.js';
@@ -30,6 +31,111 @@ import medicinesConfig from '../config/clinical/medicines.json' with { type: 'js
  * PATIENT CHATBOT (F14)
  * ----------------------------------------------------
  */
+
+
+function formatPatientQuickReply(language, type, data = {}) {
+  const token = data.tokenLabel || data.tokenNumber || '';
+  const status = String(data.status || '').replace(/_/g, ' ');
+  const doctor = data.doctorName || 'Doctor';
+  const low = data.waitMinLow ?? data.estimatedWaitMinutes ?? null;
+  const high = data.waitMinHigh ?? (low !== null ? low + 10 : null);
+
+  const copy = {
+    en: {
+      noAppointment: 'You do not have an appointment scheduled for today.',
+      token: `Your token is ${token || 'not available'}. Status: ${status || 'not available'}.`,
+      yourTurn: 'It is your turn now.',
+      wait: `Your estimated wait is ${low} to ${high} minutes.`,
+      waitUnavailable: 'A live waiting-time estimate is not available right now.',
+      queueCount: (count) => `${count} patients are currently in the queue. ${text.waitUnavailable}`,
+      timings: `${doctor} OPD timings: ${data.timings}. Lunch break: ${data.lunchBreak}.`,
+      staff: 'I have noted your request. Please approach the hospital reception for assistance.'
+    },
+    kn: {
+      noAppointment: 'ಇಂದು ನಿಮಗೆ ಯಾವುದೇ ಅಪಾಯಿಂಟ್ಮೆಂಟ್ ನಿಗದಿಯಾಗಿಲ್ಲ.',
+      token: `ನಿಮ್ಮ ಟೋಕನ್ ಸಂಖ್ಯೆ ${token || 'ಲಭ್ಯವಿಲ್ಲ'}. ಸ್ಥಿತಿ: ${status || 'ಲಭ್ಯವಿಲ್ಲ'}.`,
+      yourTurn: 'ಈಗ ನಿಮ್ಮ ಸರದಿ ಬಂದಿದೆ.',
+      wait: `ನಿಮ್ಮ ಅಂದಾಜು ಕಾಯುವ ಸಮಯ ${low} ರಿಂದ ${high} ನಿಮಿಷಗಳು.`,
+      waitUnavailable: 'ಪ್ರಸ್ತುತ ನೇರ ಕಾಯುವ ಸಮಯದ ಮಾಹಿತಿ ಲಭ್ಯವಿಲ್ಲ.',
+      queueCount: (count) => `ಪ್ರಸ್ತುತ ಸರದಿಯಲ್ಲಿ ${count} ರೋಗಿಗಳಿದ್ದಾರೆ. ${text.waitUnavailable}`,
+      timings: `${doctor} ಅವರ OPD ಸಮಯ: ${data.timings}. ಊಟದ ವಿರಾಮ: ${data.lunchBreak}.`,
+      staff: 'ನಿಮ್ಮ ವಿನಂತಿಯನ್ನು ಗಮನಿಸಿದ್ದೇನೆ. ಸಹಾಯಕ್ಕಾಗಿ ದಯವಿಟ್ಟು ಆಸ್ಪತ್ರೆಯ ಸ್ವಾಗತ ಕೌಂಟರ್‌ಗೆ ಹೋಗಿ.'
+    },
+    hi: {
+      noAppointment: 'आज आपके लिए कोई अपॉइंटमेंट निर्धारित नहीं है।',
+      token: `आपका टोकन नंबर ${token || 'उपलब्ध नहीं'} है। स्थिति: ${status || 'उपलब्ध नहीं'}।`,
+      yourTurn: 'अब आपकी बारी है।',
+      wait: `आपका अनुमानित प्रतीक्षा समय ${low} से ${high} मिनट है।`,
+      waitUnavailable: 'अभी लाइव प्रतीक्षा समय उपलब्ध नहीं है।',
+      queueCount: (count) => `अभी कतार में ${count} मरीज हैं। ${text.waitUnavailable}`,
+      timings: `${doctor} का OPD समय: ${data.timings}। लंच ब्रेक: ${data.lunchBreak}।`,
+      staff: 'आपका अनुरोध दर्ज कर लिया है। सहायता के लिए कृपया अस्पताल के रिसेप्शन पर जाएँ।'
+    },
+    te: {
+      noAppointment: 'ఈరోజు మీకు అపాయింట్‌మెంట్ లేదు.',
+      token: `మీ టోకెన్ నంబర్ ${token || 'అందుబాటులో లేదు'}. స్థితి: ${status || 'అందుబాటులో లేదు'}.`,
+      yourTurn: 'ఇప్పుడు మీ వంతు వచ్చింది.',
+      wait: `మీ అంచనా వేచి ఉండే సమయం ${low} నుండి ${high} నిమిషాలు.`,
+      waitUnavailable: 'ప్రస్తుతం ప్రత్యక్ష వేచి ఉండే సమయ సమాచారం అందుబాటులో లేదు.',
+      queueCount: (count) => `ప్రస్తుతం క్యూలో ${count} మంది రోగులు ఉన్నారు. ${text.waitUnavailable}`,
+      timings: `${doctor} OPD సమయాలు: ${data.timings}. భోజన విరామం: ${data.lunchBreak}.`,
+      staff: 'మీ అభ్యర్థనను నమోదు చేశాను. సహాయం కోసం ఆసుపత్రి రిసెప్షన్‌ను సంప్రదించండి.'
+    },
+    ta: {
+      noAppointment: 'இன்று உங்களுக்கு எந்த சந்திப்பும் திட்டமிடப்படவில்லை.',
+      token: `உங்கள் டோக்கன் எண் ${token || 'கிடைக்கவில்லை'}. நிலை: ${status || 'கிடைக்கவில்லை'}.`,
+      yourTurn: 'இப்போது உங்கள் முறை.',
+      wait: `உங்கள் மதிப்பிடப்பட்ட காத்திருப்பு நேரம் ${low} முதல் ${high} நிமிடங்கள்.`,
+      waitUnavailable: 'தற்போது நேரடி காத்திருப்பு நேரம் கிடைக்கவில்லை.',
+      queueCount: (count) => `தற்போது வரிசையில் ${count} நோயாளிகள் உள்ளனர். ${text.waitUnavailable}`,
+      timings: `${doctor} OPD நேரம்: ${data.timings}. மதிய உணவு இடைவேளை: ${data.lunchBreak}.`,
+      staff: 'உங்கள் கோரிக்கை பதிவு செய்யப்பட்டது. உதவிக்கு மருத்துவமனை வரவேற்பை அணுகவும்.'
+    }
+  };
+  const text = copy[language] || copy.en;
+
+  if (type === 'TOKEN_STATUS') {
+    if (data.status === 'no_appointment_today') return text.noAppointment;
+    const waitText = low === null ? text.waitUnavailable : (low === 0 ? text.yourTurn : text.wait);
+    return `${text.token} ${waitText}`;
+  }
+  if (type === 'WAIT_TIME') {
+    if (low === null) {
+      const count = data.currentQueueLength;
+      return count === null || count === undefined
+        ? text.waitUnavailable
+        : text.queueCount(count);
+    }
+    return low === 0 ? text.yourTurn : text.wait;
+  }
+  if (type === 'DOCTOR_TIMINGS') return text.timings;
+  if (type === 'TALK_TO_STAFF') return text.staff;
+  return text.waitUnavailable;
+}
+
+async function invokePatientAppointmentController(controller, request) {
+  return new Promise((resolve, reject) => {
+    let statusCode = 200;
+    const response = {
+      status(code) {
+        statusCode = code;
+        return this;
+      },
+      json(body) {
+        resolve({ statusCode, body });
+        return this;
+      }
+    };
+
+    try {
+      const pending = controller(request, response, reject);
+      if (pending && typeof pending.catch === 'function') pending.catch(reject);
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
 export const aiChat = async (req, res, next) => {
   try {
     // inputMode is a UI hint sent by the client ('voice' or 'text'); server ignores it for logic
@@ -45,11 +151,24 @@ export const aiChat = async (req, res, next) => {
     }
 
     // Selected patient health ID defaults to logged-in user or provided healthId
-    const selectedPatientHealthId = patientHealthId || uid;
-
-    // 1. RULE PRE-CHECK: Emergency Keywords (4 languages) - Takes absolute precedence
+    // 1. RULE PRE-CHECK: Emergency Keywords (5 languages) - Takes absolute precedence.
+    // Do this before any database lookup so emergency guidance remains available during outages.
     if (checkEmergencyKeywords(message)) {
       return res.status(200).json(getEmergencyResponse(language));
+    }
+
+    // Resolve the signed-in patient's canonical Health ID on the server.
+    // Never trust a client-supplied Health ID for patient-scoped tool queries.
+    let selectedPatientHealthId = uid;
+    if (uid) {
+      try {
+        const patientProfile = await assertDbConnected().collection('patients').doc(uid).get();
+        if (patientProfile.exists && patientProfile.data().patientHealthId) {
+          selectedPatientHealthId = patientProfile.data().patientHealthId;
+        }
+      } catch (profileError) {
+        console.warn('Patient Health ID lookup unavailable for AI chat:', profileError.message);
+      }
     }
 
     // 2. HOW-TO / PROCEDURE PRE-CHECK:
@@ -64,24 +183,19 @@ export const aiChat = async (req, res, next) => {
 
     // 3. RULE PRE-CHECK: Quick-Chip Intents (4 languages) -> NO Gemini Call
     const quickIntent = checkQuickChipIntent(message);
+    const forceConversationalBooking = quickIntent === 'BOOK_APPOINTMENT';
     if (quickIntent) {
       const db = assertDbConnected();
       switch (quickIntent) {
         case 'BOOK_APPOINTMENT': {
-          // Return the same reply as the help article book_appointment (answer + numbered steps + actionButtons).
-          // Fake SELECT_DEPT_* chips removed.
-          const helpReply = getHelpReplyById('book_appointment', language) || searchHelp('book appointment', language)?.reply;
-          if (helpReply) {
-            return res.status(200).json(helpReply);
-          }
+          // Voice and text booking requests must enter the conversational booking flow.
+          // Gemini will ask for the reason, doctor preference, date and a real available slot.
           break;
         }
 
         case 'TOKEN_STATUS': {
           const result = await executePatientChatTool('get_token_status', {}, { userId: uid, selectedPatientHealthId });
-          const waitMsg = result.status === 'no_appointment_today'
-            ? result.message
-            : `Your token is **${result.tokenLabel || result.tokenNumber}** · Status: ${result.status?.replace('_', ' ')}. Estimated wait: **${result.waitDisplay || `~${result.estimatedWaitMinutes} minutes`}**${result.reasonText ? '\n> ' + result.reasonText : ''}`;
+          const waitMsg = formatPatientQuickReply(language, 'TOKEN_STATUS', result);
           return res.status(200).json({
             success: true,
             language,
@@ -96,7 +210,7 @@ export const aiChat = async (req, res, next) => {
           return res.status(200).json({
             success: true,
             language,
-            message: result.message || `Estimated wait: approximately ${result.estimatedWaitMinutes} minutes.`,
+            message: formatPatientQuickReply(language, 'WAIT_TIME', result),
             waitData: result,
             aiSource: 'quick_chip'
           });
@@ -107,7 +221,7 @@ export const aiChat = async (req, res, next) => {
           return res.status(200).json({
             success: true,
             language,
-            message: `${result.doctorName} OPD Timings: ${result.timings}. Lunch break: ${result.lunchBreak}.`,
+            message: formatPatientQuickReply(language, 'DOCTOR_TIMINGS', result),
             aiSource: 'quick_chip'
           });
         }
@@ -117,7 +231,7 @@ export const aiChat = async (req, res, next) => {
           return res.status(200).json({
             success: true,
             language,
-            message: result.message,
+            message: formatPatientQuickReply(language, 'TALK_TO_STAFF', result),
             aiSource: 'quick_chip'
           });
         }
@@ -126,7 +240,7 @@ export const aiChat = async (req, res, next) => {
 
     // 4. HELP LIBRARY SEARCH (handles common questions without Gemini)
     const helpResult = searchHelp(message, language);
-    if (helpResult.matched) {
+    if (helpResult.matched && !forceConversationalBooking) {
       return res.status(200).json(helpResult.reply);
     }
 
@@ -155,7 +269,7 @@ export const aiChat = async (req, res, next) => {
       messages: trimmedHistory.concat([{ role: 'user', content: message }]),
       tools: PATIENT_CHAT_TOOL_DECLARATIONS,
       toolHandler: executePatientChatTool,
-      context: { userId: uid, selectedPatientHealthId },
+      context: { userId: uid, selectedPatientHealthId, language },
       maxRounds: 5
     });
 
@@ -203,49 +317,122 @@ export const aiChat = async (req, res, next) => {
  */
 export const aiChatConfirm = async (req, res, next) => {
   try {
-    const { confirmToken, disclaimerAccepted = true } = req.body;
+    const { confirmToken, disclaimerAccepted = false } = req.body;
+    const language = ['en', 'kn', 'hi', 'te', 'ta'].includes(req.body.language) ? req.body.language : 'en';
 
     if (!confirmToken) {
       return res.status(400).json({ success: false, message: 'confirmToken is required.' });
     }
 
-    const tokenData = consumeConfirmToken(confirmToken);
-    if (!tokenData) {
+    const pendingTokenData = getConfirmTokenData(confirmToken);
+    if (!pendingTokenData) {
       return res.status(400).json({ success: false, message: 'Invalid or expired confirmation token.' });
     }
-
-    if (!disclaimerAccepted) {
-      return res.status(400).json({ success: false, message: 'Booking requires health disclaimer acceptance.' });
+    if (pendingTokenData.userId !== req.user?.uid) {
+      return res.status(403).json({ success: false, message: 'You are not authorized to confirm this action.' });
     }
+    if (!disclaimerAccepted) {
+      return res.status(400).json({ success: false, message: 'Please accept the health disclaimer before confirming this action.' });
+    }
+    const tokenData = consumeConfirmToken(confirmToken);
 
     if (tokenData.type === 'BOOKING') {
-      const appointment = await createAppointment({
-        userId: tokenData.userId,
-        patientHealthId: tokenData.patientHealthId,
-        doctorId: tokenData.doctorId,
-        date: tokenData.date,
-        timeSlot: tokenData.timeSlot,
-        disclaimerAccepted: true
+      const result = await invokePatientAppointmentController(createAppointment, {
+        body: {
+          slotId: tokenData.slotId,
+          slotIds: [tokenData.slotId],
+          patientHealthId: tokenData.patientHealthId,
+          patientName: 'Patient',
+          doctorId: tokenData.doctorId,
+          departmentId: tokenData.departmentId || undefined,
+          date: tokenData.date,
+          reasonText: tokenData.reasonText || 'Routine checkup',
+          disclaimerAck: {
+            acknowledged: true,
+            at: new Date().toISOString(),
+            version: '1.0'
+          }
+        },
+        user: { uid: tokenData.userId, role: 'patient' },
+        requestId: req.requestId,
+        headers: req.headers
       });
+
+      if (result.statusCode >= 400 || !result.body?.success) {
+        return res.status(result.statusCode || 400).json(result.body || {
+          success: false,
+          message: 'Appointment booking could not be completed.'
+        });
+      }
 
       return res.status(200).json({
         success: true,
-        message: 'Appointment confirmed and booked successfully.',
-        appointment
+        message: (() => {
+          const doctor = result.body.data?.doctorName || 'Doctor';
+          const date = result.body.data?.date || tokenData.date;
+          const time = result.body.data?.bookedStartAt || result.body.data?.timeSlot || tokenData.timeSlot;
+          const token = result.body.data?.tokenLabel || result.body.data?.tokenNumber || '';
+          const messages = {
+            en: `Your appointment with ${doctor} is booked for ${date} at ${time}. Your token number is ${token}.`,
+            kn: `${doctor} ಅವರೊಂದಿಗೆ ${date} ರಂದು ${time} ಗಂಟೆಗೆ ನಿಮ್ಮ ಅಪಾಯಿಂಟ್ಮೆಂಟ್ ಬುಕ್ ಆಗಿದೆ. ನಿಮ್ಮ ಟೋಕನ್ ಸಂಖ್ಯೆ ${token}.`,
+            hi: `${doctor} के साथ आपकी अपॉइंटमेंट ${date} को ${time} बजे बुक हो गई है। आपका टोकन नंबर ${token} है।`,
+            te: `${doctor} తో మీ అపాయింట్‌మెంట్ ${date} న ${time} గంటలకు బుక్ అయింది. మీ టోకెన్ నంబర్ ${token}.`,
+            ta: `${doctor} அவர்களுடன் உங்கள் சந்திப்பு ${date} அன்று ${time} மணிக்கு பதிவு செய்யப்பட்டது. உங்கள் டோக்கன் எண் ${token}.`
+          };
+          return messages[language];
+        })(),
+        appointment: result.body.data,
+        data: result.body.data
       });
     }
 
     if (tokenData.type === 'CANCEL') {
-      const result = await cancelAppointment({
-        appointmentId: tokenData.appointmentId,
-        userId: tokenData.userId,
-        reason: 'Cancelled via AI Chatbot'
+      const result = await invokePatientAppointmentController(cancelAppointmentLifecycle, {
+        params: { id: tokenData.appointmentId },
+        body: { reason: 'Cancelled via AI Healthcare Assistant' },
+        user: { uid: tokenData.userId, role: 'patient' },
+        requestId: req.requestId,
+        headers: req.headers
       });
+
+      if (result.statusCode >= 400 || !result.body?.success) {
+        return res.status(result.statusCode || 400).json(result.body || {
+          success: false,
+          message: 'Appointment cancellation could not be completed.'
+        });
+      }
 
       return res.status(200).json({
         success: true,
-        message: 'Appointment cancelled successfully.',
-        result
+        message: ({ en: 'Your appointment has been cancelled.', kn: 'ನಿಮ್ಮ ಅಪಾಯಿಂಟ್ಮೆಂಟ್ ರದ್ದಾಗಿದೆ.', hi: 'आपकी अपॉइंटमेंट रद्द कर दी गई है।', te: 'మీ అపాయింట్‌మెంట్ రద్దు చేయబడింది.', ta: 'உங்கள் சந்திப்பு ரத்து செய்யப்பட்டது.' })[language],
+        result: result.body.data
+      });
+    }
+
+    if (tokenData.type === 'RESCHEDULE') {
+      const result = await invokePatientAppointmentController(rescheduleAppointmentLifecycle, {
+        params: { id: tokenData.appointmentId },
+        body: {
+          newSlotId: tokenData.newSlotId,
+          newDate: tokenData.newDate,
+          newTime: tokenData.newTime
+        },
+        user: { uid: tokenData.userId, role: 'patient' },
+        requestId: req.requestId,
+        headers: req.headers
+      });
+
+      if (result.statusCode >= 400 || !result.body?.success) {
+        return res.status(result.statusCode || 400).json(result.body || {
+          success: false,
+          message: 'Appointment rescheduling could not be completed.'
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: ({ en: `Your appointment has been rescheduled to ${tokenData.newDate} at ${tokenData.newTime}.`, kn: `ನಿಮ್ಮ ಅಪಾಯಿಂಟ್ಮೆಂಟ್ ${tokenData.newDate} ರಂದು ${tokenData.newTime} ಗಂಟೆಗೆ ಬದಲಾಯಿಸಲಾಗಿದೆ.`, hi: `आपकी अपॉइंटमेंट ${tokenData.newDate} को ${tokenData.newTime} बजे के लिए बदल दी गई है।`, te: `మీ అపాయింట్‌మెంట్ ${tokenData.newDate} న ${tokenData.newTime} గంటలకు మార్చబడింది.`, ta: `உங்கள் சந்திப்பு ${tokenData.newDate} அன்று ${tokenData.newTime} மணிக்கு மாற்றப்பட்டது.` })[language],
+        result: result.body.data
       });
     }
 
