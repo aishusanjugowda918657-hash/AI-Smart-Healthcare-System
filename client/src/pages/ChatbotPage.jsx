@@ -94,6 +94,15 @@ export const ChatbotPage = () => {
       'नहीं', 'मत करो', 'வேண்டாம்', 'இல்லை', 'వద్దు', 'కాదు'
     ]);
 
+    const cancelMessages = {
+      en: "Okay. I won't make that change.",
+      kn: 'ಸರಿ. ನಾನು ಆ ಬದಲಾವಣೆಯನ್ನು ಮಾಡುವುದಿಲ್ಲ.',
+      hi: 'ठीक है। मैं यह बदलाव नहीं करूँगा।',
+      te: 'సరే. నేను ఈ మార్పు చేయను.',
+      ta: 'சரி. இந்த மாற்றத்தை நான் செய்யமாட்டேன்.'
+    };
+    const cancelMessage = cancelMessages[selectedLang.split('-')[0]] || cancelMessages.en;
+
     // A spoken/typed yes or no applies to the pending confirmed action, not a new AI question.
     if (pendingConfirm && affirmativeReplies.has(normalizedQuery)) {
       cancelSpeech();
