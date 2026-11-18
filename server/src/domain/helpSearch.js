@@ -15,12 +15,14 @@ import enArticles from '../config/help/en.js';
 import hiArticles from '../config/help/hi.js';
 import knArticles from '../config/help/kn.js';
 import taArticles from '../config/help/ta.js';
+import teArticles from '../config/help/te.js';
 
 export const LIBRARIES = {
   en: enArticles.articles || enArticles.default?.articles || enArticles,
   hi: hiArticles.articles || hiArticles.default?.articles || hiArticles,
   kn: knArticles.articles || knArticles.default?.articles || knArticles,
-  ta: taArticles.articles || taArticles.default?.articles || taArticles
+  ta: taArticles.articles || taArticles.default?.articles || taArticles,
+  te: teArticles.articles || teArticles.default?.articles || teArticles
 };
 
 /* ────────────── normalisation helpers ────────────── */

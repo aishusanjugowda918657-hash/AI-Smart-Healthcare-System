@@ -34,13 +34,26 @@ export const requireAuth = async (req, res, next) => {
     const auth = getAuth();
 
     if (!auth) {
-      // Mock mode fallback when Firebase Admin is not connected in tests
-      req.user = {
-        uid: token,
-        email: 'user@healthcare.org',
-        role: req.headers['x-demo-role'] || 'patient'
-      };
-      return next();
+      if (isDevOrTest) {
+        // Preserve local development and test compatibility.
+        req.user = {
+          uid: token,
+          email: 'user@healthcare.org',
+          role: req.headers['x-demo-role'] || 'patient'
+        };
+        return next();
+      }
+
+      console.error(
+        '[Auth] Firebase Admin Auth is unavailable in production.'
+      );
+
+      return res.status(503).json(
+        formatErrorResponse(
+          'AUTH_SERVICE_UNAVAILABLE',
+          'Authentication service is temporarily unavailable.'
+        )
+      );
     }
 
     const decodedToken = await auth.verifyIdToken(token);
@@ -84,6 +97,16 @@ export const requireAuth = async (req, res, next) => {
 
     next();
   } catch (error) {
-    return res.status(401).json(formatErrorResponse('UNAUTHORIZED', 'Invalid or expired authentication token.'));
+    console.error('[Auth] Firebase ID token verification failed:', {
+      code: error?.code || 'UNKNOWN',
+      message: error?.message || 'Unknown authentication error'
+    });
+
+    return res.status(401).json(
+      formatErrorResponse(
+        'UNAUTHORIZED',
+        'Invalid or expired authentication token.'
+      )
+    );
   }
 };

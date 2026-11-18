@@ -54,6 +54,7 @@ export function getEmergencyResponse(language = 'en') {
     isEmergency: true,
     message: text,
     response: responseText,
+    bookingState: null,
     language
   };
 }
@@ -129,23 +130,86 @@ export function checkQuickChipIntent(message = '') {
 
   const lower = clean.toLowerCase();
 
-  if (lower.includes('book appointment') || lower.includes('book slot') || lower.includes('schedule appointment') || lower.includes('अपॉइंटमेंट') || lower.includes('ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್') || lower.includes('அப்பாயிண்ட்மெண்ட்')) {
+  if (lower.includes('book appointment') || lower.includes('book slot') || lower.includes('schedule appointment') || lower.includes('अपॉइंटमेंट') || lower.includes('ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್') || lower.includes('ಅಪಾಯಿಂಟ್ಮೆಂಟ್') || lower.includes('అపాయింట్మెంట్') || lower.includes('அப்பாயிண்ட்மெண்ட்')) {
     return 'BOOK_APPOINTMENT';
   }
-  if (lower.includes('my token status') || lower.includes('token status') || lower.includes('queue status') || lower.includes('मेरा टोकन') || lower.includes('ನನ್ನ ಟೋಕನ್') || lower.includes('என் டோக்கன்')) {
+  if (lower.includes('my token status') || lower.includes('token status') || lower.includes('queue status') || lower.includes('मेरा टोकन') || lower.includes('ನನ್ನ ಟೋಕನ್') || lower.includes('నా టోకెన్') || lower.includes('என் டோக்கன்')) {
     return 'TOKEN_STATUS';
   }
-  if (lower.includes('wait time') || lower.includes('when is my turn') || lower.includes('how much wait') || lower.includes('kitna wait') || lower.includes('कितना इंतज़ार') || lower.includes('ಎಷ್ಟು ಕಾಯಬೇಕು') || lower.includes('எவ்வளவு நேரம்')) {
+  if (lower.includes('wait time') || lower.includes('when is my turn') || lower.includes('how much wait') || lower.includes('kitna wait') || lower.includes('कितना इंतज़ार') || lower.includes('ಎಷ್ಟು ಕಾಯಬೇಕು') || lower.includes('ఎంత సమయం') || lower.includes('எவ்வளவு நேரம்')) {
     return 'WAIT_TIME';
   }
-  if (lower.includes('doctor timings') || lower.includes('hospital hours') || lower.includes('timing') || lower.includes('डॉक्टर का समय') || lower.includes('ವೈದ್ಯರ ಸಮಯ') || lower.includes('டாக்டர் நேரம்')) {
+  if (lower.includes('doctor timings') || lower.includes('hospital hours') || lower.includes('timing') || lower.includes('डॉक्टर का समय') || lower.includes('ವೈದ್ಯರ ಸಮಯ') || lower.includes('వైద్యుల సమయం') || lower.includes('டாக்டர் நேரம்')) {
     return 'DOCTOR_TIMINGS';
   }
-  if (lower.includes('talk to staff') || lower.includes('escalate') || lower.includes('speak to receptionist') || lower.includes('स्टाफ से बात') || lower.includes('ಸಿಬ್ಬಂದಿ') || lower.includes('ஊழியர்களுடன்')) {
+  if (lower.includes('talk to staff') || lower.includes('escalate') || lower.includes('speak to receptionist') || lower.includes('स्टाफ से बात') || lower.includes('ಸಿಬ್ಬಂದಿ') || lower.includes('సిబ్బంది') || lower.includes('ஊழியர்களுடன்')) {
     return 'TALK_TO_STAFF';
   }
 
   return null;
+}
+
+/**
+ * Detects whether the user is explicitly requesting TARA to perform a real appointment booking action,
+ * rather than asking an informational question about hospital procedures.
+ * Supports English, Kannada, Hindi, Telugu, and Tamil.
+ */
+export function isConversationalBookingAction(message = '') {
+  if (!message || typeof message !== 'string') return false;
+  if (isHowToProcedureQuery(message)) return false;
+
+  const clean = message.trim();
+  const lower = clean.toLowerCase();
+
+  // English booking action patterns
+  const englishActionRegex = /\b(book|schedule|reserve|make|get|fix|need|want)\b.*\b(appointment|slot|doctor|consultation)\b/i;
+  const englishDoctorRequestRegex = /\b(see|visit|consult|meet)\b.*\b(a\s+)?(doctor|physician|specialist)\b/i;
+  if (englishActionRegex.test(lower) || englishDoctorRequestRegex.test(lower)) {
+    return true;
+  }
+
+  // Kannada action patterns
+  // "ಅಪಾಯಿಂಟ್ಮೆಂಟ್ ನೀನೇ ಬುಕ್ ಮಾಡು", "ನನಗೆ ಡಾಕ್ಟರ್ ಅಪಾಯಿಂಟ್ಮೆಂಟ್ ಬೇಕು", "ವೈದ್ಯರನ್ನು ಭೇಟಿ ಮಾಡಬೇಕು", "ನನಗಾಗಿ ಅಪಾಯಿಂಟ್ಮೆಂಟ್ ಬುಕ್ ಮಾಡು", "ಡಾಕ್ಟರ್ ಬೇಕು"
+  const kannadaActionKeywords = [
+    'ಬುಕ್ ಮಾಡು', 'ಬುಕ್ ಮಾಡಿ', 'ಅಪಾಯಿಂಟ್ಮೆಂಟ್ ಬೇಕು', 'ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ಬೇಕು',
+    'ಭೇಟಿ ಮಾಡಬೇಕು', 'ವೈದ್ಯರನ್ನು ಭೇಟಿ', 'ಡಾಕ್ಟರ್ ಬೇಕು', 'ಡಾಕ್ಟರ್ ಭೇಟಿ',
+    'ಅಪಾಯಿಂಟ್ಮೆಂಟ್ ಕೊಡಿ', 'ಅಪಾಯಿಂಟ್ಮೆಂಟ್ ಮಾಡಿ'
+  ];
+  for (const kw of kannadaActionKeywords) {
+    if (clean.includes(kw)) return true;
+  }
+
+  // Hindi action patterns
+  // "मेरे लिए अपॉइंटमेंट बुक करो", "मुझे डॉक्टर से मिलना है", "मेरा अपॉइंटमेंट बुक कर दो", "अपॉइंटमेंट चाहिए"
+  const hindiActionKeywords = [
+    'बुक करो', 'बुक करें', 'बुक कर दो', 'अपॉइंटमेंट चाहिए',
+    'डॉक्टर से मिलना', 'डॉक्टर को दिखाना', 'डॉक्टर चाहिए', 'अपॉइंटमेंट करवा दो'
+  ];
+  for (const kw of hindiActionKeywords) {
+    if (clean.includes(kw)) return true;
+  }
+
+  // Telugu action patterns
+  // "నాకు అపాయింట్మెంట్ బుక్ చేయండి", "నాకు డాక్టర్ను కలవాలి", "డాక్టర్ అపాయింట్మెంట్ కావాలి"
+  const teluguActionKeywords = [
+    'బుక్ చేయండి', 'బుక్ చేయి', 'అపాయింట్మెంట్ కావాలి', 'డాక్టర్ను కలవాలి',
+    'డాక్టర్ కావాలి', 'అపాయింట్మెంట్ ఇవ్వండి'
+  ];
+  for (const kw of teluguActionKeywords) {
+    if (clean.includes(kw)) return true;
+  }
+
+  // Tamil action patterns
+  // "எனக்கு அப்பாயிண்ட்மெண்ட் புக் செய்யுங்கள்", "எனக்கு மருத்துவரை பார்க்க வேண்டும்", "டாக்டர் அப்பாயிண்ட்மெண்ட் வேண்டும்"
+  const tamilActionKeywords = [
+    'புக் செய்யுங்கள்', 'புக் செய்', 'அப்பாயிண்ட்மெண்ட் வேண்டும்',
+    'மருத்துவரை பார்க்க வேண்டும்', 'டாக்டரை பார்க்க', 'அப்பாயிண்ட்மெண்ட் எடுக்க'
+  ];
+  for (const kw of tamilActionKeywords) {
+    if (clean.includes(kw)) return true;
+  }
+
+  return false;
 }
 
 /**

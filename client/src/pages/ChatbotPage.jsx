@@ -20,8 +20,10 @@ export const ChatbotPage = () => {
   const [loading, setLoading] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState(null);
   const [disclaimerChecked, setDisclaimerChecked] = useState(false);
+  const [bookingState, setBookingState] = useState(null);
   const [voiceSessionActive, setVoiceSessionActive] = useState(false);
   const voiceSessionActiveRef = useRef(false);
+  const hasSpokenGreetingRef = useRef(false);
   const autoSubmittedTranscriptRef = useRef('');
   const messagesEndRef = useRef(null);
 
@@ -72,12 +74,25 @@ export const ChatbotPage = () => {
     }
     voiceSessionActiveRef.current = true;
     setVoiceSessionActive(true);
-    const greeting = "Hello! I'm TARA, your healthcare companion. How can I help you today?";
-    setMessages((prev) => [...prev, {
-      id: `ai-greeting-${Date.now()}`, sender: 'ai', text: greeting, inputMode: 'voice'
-    }]);
-    await speak(greeting);
-    if (voiceSessionActiveRef.current) startListening();
+
+    // Greet aloud once per session, but do not push duplicate greeting messages into the chat
+    if (!hasSpokenGreetingRef.current) {
+      hasSpokenGreetingRef.current = true;
+      const voiceGreetings = {
+        en: "Hello! I'm TARA, your healthcare companion. How can I help you today?",
+        kn: "ನಮಸ್ಕಾರ! ನಾನು ತಾರಾ, ನಿಮ್ಮ ಆರೋಗ್ಯದ ಗೆಳತಿ. ಇಂದು ನಾನು ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಲಿ?",
+        hi: "नमस्ते! मैं तारा हूँ, आपकी स्वास्थ्य साथी। आज मैं आपकी क्या मदद कर सकती हूँ?",
+        te: "నమస్కారం! నేను తారా, మీ ఆరోగ్య సహచరిణిని. ఈరోజు నేను మీకు ఎలా సహాయపడగలను?",
+        ta: "வணக்கம்! நான் தாரா, உங்கள் நலத் தோழி. இன்று நான் உங்களுக்கு எவ்வாறு உதவ முடியும்?"
+      };
+      const activeLang = lang.split('-')[0];
+      const greeting = voiceGreetings[activeLang] || voiceGreetings.en;
+      await speak(greeting);
+    }
+
+    if (voiceSessionActiveRef.current) {
+      startListening();
+    }
   };
 
   // Voice transcripts are submitted automatically; no Done or Send tap is needed.
@@ -172,6 +187,7 @@ export const ChatbotPage = () => {
       setInput('');
       setTranscript('');
       setPendingConfirm(null);
+      setBookingState(null);
       setLastInputMode(mode);
       if (mode === 'voice' && speakerEnabled && !privacyMode) await speak(cancelMessage);
       if (mode === 'voice' && voiceSessionActiveRef.current) startListening();
@@ -193,10 +209,14 @@ export const ChatbotPage = () => {
         message: query,
         language: (mode === 'voice' ? lang : lang).split('-')[0],
         inputMode: mode, // sent to server (server ignores for logic, only a UI hint)
-        history: messages.map(m => ({ role: m.sender === 'user' ? 'user' : 'model', text: m.text }))
+        history: messages.map(m => ({ role: m.sender === 'user' ? 'user' : 'model', text: m.text })),
+        bookingState
       });
 
       const data = res.data;
+      if (data.bookingState !== undefined) {
+        setBookingState(data.bookingState);
+      }
       const aiResponse = data.message || data.response || 'How else can I assist you?';
 
       const aiMsg = {
@@ -296,10 +316,18 @@ export const ChatbotPage = () => {
       const res = await API.post('/ai/chat/confirm', {
         confirmToken: pendingConfirm.confirmToken,
         disclaimerAccepted: true,
+        disclaimerAck: {
+          acknowledged: true,
+          at: new Date().toISOString(),
+          version: '1.0'
+        },
         language: lang.split('-')[0]
       });
 
       const confirmText = res.data.message || 'Action executed successfully.';
+      setPendingConfirm(null);
+      setBookingState(null);
+      setDisclaimerChecked(false);
       setMessages((prev) => [
         ...prev,
         {
@@ -326,6 +354,7 @@ export const ChatbotPage = () => {
    */
   const handleClearChat = () => {
     cancelSpeech();
+    hasSpokenGreetingRef.current = false;
     setMessages([messages[0]]);
     setPendingConfirm(null);
   };

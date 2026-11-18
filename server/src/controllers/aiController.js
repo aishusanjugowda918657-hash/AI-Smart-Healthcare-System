@@ -5,7 +5,7 @@
  * and Pre-Consultation Summary Card with Database Flags and Post-Check Guards.
  */
 import { generateText, generateJson, runWithTools } from '../ai/geminiClient.js';
-import { checkEmergencyKeywords, getEmergencyResponse, checkQuickChipIntent, isHowToProcedureQuery, validateSummaryFacts } from '../ai/guards.js';
+import { checkEmergencyKeywords, getEmergencyResponse, checkQuickChipIntent, isHowToProcedureQuery, isConversationalBookingAction, validateSummaryFacts } from '../ai/guards.js';
 import { getChatFallback, getDoctorAgentFallback, getSummaryFallback } from '../ai/fallbacks.js';
 import { buildChatSystemPrompt } from '../ai/prompts/chat.js';
 import { buildDoctorAgentSystemPrompt } from '../ai/prompts/doctorAgent.js';
@@ -18,6 +18,7 @@ import {
   consumeConfirmToken,
   getConfirmTokenData
 } from '../ai/tools.js';
+import { processConversationalBookingStep } from '../ai/bookingConversation.js';
 import { assertDbConnected } from '../config/firebase.js';
 import { createAppointment } from './bookingController.js';
 import { cancelAppointment as cancelAppointmentLifecycle, rescheduleAppointment as rescheduleAppointmentLifecycle } from './appointmentLifecycleController.js';
@@ -194,10 +195,10 @@ export const aiChat = async (req, res, next) => {
       }
     }
 
-    // 3. RULE PRE-CHECK: Quick-Chip Intents (4 languages) -> NO Gemini Call
+    // 3. RULE PRE-CHECK: Quick-Chip Intents (5 languages) -> NO Gemini Call
     const quickIntent = checkQuickChipIntent(message);
     const isBookingHelpChip = message.trim().toLowerCase() === 'book appointment';
-    const isConversationalBookingRequest = !isHowTo && !isBookingHelpChip && /\b(book|schedule|reserve|make)\b.*\b(appointment|slot|doctor)\b/i.test(message);
+    const isConversationalBookingRequest = isConversationalBookingAction(message);
     const forceConversationalBooking = (quickIntent === 'BOOK_APPOINTMENT' && !isBookingHelpChip) || isConversationalBookingRequest;
     if (quickIntent) {
       switch (quickIntent) {
@@ -205,7 +206,7 @@ export const aiChat = async (req, res, next) => {
           if (isBookingHelpChip) {
             return res.status(200).json(getHelpReplyById('book_appointment', language));
           }
-          // Natural booking requests continue through the existing conversational flow.
+          // Natural booking requests continue through the conversational booking flow.
           break;
         }
 
@@ -264,18 +265,31 @@ export const aiChat = async (req, res, next) => {
       }
     }
 
+    // Conversational booking flow (multi-turn step processing)
+    const hasActiveBooking = Boolean(req.body.bookingState && req.body.bookingState.step);
+    if (forceConversationalBooking || hasActiveBooking) {
+      const stepResult = await processConversationalBookingStep({
+        user: req.user,
+        message,
+        language,
+        bookingState: req.body.bookingState || null,
+        history,
+        db: assertDbConnected(),
+        requestId: req.requestId,
+        headers: req.headers
+      });
+      return res.status(200).json(stepResult);
+    }
+
     // 4. HELP LIBRARY SEARCH (handles common questions without Gemini)
     const helpResult = searchHelp(message, language);
-    if (helpResult.matched && !forceConversationalBooking) {
+    if (helpResult.matched) {
       return res.status(200).json(helpResult.reply);
     }
 
-    // 4. GEMINI FUNCTION CALLING LOOP (runWithTools) – only if AI is available
+    // 5. GEMINI FUNCTION CALLING LOOP (runWithTools) – only if AI is available
     if (!flags.ai) {
-      // AI off → preserve safe help guidance; do not invoke Gemini for booking conversations.
-      if (forceConversationalBooking) {
-        return res.status(200).json(getHelpReplyById('book_appointment', language));
-      }
+
       if (!helpResult.matched) {
         return res.status(200).json({
           ...helpResult.reply,
@@ -346,7 +360,8 @@ export const aiChat = async (req, res, next) => {
  */
 export const aiChatConfirm = async (req, res, next) => {
   try {
-    const { confirmToken, disclaimerAccepted = false } = req.body;
+    const { confirmToken, disclaimerAccepted = false, disclaimerAck } = req.body;
+    const isDisclaimerAccepted = Boolean(disclaimerAccepted || disclaimerAck?.acknowledged);
     const language = ['en', 'kn', 'hi', 'te', 'ta'].includes(req.body.language) ? req.body.language : 'en';
 
     if (!confirmToken) {
@@ -360,7 +375,7 @@ export const aiChatConfirm = async (req, res, next) => {
     if (pendingTokenData.userId !== req.user?.uid) {
       return res.status(403).json({ success: false, message: 'You are not authorized to confirm this action.' });
     }
-    if (!disclaimerAccepted) {
+    if (!isDisclaimerAccepted) {
       return res.status(400).json({ success: false, message: 'Please accept the health disclaimer before confirming this action.' });
     }
     const tokenData = consumeConfirmToken(confirmToken);
@@ -371,7 +386,7 @@ export const aiChatConfirm = async (req, res, next) => {
           slotId: tokenData.slotId,
           slotIds: [tokenData.slotId],
           patientHealthId: tokenData.patientHealthId,
-          patientName: 'Patient',
+          patientName: tokenData.patientName || 'Patient',
           doctorId: tokenData.doctorId,
           departmentId: tokenData.departmentId || undefined,
           date: tokenData.date,
@@ -380,7 +395,8 @@ export const aiChatConfirm = async (req, res, next) => {
             acknowledged: true,
             at: new Date().toISOString(),
             version: '1.0'
-          }
+          },
+          sameDayAck: req.body?.sameDayAck || tokenData.sameDayAck || false
         },
         user: { uid: tokenData.userId, role: 'patient' },
         requestId: req.requestId,

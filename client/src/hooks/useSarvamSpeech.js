@@ -66,7 +66,7 @@ export function useSarvamSpeech(initialLang = 'en-IN') {
   }, []);
 
   const startListening = useCallback(async () => {
-    if (recorderRef.current?.state === 'recording') return;
+    if (recorderRef.current?.state === 'recording' || isSpeaking) return;
     if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
       setSupportMessage('Audio recording is not supported in this browser. Please type your message.');
       setIsTypingMode(true);
@@ -174,7 +174,7 @@ export function useSarvamSpeech(initialLang = 'en-IN') {
         ? 'Microphone permission was denied. Enable microphone access or type your message.'
         : 'Could not access the microphone. Please try again.');
     }
-  }, [releaseMicrophone]);
+  }, [releaseMicrophone, isSpeaking]);
 
   const toggleListening = useCallback(() => {
     if (isListening) stopListening();

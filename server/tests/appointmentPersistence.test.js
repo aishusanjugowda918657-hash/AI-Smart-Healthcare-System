@@ -8,7 +8,28 @@ describe('Appointment Persistence & Cancellation Regression', () => {
   let testPatientUid = 'test-patient-persist';
   let slotId;
 
-  let testDate = '2026-11-01';
+  const getTomorrowIST = () => {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(new Date());
+
+    const dateParts = Object.fromEntries(
+      parts.map(part => [part.type, part.value])
+    );
+
+    const tomorrow = new Date(Date.UTC(
+      Number(dateParts.year),
+      Number(dateParts.month) - 1,
+      Number(dateParts.day) + 1
+    ));
+
+    return tomorrow.toISOString().slice(0, 10);
+  };
+
+  let testDate = getTomorrowIST();
 
   beforeEach(async () => {
     db = assertDbConnected();
