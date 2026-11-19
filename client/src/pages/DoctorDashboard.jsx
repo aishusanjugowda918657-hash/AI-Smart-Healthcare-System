@@ -448,16 +448,28 @@ export const DoctorDashboard = () => {
                   <h3 className="font-bold text-slate-900 text-base">
                     {queueDetails.nextPatient.patientName}
                   </h3>
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                    queueDetails.nextPatient.clinicalLevel === 3
-                      ? 'bg-red-100 text-red-800'
-                      : queueDetails.nextPatient.clinicalLevel === 2
-                      ? 'bg-amber-100 text-amber-800'
-                      : 'bg-emerald-100 text-emerald-800'
-                  }`}>
-                    {queueDetails.nextPatient.clinicalLevel === 3 ? 'EMERGENCY' : queueDetails.nextPatient.clinicalLevel === 2 ? 'URGENT' : 'ROUTINE'}
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    {queueDetails.nextPatient.fairnessProtected && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200">
+                        ⚖️ Fairness Protected
+                      </span>
+                    )}
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                      queueDetails.nextPatient.clinicalLevel === 3
+                        ? 'bg-red-100 text-red-800'
+                        : queueDetails.nextPatient.clinicalLevel === 2
+                        ? 'bg-amber-100 text-amber-800'
+                        : 'bg-emerald-100 text-emerald-800'
+                    }`}>
+                      {queueDetails.nextPatient.clinicalLevel === 3 ? 'EMERGENCY' : queueDetails.nextPatient.clinicalLevel === 2 ? 'URGENT' : 'ROUTINE'}
+                    </span>
+                  </div>
                 </div>
+                {queueDetails.nextPatient.fairnessProtected && queueDetails.nextPatient.fairnessReason && (
+                  <p className="text-[11px] text-blue-700 bg-blue-50/70 border border-blue-100 rounded p-1.5 font-medium">
+                    {queueDetails.nextPatient.fairnessReason}
+                  </p>
+                )}
                 <p className="text-xs text-slate-500">
                   Health ID: {queueDetails.nextPatient.patientHealthId || 'N/A'} | Age: {queueDetails.nextPatient.age || 'N/A'}
                 </p>

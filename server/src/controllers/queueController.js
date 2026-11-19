@@ -4,6 +4,7 @@ import { getHospitalTodayStr } from '../utils/timezoneDate.js';
 import { AppError, formatSuccessResponse } from '../utils/errors.js';
 import { recalculateQueue, calculateQueueReadOnly, resolveDoctorIds } from '../services/queueService.js';
 import { getReadyCandidates } from '../domain/priority.js';
+import { analyzeQueueFairnessAndDelays } from '../services/queueFairnessAiService.js';
 import { writeAuditLog } from '../utils/audit.js';
 import { verifyRecordAccess } from './medicalController.js';
 import { notify } from '../services/notify.js';
@@ -1513,5 +1514,40 @@ export const getReceptionQueueOverview = async (req, res, next) => {
     next(error);
   }
 };
+
+/**
+ * GET /api/queue/doctor/:doctorId/fairness-insights
+ * Returns AI-assisted queue delay monitoring, fairness threshold analysis,
+ * individual patient explanations, and staff alerts.
+ */
+export const getDoctorQueueFairnessInsights = async (req, res, next) => {
+  try {
+    const { doctorId } = req.params;
+    await assertDoctorOwnership(req, doctorId);
+
+    const date = req.query.date || getHospitalTodayStr(clock.now());
+    const db = assertDbConnected();
+    const { docIdList } = await resolveDoctorIds(doctorId, db);
+
+    const apptsSnap = await db.collection('appointments')
+      .where('doctorId', 'in', docIdList.slice(0, 10))
+      .where('date', '==', date)
+      .get();
+
+    const allAppts = apptsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+    const insights = await analyzeQueueFairnessAndDelays({
+      appointments: allAppts,
+      doctorId,
+      date,
+      now: clock.now()
+    });
+
+    res.status(200).json(formatSuccessResponse(insights, 'Queue fairness insights retrieved.'));
+  } catch (error) {
+    next(error);
+  }
+};
+
 
 

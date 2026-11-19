@@ -19,6 +19,7 @@ import {
   toggleEarlyOptIn,
   getPublicDisplayBoard,
   getDoctorWaitPrediction,
+  getDoctorQueueFairnessInsights,
   startConsultation,
   endDoctorSession,
   getReceptionQueueOverview
@@ -33,6 +34,7 @@ router.get('/reception-overview', requireAuth, requireRole('reception', 'nurse',
 router.get('/doctor/:doctorId/readonly', requireAuth, getDoctorQueueReadOnly);
 router.get('/doctor/:doctorId/today/readonly', requireAuth, getDoctorQueueReadOnly);
 router.get('/doctor/:doctorId/today', requireAuth, getDoctorQueueToday);
+router.get('/doctor/:doctorId/fairness-insights', requireAuth, getDoctorQueueFairnessInsights);
 router.get('/doctor/:doctorId/wait-prediction', getDoctorWaitPrediction);
 router.post('/call-next', requireAuth, requireRole('doctor', 'admin'), callNextPatient);
 router.post('/call/:id', requireAuth, requireRole('doctor', 'admin'), callSpecificToken);

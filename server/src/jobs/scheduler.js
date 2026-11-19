@@ -21,6 +21,7 @@ import { clock } from '../utils/clock.js';
 import { notify } from '../services/notify.js';
 import { recalculateQueue } from '../services/queueService.js';
 import { getGlobalSettings } from '../services/settingsService.js';
+import { getPatientDelayMinutes } from '../domain/priority.js';
 import { getHospitalTodayStr, parseSlotTimeToDate } from '../utils/timezoneDate.js';
 import { offerFreedSlot, expireWaitlistOffersJob } from '../services/waitlistService.js';
 import { processRemindersJob } from './processReminders.js';
@@ -859,14 +860,17 @@ export async function fairnessBumpJob() {
 
     for (const doc of allCheckedIn) {
       const apt = doc.data();
-      if ((apt.clinicalLevel || 1) === 1 && apt.bookedStartAt) {
-        const bookedMs = new Date(apt.bookedStartAt).getTime();
-        const lateMin = (now.getTime() - bookedMs) / (60 * 1000);
+      if ((apt.clinicalLevel || 1) === 1) {
+        const lateMin = getPatientDelayMinutes(apt, now);
 
-        if (lateMin >= 30 && !apt.fairnessBumpApplied) {
+        if (lateMin >= 30 && !apt.fairnessProtected && !apt.fairnessBumpApplied) {
+          const reasonStr = `Delayed by ${lateMin} minutes beyond scheduled slot; queue position locked against later priority arrivals.`;
           await doc.ref.update({
+            fairnessProtected: true,
             fairnessBumpApplied: true,
             fairnessBumpedAt: now.toISOString(),
+            fairnessProtectedAt: now.toISOString(),
+            fairnessReason: reasonStr,
             updatedAt: now
           });
 
@@ -876,9 +880,9 @@ export async function fairnessBumpJob() {
             try {
               await notify({
                 uids: [ownerUid],
-                title: `${apt.patientName || 'Patient'}: Queue Position Update`,
-                body: 'Your turn is earlier because of your waiting time.',
-                privacyBody: `${apt.patientName || 'Patient'}: Queue position updated`,
+                title: `${apt.patientName || 'Patient'}: Fairness Protection Activated`,
+                body: 'Your position in the queue is protected to ensure fair waiting time.',
+                privacyBody: `${apt.patientName || 'Patient'}: Queue fairness activated`,
                 type: 'FAIRNESS_BUMP',
                 data: { appointmentId: doc.id },
                 urgent: true
@@ -887,9 +891,9 @@ export async function fairnessBumpJob() {
               // Fallback: write direct in-app notification
               await db.collection('notifications').add({
                 uid: ownerUid,
-                title: `${apt.patientName || 'Patient'}: Queue Position Update`,
-                body: 'Your turn is earlier because of your waiting time.',
-                privacyBody: `${apt.patientName || 'Patient'}: Queue position updated`,
+                title: `${apt.patientName || 'Patient'}: Fairness Protection Activated`,
+                body: 'Your position in the queue is protected to ensure fair waiting time.',
+                privacyBody: `${apt.patientName || 'Patient'}: Queue fairness activated`,
                 type: 'FAIRNESS_BUMP',
                 data: { appointmentId: doc.id },
                 read: false,

@@ -17,6 +17,8 @@ import { notify } from '../services/notify.js';
 import { parseSlotTimeToDate, getHospitalTodayStr } from '../utils/timezoneDate.js';
 import { getOperatingSchedule } from '../config/operatingSchedule.js';
 import { getAppointmentDateCompact, formatAppointmentDisplayId } from '../services/appointmentIdService.js';
+import { recalculateQueue } from '../services/queueService.js';
+import { calculatePriorityScore, normalizePriorityCategory, priorityCategoryToLevel } from '../services/tokenPriorityEngine.js';
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
@@ -1092,6 +1094,16 @@ export const createAppointment = async (req, res, next) => {
       console.warn('Reminder pre-scheduling warning:', remErr.message);
     }
 
+    // Recalculate queue if appointment is booked for today (Section 5 real-time updates)
+    try {
+      const todayIST = getHospitalTodayStr(clock.now());
+      if (date === todayIST && resolvedDoctorId) {
+        await recalculateQueue(resolvedDoctorId, date);
+      }
+    } catch (qErr) {
+      console.warn('Booking queue recalculation warning:', qErr.message);
+    }
+
     res.status(201).json(formatSuccessResponse(apptResult));
   } catch (error) {
     next(error);
@@ -1232,8 +1244,11 @@ export const confirmEmergencyAlert = async (req, res, next) => {
         const apptRef = db.collection('appointments').doc(alertData.appointmentId);
         const apptSnap = await apptRef.get();
         if (apptSnap.exists) {
+          const apptData = apptSnap.data();
           await apptRef.update({
             clinicalLevel: 3,
+            priorityCategory: 'EMERGENCY',
+            isEmergency: true,
             urgencySuggested: 'emergency',
             priority: 'emergency',
             clinicalLevelVerifiedBy: req.user.uid,
@@ -1241,6 +1256,9 @@ export const confirmEmergencyAlert = async (req, res, next) => {
             emergencyConfirmedAt: confirmedAt,
             updatedAt: clock.now()
           });
+          if (apptData.doctorId && apptData.date) {
+            await recalculateQueue(apptData.doctorId, apptData.date);
+          }
         }
       } catch (apptErr) {
         console.warn('⚠️ Could not update appointment for alert:', apptErr.message);
@@ -1466,7 +1484,8 @@ export const overrideClinicalLevel = async (req, res, next) => {
     const { id } = req.params;
     const { clinicalLevel, reason } = req.body;
 
-    if (![1, 2, 3].includes(Number(clinicalLevel))) {
+    const parsedLevel = Number(clinicalLevel);
+    if (![1, 2, 3].includes(parsedLevel)) {
       throw new AppError('VALIDATION_ERROR', 'clinicalLevel must be 1 (routine), 2 (urgent), or 3 (emergency).', 400);
     }
 
@@ -1482,15 +1501,50 @@ export const overrideClinicalLevel = async (req, res, next) => {
       throw new AppError('NOT_FOUND', `Appointment '${id}' not found.`, 404);
     }
 
+    const apptData = snap.data();
+    const now = clock.now ? clock.now() : new Date();
+    const nowIso = now.toISOString();
+
     const urgencyMap = { 1: 'routine', 2: 'urgent', 3: 'emergency' };
-    await apptRef.update({
-      clinicalLevel: Number(clinicalLevel),
-      urgencySuggested: urgencyMap[clinicalLevel],
-      priority: Number(clinicalLevel) === 3 ? 'emergency' : urgencyMap[clinicalLevel],
+    const categoryMap = { 1: 'STANDARD', 2: 'HIGH', 3: 'EMERGENCY' };
+    const newCategory = categoryMap[parsedLevel];
+    const newUrgency = urgencyMap[parsedLevel];
+    const isEmergency = parsedLevel === 3;
+
+    const updateFields = {
+      clinicalLevel: parsedLevel,
+      urgencySuggested: newUrgency,
+      priority: isEmergency ? 'emergency' : newUrgency,
+      priorityCategory: newCategory,
+      isEmergency,
       clinicalLevelVerifiedBy: req.user.uid,
       clinicalOverrideReason: reason.trim(),
-      updatedAt: new Date()
-    });
+      updatedAt: now
+    };
+
+    if (isEmergency) {
+      updateFields.emergencyReason = reason.trim();
+      updateFields.emergencyMarkedAt = nowIso;
+      updateFields.emergencyMarkedBy = req.user.uid;
+    }
+
+    await apptRef.update(updateFields);
+
+    // Sync token document if exists
+    try {
+      const tokRef = db.collection('tokens').doc(`tok-${id}`);
+      const tokSnap = await tokRef.get();
+      if (tokSnap.exists) {
+        await tokRef.update({
+          priorityCategory: newCategory,
+          priorityScore: calculatePriorityScore(newCategory, true),
+          staffVerified: true,
+          updatedAt: now
+        });
+      }
+    } catch (tokErr) {
+      console.warn('Token sync warning in overrideClinicalLevel:', tokErr.message);
+    }
 
     await writeAuditLog({
       actorUid: req.user.uid,
@@ -1498,18 +1552,32 @@ export const overrideClinicalLevel = async (req, res, next) => {
       action: 'OVERRIDE_CLINICAL_LEVEL',
       targetType: 'appointment',
       targetId: id,
-      healthId: snap.data().patientHealthId || null,
+      healthId: apptData.patientHealthId || null,
       details: {
-        newLevel: Number(clinicalLevel),
-        urgency: urgencyMap[clinicalLevel],
+        newLevel: parsedLevel,
+        priorityCategory: newCategory,
+        urgency: newUrgency,
         reason: reason.trim()
       }
     });
 
+    // Fix 1: Recalculate affected doctor's queue and refresh waiting times & positions
+    const doctorId = apptData.doctorId;
+    const date = apptData.date;
+    if (doctorId && date) {
+      try {
+        await recalculateQueue(doctorId, date);
+      } catch (queueErr) {
+        console.error(`[QueueRecalc] Failed to recalculate queue for doctor ${doctorId} on ${date}:`, queueErr.message);
+      }
+    }
+
     res.status(200).json(formatSuccessResponse({
       id,
-      clinicalLevel: Number(clinicalLevel),
-      message: 'Clinical level updated successfully.'
+      clinicalLevel: parsedLevel,
+      priorityCategory: newCategory,
+      urgency: newUrgency,
+      message: 'Clinical level updated successfully and queue recalculated.'
     }));
   } catch (error) {
     next(error);
@@ -1518,11 +1586,58 @@ export const overrideClinicalLevel = async (req, res, next) => {
 
 /**
  * POST /api/walkins (PRD F2/F3)
- * Reception Desk Walk-in Registration & Immediate Booking
+ * Reception / Nurse Walk-in Registration with Optional Clinical Priority
  */
 export const registerWalkin = async (req, res, next) => {
   try {
-    const { patientHealthId, patientName, doctorId, departmentId = 'dept-gen' } = req.body;
+    const {
+      patientHealthId,
+      patientName,
+      doctorId,
+      departmentId = 'dept-gen',
+      clinicalLevel,
+      priorityCategory,
+      priority,
+      reason,
+      clinicalReason
+    } = req.body;
+
+    // Validate and resolve priority (defaults to Level 1 / STANDARD)
+    let resolvedLevel = 1;
+    const rawPriority = clinicalLevel !== undefined ? clinicalLevel : (priorityCategory !== undefined ? priorityCategory : priority);
+
+    if (rawPriority !== undefined && rawPriority !== null && String(rawPriority).trim() !== '') {
+      if (typeof rawPriority === 'number') {
+        if (![1, 2, 3].includes(rawPriority)) {
+          throw new AppError('VALIDATION_ERROR', 'Invalid priority value. clinicalLevel must be 1 (routine), 2 (urgent), or 3 (emergency).', 400);
+        }
+        resolvedLevel = rawPriority;
+      } else {
+        const str = String(rawPriority).trim().toUpperCase();
+        if (['1', 'ROUTINE', 'STANDARD'].includes(str)) {
+          resolvedLevel = 1;
+        } else if (['2', 'URGENT', 'HIGH'].includes(str)) {
+          resolvedLevel = 2;
+        } else if (['3', 'EMERGENCY'].includes(str)) {
+          resolvedLevel = 3;
+        } else {
+          throw new AppError('VALIDATION_ERROR', `Invalid priority value '${rawPriority}'. Must be 1 (STANDARD), 2 (HIGH), or 3 (EMERGENCY).`, 400);
+        }
+      }
+    }
+
+    // Require clinical reason for Emergency priority
+    const effectiveReason = (reason || clinicalReason || '').trim();
+    if (resolvedLevel === 3 && !effectiveReason) {
+      throw new AppError('REASON_REQUIRED', 'A clinical reason is mandatory when registering an Emergency walk-in.', 400);
+    }
+
+    const categoryMap = { 1: 'STANDARD', 2: 'HIGH', 3: 'EMERGENCY' };
+    const urgencyMap = { 1: 'routine', 2: 'urgent', 3: 'emergency' };
+    const finalCategory = categoryMap[resolvedLevel];
+    const finalUrgency = urgencyMap[resolvedLevel];
+    const isEmergency = resolvedLevel === 3;
+
     const db = assertDbConnected();
     const todayStr = getHospitalTodayStr();
     const deptLetter = (departmentId.split('-')[1] || 'G').toUpperCase().substring(0, 1);
@@ -1549,7 +1664,14 @@ export const registerWalkin = async (req, res, next) => {
     const rawCheckinCode = crypto.randomBytes(16).toString('hex');
     const checkinCodeHash = crypto.createHash('sha256').update(rawCheckinCode).digest('hex');
 
+    const now = clock.now ? clock.now() : new Date();
+    const nowIso = now.toISOString();
+    const nowIST = dayjs(now).tz('Asia/Kolkata');
+    const currentTimeIST = nowIST.format('HH:mm');
+
     const apptRef = db.collection('appointments').doc();
+    const targetDoctorId = doctorId || 'DOC-001';
+
     const apptDoc = {
       id: apptRef.id,
       appointmentId: apptRef.id,
@@ -1558,25 +1680,79 @@ export const registerWalkin = async (req, res, next) => {
       patientName: patientName || 'Walkin Patient',
       ownerUid: req.user.uid,
       bookedByUid: req.user.uid,
-      doctorId: doctorId || 'DOC-001',
+      doctorId: targetDoctorId,
       departmentId,
       departmentLetter: deptLetter,
       date: todayStr,
-      bookedStartAt: 'NOW',
+      bookedStartAt: currentTimeIST,
+      timeSlot: currentTimeIST,
       durationMin: 15,
       visitType: 'new',
-      reasonText: 'Walk-in Consultation',
-      status: 'booked',
+      reasonText: effectiveReason || (isEmergency ? 'Emergency Walk-in' : (resolvedLevel === 2 ? 'Urgent Walk-in' : 'Walk-in Consultation')),
+      clinicalLevel: resolvedLevel,
+      priorityCategory: finalCategory,
+      urgencySuggested: finalUrgency,
+      priority: finalUrgency,
+      isEmergency,
+      ...(isEmergency ? {
+        emergencyReason: effectiveReason,
+        emergencyMarkedAt: nowIso,
+        emergencyMarkedBy: req.user.uid
+      } : {}),
+      status: 'checked_in',
+      checkedInAt: now,
       tokenNumber,
       tokenLabel,
       checkinCodeHash,
-      checkInCodeHash: checkinCodeHash,   // capital-I: read by checkinController.scanCheckIn
+      checkInCodeHash: checkinCodeHash,
       qrPayload: `APPT:${apptRef.id}:${rawCheckinCode}`,
-      disclaimerAck: { acknowledged: true, at: new Date().toISOString(), version: '1.0' },
-      createdAt: new Date()
+      disclaimerAck: { acknowledged: true, at: nowIso, version: '1.0' },
+      createdAt: now,
+      updatedAt: now
     };
 
     await apptRef.set(apptDoc);
+
+    // Create token in tokens collection
+    const tokenId = `tok-${apptRef.id}`;
+    await db.collection('tokens').doc(tokenId).set({
+      id: tokenId,
+      tokenNumber: tokenLabel || String(tokenNumber),
+      appointmentId: apptRef.id,
+      displayId,
+      patientHealthId: patientHealthId || 'WALKIN-PATIENT',
+      doctorId: targetDoctorId,
+      departmentId,
+      date: todayStr,
+      priorityCategory: finalCategory,
+      priorityScore: calculatePriorityScore(finalCategory, true),
+      staffVerified: true,
+      status: 'waiting',
+      checkedInAt: now,
+      generatedAt: now,
+      updatedAt: now
+    }, { merge: true });
+
+    // Recalculate queue immediately so walk-in assumes correct position
+    try {
+      await recalculateQueue(targetDoctorId, todayStr);
+    } catch (qErr) {
+      console.warn('Walk-in queue recalculation warning:', qErr.message);
+    }
+
+    await writeAuditLog({
+      actorUid: req.user.uid,
+      actorRole: req.user.role,
+      action: 'REGISTER_WALKIN',
+      targetType: 'appointment',
+      targetId: apptRef.id,
+      healthId: patientHealthId || null,
+      details: {
+        clinicalLevel: resolvedLevel,
+        priorityCategory: finalCategory,
+        doctorId: targetDoctorId
+      }
+    });
 
     res.status(201).json(formatSuccessResponse(apptDoc));
   } catch (error) {

@@ -24,6 +24,6 @@ router.get('/alerts', requireAuth, requireRole('nurse', 'doctor', 'admin'), getT
 router.post('/alerts/:id/acknowledge', requireAuth, requireRole('nurse', 'doctor', 'admin'), acknowledgeTriageAlert);
 router.post('/alerts/:id/confirm-emergency', requireAuth, requireRole('nurse', 'doctor', 'admin'), confirmEmergencyAlert);
 router.post('/alerts/:id/adjust-level', requireAuth, requireRole('nurse', 'doctor', 'admin'), adjustTriageAlertLevel);
-router.post('/walkins', requireAuth, requireRole('reception', 'admin'), registerWalkin);
+router.post('/walkins', requireAuth, requireRole('reception', 'nurse', 'admin'), registerWalkin);
 
 export default router;

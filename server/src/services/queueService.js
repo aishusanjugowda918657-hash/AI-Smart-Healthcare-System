@@ -2,6 +2,7 @@ import { assertDbConnected } from '../config/firebase.js';
 import { clock } from '../utils/clock.js';
 import { getHospitalTodayStr, parseSlotTimeToDate } from '../utils/timezoneDate.js';
 import { compareForCalling, getReadyCandidates } from '../domain/priority.js';
+import { analyzeQueueFairnessAndDelays } from './queueFairnessAiService.js';
 import { notify } from './notify.js';
 import {
   calculateTimeFactor,
@@ -318,13 +319,23 @@ export async function computeQueueSnapshot(doctorId, date, { db = assertDbConnec
       now
     });
 
+    const hasEmergencyAhead = readyCandidates.slice(0, idx).some((c) => c.clinicalLevel === 3 || c.isEmergency);
+
+    const candReason = (candidate.clinicalLevel === 3 || candidate.isEmergency)
+      ? 'Emergency priority assigned.'
+      : (hasEmergencyAhead
+        ? 'An emergency case was prioritized ahead of you.'
+        : (candidate.fairnessProtected
+          ? 'Fairness protection active: your queue position is protected from priority bypass.'
+          : reasonText));
+
     const newLive = {
       position,
       aheadCount,
       waitMinLow: waitResult.waitMinLow,
       waitMinHigh: waitResult.waitMinHigh,
       predictedCallAt: waitResult.predictedCallAt,
-      reasonText,
+      reasonText: candReason,
       // Pace context for debugging / UI display
       timeFactor,
       breakRemainingMin,
@@ -349,6 +360,11 @@ export async function computeQueueSnapshot(doctorId, date, { db = assertDbConnec
     if (hasChanged) {
       const apptRef = db.collection('appointments').doc(candidate.id);
       const updateObj = { live: newLive, updatedAt: now };
+      if (candidate.fairnessProtected && !candidate.fairnessProtectedAt) {
+        updateObj.fairnessProtected = true;
+        updateObj.fairnessProtectedAt = nowIso;
+        updateObj.fairnessReason = candidate.fairnessReason || 'Delayed >= 30 min beyond scheduled appointment slot';
+      }
 
       let pushItem = null;
       const isWaitChange = Math.abs((oldLive.waitMinLow || 0) - newLive.waitMinLow) >= 5;
@@ -364,7 +380,7 @@ export async function computeQueueSnapshot(doctorId, date, { db = assertDbConnec
           position,
           waitMinLow: newLive.waitMinLow,
           waitMinHigh: newLive.waitMinHigh,
-          reasonText,
+          reasonText: candReason,
           isUpcomingTurn: isUpcoming,
           isWaitTimeChange: isWaitChange
         };
@@ -485,6 +501,13 @@ export async function computeQueueSnapshot(doctorId, date, { db = assertDbConnec
       status: 'on_hold'
     }));
 
+  const fairnessInsights = await analyzeQueueFairnessAndDelays({
+    appointments: allAppts,
+    doctorId,
+    date,
+    now
+  });
+
   const computedQueueData = {
     ...queueData,
     doctorId,
@@ -498,7 +521,8 @@ export async function computeQueueSnapshot(doctorId, date, { db = assertDbConnec
     breakUntil: queueData.breakUntil || null,
     breakRemainingMin,
     lastRecalcAt: queueData.lastRecalcAt || null,
-    runningLateMsg
+    runningLateMsg,
+    fairnessInsights
   };
 
   return {

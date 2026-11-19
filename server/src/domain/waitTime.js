@@ -152,6 +152,7 @@ export function calculateWaitForPatient({
  */
 export function selectReasonText(flags = {}) {
   if (flags.hasEmergencyAdded) return 'An emergency case was prioritized ahead of you.';
+  if (flags.hasFairnessProtected) return 'Fairness protection applied: your queue position is protected from priority bypass.';
   if (flags.hasDoctorBreak) return 'Doctor is currently taking a scheduled break.';
   if (flags.hasLateStart) return 'Clinic started slightly later than scheduled today.';
   if (flags.hasConsultationExtended) return 'Current consultation has been extended by doctor.';
