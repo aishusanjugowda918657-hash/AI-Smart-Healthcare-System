@@ -298,6 +298,7 @@ export const aiChat = async (req, res, next) => {
       confirmToken: result.confirmToken || null,
       actionRequired: result.actionRequired || null,
       summary: result.summary || null,
+      route: result.route || null,
       sources: result.sources || [],
       aiSource: 'gemini'
     });
@@ -342,7 +343,7 @@ export const aiChatConfirm = async (req, res, next) => {
           slotId: tokenData.slotId,
           slotIds: [tokenData.slotId],
           patientHealthId: tokenData.patientHealthId,
-          patientName: 'Patient',
+          patientName: tokenData.patientName || 'Patient',
           doctorId: tokenData.doctorId,
           departmentId: tokenData.departmentId || undefined,
           date: tokenData.date,
@@ -368,18 +369,19 @@ export const aiChatConfirm = async (req, res, next) => {
       return res.status(200).json({
         success: true,
         message: (() => {
-          const doctor = result.body.data?.doctorName || 'Doctor';
+          const doctor = result.body.data?.doctorName || tokenData.doctorName || 'Doctor';
           const date = result.body.data?.date || tokenData.date;
           const time = result.body.data?.bookedStartAt || result.body.data?.timeSlot || tokenData.timeSlot;
           const token = result.body.data?.tokenLabel || result.body.data?.tokenNumber || '';
+          const forPerson = tokenData.forWhom && tokenData.forWhom !== 'self' ? ` for ${tokenData.patientName}` : '';
           const messages = {
-            en: `Your appointment with ${doctor} is booked for ${date} at ${time}. Your token number is ${token}.`,
-            kn: `${doctor} ಅವರೊಂದಿಗೆ ${date} ರಂದು ${time} ಗಂಟೆಗೆ ನಿಮ್ಮ ಅಪಾಯಿಂಟ್ಮೆಂಟ್ ಬುಕ್ ಆಗಿದೆ. ನಿಮ್ಮ ಟೋಕನ್ ಸಂಖ್ಯೆ ${token}.`,
-            hi: `${doctor} के साथ आपकी अपॉइंटमेंट ${date} को ${time} बजे बुक हो गई है। आपका टोकन नंबर ${token} है।`,
-            te: `${doctor} తో మీ అపాయింట్‌మెంట్ ${date} న ${time} గంటలకు బుక్ అయింది. మీ టోకెన్ నంబర్ ${token}.`,
-            ta: `${doctor} அவர்களுடன் உங்கள் சந்திப்பு ${date} அன்று ${time} மணிக்கு பதிவு செய்யப்பட்டது. உங்கள் டோக்கன் எண் ${token}.`
+            en: `Your appointment with ${doctor}${forPerson} is booked for ${date} at ${time}. Your token number is ${token}.`,
+            kn: `${doctor} ಅವರೊಂದಿಗೆ${tokenData.forWhom && tokenData.forWhom !== 'self' ? ' ' + tokenData.patientName + ' ಅವರಿಗಾಗಿ' : ''} ${date} ರಂದು ${time} ಗಂಟೆಗೆ ನಿಮ್ಮ ಅಪಾಯಿಂಟ್ಮೆಂಟ್ ಬುಕ್ ಆಗಿದೆ. ನಿಮ್ಮ ಟೋಕನ್ ಸಂಖ್ಯೆ ${token}.`,
+            hi: `${doctor} के साथ${tokenData.forWhom && tokenData.forWhom !== 'self' ? ' ' + tokenData.patientName + ' के लिए' : ''} आपकी अपॉइंटमेंट ${date} को ${time} बजे बुक हो गई है। आपका टोकन नंबर ${token} है।`,
+            te: `${doctor} తో${tokenData.forWhom && tokenData.forWhom !== 'self' ? ' ' + tokenData.patientName + ' కొరకు' : ''} మీ అపాయింట్‌మెంట్ ${date} న ${time} గంటలకు బుక్ అయింది. మీ టోకెన్ నంబర్ ${token}.`,
+            ta: `${doctor} அவர்களுடன்${tokenData.forWhom && tokenData.forWhom !== 'self' ? ' ' + tokenData.patientName + ' க்காக' : ''} உங்கள் சந்திப்பு ${date} அன்று ${time} மணிக்கு பதிவு செய்யப்பட்டது. உங்கள் டோக்கன் எண் ${token}.`
           };
-          return messages[language];
+          return messages[language] || messages.en;
         })(),
         appointment: result.body.data,
         data: result.body.data
@@ -389,7 +391,7 @@ export const aiChatConfirm = async (req, res, next) => {
     if (tokenData.type === 'CANCEL') {
       const result = await invokePatientAppointmentController(cancelAppointmentLifecycle, {
         params: { id: tokenData.appointmentId },
-        body: { reason: 'Cancelled via AI Healthcare Assistant' },
+        body: { reason: tokenData.reasonText || 'Cancelled via AI Healthcare Assistant' },
         user: { uid: tokenData.userId, role: 'patient' },
         requestId: req.requestId,
         headers: req.headers

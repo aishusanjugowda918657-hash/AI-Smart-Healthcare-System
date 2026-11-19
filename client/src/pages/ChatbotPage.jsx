@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bot, Send, ShieldAlert, Sparkles, User, RefreshCw, Mic, MicOff, Volume2, VolumeX, Eye, EyeOff, CheckCircle2, Square } from 'lucide-react';
+import { Bot, Send, ShieldAlert, Sparkles, User, RefreshCw, Mic, MicOff, Volume2, VolumeX, Eye, EyeOff, CheckCircle2, Square, Radio, ArrowRight } from 'lucide-react';
 import { AI_DISCLAIMER_TEXT } from '../utils/constants';
-import { useSarvamSpeech } from '../hooks/useSarvamSpeech';
+import { useSpeech } from '../hooks/useSpeech';
 import API from '../services/api';
 import MarkdownRenderer from '../components/common/MarkdownRenderer';
 
@@ -12,8 +12,8 @@ export const ChatbotPage = () => {
     {
       id: 'msg-1',
       sender: 'ai',
-      text: "Hello! I’m TARA, your healthcare companion. ❤️\n\nI can help you find doctors, book or manage appointments, check your token and waiting time, and answer general hospital questions.\n\nI’m an AI assistant and do not diagnose or prescribe medicines.",
-      inputMode: 'text' // initial message, no voice
+      text: "Hello! I’m TARA, your multilingual healthcare companion. ❤️\n\nI can help you:\n- 📅 Suggest doctors & book appointments for you or your family\n- 🎫 Check your token number & real queue wait time\n- 💊 View your latest prescriptions & medicine schedules\n- 🩺 Check upcoming follow-ups & cancel appointments\n\nI am an AI assistant and do not provide medical diagnoses or emergencies. How may I help you today?",
+      inputMode: 'text'
     }
   ]);
   const [input, setInput] = useState('');
@@ -28,6 +28,8 @@ export const ChatbotPage = () => {
     isListening,
     transcript,
     setTranscript,
+    startListening,
+    stopListening,
     toggleListening,
     speak,
     isSpeaking,
@@ -44,15 +46,20 @@ export const ChatbotPage = () => {
     setSpeakerEnabled,
     lastInputMode,
     setLastInputMode,
+    handsFreeMode,
+    setHandsFreeMode,
     markTextInput,
     markVoiceInput,
     shouldSpeak
-  } = useSarvamSpeech('en-IN');
+  } = useSpeech('en-IN');
 
   const quickChips = [
     { label: 'Book Appointment', text: 'Book Appointment' },
     { label: 'My Token Status', text: 'My Token Status' },
     { label: 'Doctor Timings', text: 'Doctor Timings' },
+    { label: 'My Prescriptions', text: 'Show my latest prescription' },
+    { label: 'Medicine Schedule', text: 'When should I take my medicines?' },
+    { label: 'Next Follow-up', text: 'When is my next follow-up?' },
     { label: 'Talk to Staff', text: 'Talk to Staff' }
   ];
 
@@ -69,6 +76,20 @@ export const ChatbotPage = () => {
   }, [cancelSpeech]);
 
   /**
+   * Auto-send transcript when user finishes speaking in voice mode
+   */
+  const prevListeningRef = useRef(isListening);
+  useEffect(() => {
+    if (prevListeningRef.current && !isListening && transcript && transcript.trim().length > 1) {
+      // Speech finished with transcript
+      if (handsFreeMode) {
+        handleSendMessage(transcript, 'voice');
+      }
+    }
+    prevListeningRef.current = isListening;
+  }, [isListening, transcript, handsFreeMode]);
+
+  /**
    * Send a message. inputModeOverride can be 'text' (for chips), 'voice', or auto-detected.
    */
   const handleSendMessage = async (textToSend, inputModeOverride) => {
@@ -79,15 +100,18 @@ export const ChatbotPage = () => {
     const mode = inputModeOverride || (transcript && transcript.trim() === query.trim() ? 'voice' : 'text');
     const normalizedQuery = query.toLowerCase().trim();
     const affirmativeReplies = new Set([
-      'yes', 'yes please', 'yeah', 'yep', 'okay', 'ok', 'confirm', 'confirm it', 'book it', 'go ahead',
-      'ಹೌದು', 'ಹೌದು ಬುಕ್ ಮಾಡಿ', 'ಮಾಡಿ', 'ಸರಿ',
-      'हाँ', 'हां', 'ठीक है', 'हाँ बुक करें', 'कर दीजिए',
-      'అవును', 'అవును బుక్ చేయండి', 'చేయండి', 'సరే',
-      'ஆம்', 'சரி', 'ஆம் பதிவு செய்யுங்கள்'
+      'yes', 'yes please', 'yeah', 'yep', 'okay', 'ok', 'confirm', 'confirm it', 'book it', 'go ahead', 'proceed', 'sure', 'correct', 'right', 'that works', 'please book', 'please cancel',
+      'ಹೌದು', 'ಹೌದು ಬುಕ್ ಮಾಡಿ', 'ಮಾಡಿ', 'ಸರಿ', 'ಖಚಿತಪಡಿಸಿ', 'ಖಂಡಿತ', 'ಹೂಂ', 'ಬುಕ್ ಮಾಡಿ', 'ರದ್ದು ಮಾಡಿ',
+      'हाँ', 'हां', 'ठीक है', 'हाँ बुक करें', 'कर दीजिए', 'पुष्टि करें', 'बुक करो', 'अवश्य', 'सही है',
+      'అవును', 'అవును బుక్ చేయండి', 'చేయండి', 'సరే', 'నిర్ధారించండి', 'బుక్ చేయండి',
+      'ஆம்', 'சரி', 'ஆம் பதிவு செய்யுங்கள்', 'செய்யுங்கள்', 'உறுதிப்படுத்துகிறேன்', 'பதிவு செய்'
     ]);
     const negativeReplies = new Set([
-      'no', 'no thanks', 'cancel', 'dont', "don't", 'ಬೇಡ', 'ಇಲ್ಲ',
-      'नहीं', 'मत करो', 'வேண்டாம்', 'இல்லை', 'వద్దు', 'కాదు'
+      'no', 'no thanks', 'cancel', 'dont', "don't", 'stop', 'reject', 'nevermind',
+      'ಬೇಡ', 'ಇಲ್ಲ', 'ನಿಲ್ಲಿಸಿ',
+      'नहीं', 'मत करो', 'रद्द करें', 'ना', 'रुकिए',
+      'வேண்டாம்', 'இல்லை', 'நிறுத்து', 'வேண்டாம் ரத்து செய்',
+      'వద్దు', 'కాదు', 'ఆపండి'
     ]);
 
     const cancelMessages = {
@@ -164,12 +188,23 @@ export const ChatbotPage = () => {
       const data = res.data;
       const aiResponse = data.message || data.response || 'How else can I assist you?';
 
+      let actionButtons = data.actionButtons || [];
+      if (data.route && actionButtons.length === 0) {
+        const routeLabels = {
+          '/prescriptions': 'View Prescriptions 💊',
+          '/reminders': 'View Medicine Tracker ⏰',
+          '/book-appointment': 'Book Appointment 📅',
+          '/patient-dashboard': 'Go to Dashboard 🏥'
+        };
+        actionButtons = [{ label: routeLabels[data.route] || 'Open Details', route: data.route }];
+      }
+
       const aiMsg = {
         id: `ai-${Date.now()}`,
         sender: 'ai',
         text: aiResponse,
         quickChips: data.quickChips || null,
-        actionButtons: data.actionButtons || null,
+        actionButtons: actionButtons.length > 0 ? actionButtons : null,
         isEmergency: data.isEmergency || false,
         aiSource: data.aiSource || null,
         inputMode: mode // remember what triggered this reply
@@ -310,6 +345,39 @@ export const ChatbotPage = () => {
             <option value="ta-IN" className="text-slate-900">தமிழ் (Tamil)</option>
             <option value="te-IN" className="text-slate-900">తెలుగు (Telugu)</option>
           </select>
+
+          {/* Hands-Free Voice Mode Toggle */}
+          <button
+            onClick={() => {
+              const next = !handsFreeMode;
+              setHandsFreeMode(next);
+              if (next && !isListening && !isSpeaking) {
+                startListening();
+              }
+            }}
+            title={handsFreeMode ? "Hands-Free Mode Active (Auto-listens after speaking)" : "Turn on Hands-Free Mode"}
+            className={`px-2.5 py-1.5 rounded-xl text-xs flex items-center space-x-1.5 transition-colors ${
+              handsFreeMode ? 'bg-emerald-500 hover:bg-emerald-600 text-white font-bold' : 'bg-white/10 hover:bg-white/20 text-white'
+            }`}
+          >
+            <Radio className={`w-3.5 h-3.5 ${handsFreeMode ? 'animate-pulse' : ''}`} />
+            <span className="hidden sm:inline">{handsFreeMode ? 'Hands-Free' : 'Manual'}</span>
+          </button>
+
+          {/* Stop Button (Cancels active speech or listening immediately) */}
+          {(isSpeaking || isListening) && (
+            <button
+              onClick={() => {
+                cancelSpeech();
+                stopListening();
+              }}
+              title="Stop speaking / listening immediately"
+              className="px-2.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs flex items-center space-x-1 font-bold animate-pulse shadow-md transition-colors"
+            >
+              <Square className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Stop</span>
+            </button>
+          )}
 
           {/* Speaker Toggle */}
           <button
