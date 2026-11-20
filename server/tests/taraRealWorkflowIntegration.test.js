@@ -99,12 +99,20 @@ describe('TARA Phase 2: Real Workflow Integration Tests (Firebase Emulator)', ()
     // Ensure Doctor DOC-001 exists
     await db.collection('doctors').doc('DOC-001').set({
       doctorId: 'DOC-001',
+      doctorUid: 'DOC-001',
       fullName: 'Dr. Sarah Smith',
       name: 'Dr. Sarah Smith',
       departmentId: 'dept-card',
       departmentName: 'Cardiology',
       specialization: 'Cardiologist',
       active: true
+    }, { merge: true });
+
+    await db.collection('users').doc('DOC-001').set({
+      role: 'doctor',
+      doctorId: 'DOC-001',
+      fullName: 'Dr. Sarah Smith',
+      status: 'ACTIVE'
     }, { merge: true });
 
     // Seed bookable test slot

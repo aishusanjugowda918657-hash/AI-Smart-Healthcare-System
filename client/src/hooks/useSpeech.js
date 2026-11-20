@@ -119,11 +119,18 @@ export function useSpeech(initialLang = 'en-IN', options = {}) {
       };
 
       recognition.onresult = (event) => {
-        let interim = '';
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          interim += event.results[i][0].transcript;
+        let finalStr = '';
+        let interimStr = '';
+        for (let i = 0; i < event.results.length; i++) {
+          const resText = event.results[i][0]?.transcript || '';
+          if (event.results[i].isFinal) {
+            finalStr += (finalStr ? ' ' : '') + resText.trim();
+          } else {
+            interimStr += (interimStr ? ' ' : '') + resText.trim();
+          }
         }
-        setTranscript(interim);
+        const fullTranscript = (finalStr || interimStr).trim();
+        setTranscript(fullTranscript);
         consecutiveSilenceRef.current = 0; // Reset silence counter on speech
       };
 

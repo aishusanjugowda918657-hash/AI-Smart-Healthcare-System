@@ -170,9 +170,11 @@ export async function runWithTools({ system = '', messages = [], tools = [], too
         for (const call of functionCalls) {
           const toolName = call.name;
           const args = call.args || {};
+          console.log(`[TARA-TOOL] Invoking tool '${toolName}' (round ${round})`);
           modelParts.push({ functionCall: { name: toolName, args } });
 
           const toolResult = await toolHandler(toolName, args, context, sourcesCollector);
+          console.log(`[TARA-TOOL] Completed tool '${toolName}' | resultStatus=${toolResult?.status || 'SUCCESS'}`);
 
           if (toolResult?.route) {
             actionRoute = toolResult.route;

@@ -23,6 +23,7 @@ import { createAppointment } from './bookingController.js';
 import { cancelAppointment as cancelAppointmentLifecycle, rescheduleAppointment as rescheduleAppointmentLifecycle } from './appointmentLifecycleController.js';
 import { evaluatePrescriptionSafety } from '../domain/safety.js';
 import { searchHelp, getArticleSummaries, getHelpReplyById } from '../domain/helpSearch.js';
+import { detectNaturalConversation } from '../ai/naturalConversation.js';
 import flags from '../config/flags.js';
 import medicinesConfig from '../config/clinical/medicines.json' with { type: 'json' };
 
@@ -48,8 +49,8 @@ function formatPatientQuickReply(language, type, data = {}) {
       wait: `Your estimated wait is ${low} to ${high} minutes.`,
       waitUnavailable: 'A live waiting-time estimate is not available right now.',
       queueCount: (count) => `${count} patients are currently in the queue. ${text.waitUnavailable}`,
-      timings: `${doctor} OPD timings: ${data.timings}. Lunch break: ${data.lunchBreak}.`,
-      staff: 'I have noted your request. Please approach the hospital reception for assistance.'
+      timings: `${doctor} OPD Timings: ${data.timings}. Lunch break: ${data.lunchBreak}.`,
+      staff: 'I have noted and escalated your request. Please approach the hospital reception for assistance.'
     },
     kn: {
       noAppointment: 'ಇಂದು ನಿಮಗೆ ಯಾವುದೇ ಅಪಾಯಿಂಟ್ಮೆಂಟ್ ನಿಗದಿಯಾಗಿಲ್ಲ.',
@@ -150,11 +151,28 @@ export const aiChat = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Message length exceeds 500 characters limit.' });
     }
 
+    console.log(`[TARA-DIAGNOSTICS] Incoming chat | lang=${language} | inputMode=${inputMode || 'text'} | hasAuth=${!!uid} | flags.ai=${flags.ai}`);
+
     // Selected patient health ID defaults to logged-in user or provided healthId
     // 1. RULE PRE-CHECK: Emergency Keywords (5 languages) - Takes absolute precedence.
     // Do this before any database lookup so emergency guidance remains available during outages.
     if (checkEmergencyKeywords(message)) {
+      console.log(`[TARA-ROUTING] Handled as EMERGENCY alert for lang '${language}'.`);
       return res.status(200).json(getEmergencyResponse(language));
+    }
+
+    // 2. CONVERSATIONAL INTENT PRE-ROUTING (Greetings, Small Talk, Gratitude, Doctor Search)
+    const conversationMatch = detectNaturalConversation(message, language);
+    if (conversationMatch) {
+      console.log(`[TARA-ROUTING] Handled conversational intent '${conversationMatch.intent}' via natural router for lang '${language}'.`);
+      return res.status(200).json({
+        success: true,
+        language,
+        message: conversationMatch.message,
+        response: `${conversationMatch.message}\n\nDisclaimer: This is AI generated content.`,
+        quickChips: conversationMatch.quickChips || null,
+        aiSource: 'conversational_router'
+      });
     }
 
     // Resolve the signed-in patient's canonical Health ID on the server.
@@ -241,18 +259,23 @@ export const aiChat = async (req, res, next) => {
     // 4. HELP LIBRARY SEARCH (handles common questions without Gemini)
     const helpResult = searchHelp(message, language);
     if (helpResult.matched && !forceConversationalBooking) {
+      console.log(`[TARA-ROUTING] Handled via help library article '${helpResult.article?.id}'.`);
       return res.status(200).json(helpResult.reply);
     }
 
-    // 4. GEMINI FUNCTION CALLING LOOP (runWithTools) – only if AI is available
+    // 5. GEMINI FUNCTION CALLING LOOP (runWithTools) – only if AI is available
     if (!flags.ai) {
-      // AI off → return help topic chips or fallback
-      if (!helpResult.matched) {
-        return res.status(200).json({
-          ...helpResult.reply,
-          aiSource: 'help_fallback'
-        });
+      console.log(`[TARA-ROUTING] AI flag disabled. Providing deterministic basic assistance.`);
+      if (helpResult.matched) {
+        return res.status(200).json(helpResult.reply);
       }
+      const fallback = getChatFallback(language);
+      return res.status(200).json({
+        ...fallback,
+        response: fallback.message + '\n\nDisclaimer: This is AI generated content.',
+        language,
+        aiSource: 'basic_assistance'
+      });
     }
 
     const trimmedHistory = (history || []).slice(-6); // Limit to last 6 messages
@@ -264,6 +287,7 @@ export const aiChat = async (req, res, next) => {
       ? `\n\nReference knowledge base articles:\n${helpContext.map(a => `- ${a.title}: ${a.answer} ${(a.steps || []).join(' ')}`).join('\n')}`
       : '';
 
+    console.log(`[TARA-DIAGNOSTICS] Starting Gemini runWithTools (historyLength=${trimmedHistory.length})`);
     const result = await runWithTools({
       system: systemPrompt + groundingNote,
       messages: trimmedHistory.concat([{ role: 'user', content: message }]),
@@ -274,8 +298,8 @@ export const aiChat = async (req, res, next) => {
     });
 
     if (!result) {
-      // Gemini failed → use help topic chips or generic fallback
-      if (!helpResult.matched && helpResult.reply) {
+      console.warn(`[TARA-FALLBACK] Gemini runWithTools returned null or timed out. Falling back to rule-based assistance.`);
+      if (helpResult.matched && helpResult.reply) {
         return res.status(200).json({ ...helpResult.reply, aiSource: 'help_fallback' });
       }
       const fallback = getChatFallback(language);
@@ -286,6 +310,8 @@ export const aiChat = async (req, res, next) => {
         aiSource: 'rule_fallback'
       });
     }
+
+    console.log(`[TARA-DIAGNOSTICS] Gemini response generated | textLength=${result.text?.length || 0} | aiSource=gemini`);
 
     const textMsg = result.text || 'How else can I assist you today?';
     const textWithDisclaimer = textMsg.includes('Disclaimer:') ? textMsg : `${textMsg}\n\nDisclaimer: This is AI generated content.`;

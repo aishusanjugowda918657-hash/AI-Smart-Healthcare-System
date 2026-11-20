@@ -77,17 +77,26 @@ export const ChatbotPage = () => {
 
   /**
    * Auto-send transcript when user finishes speaking in voice mode
+   * Supports BOTH Hands-Free mode and Manual Microphone mode.
+   * Ensures final transcript is submitted exactly once without duplicate calls.
    */
   const prevListeningRef = useRef(isListening);
+  const isSubmittingVoiceRef = useRef(false);
+  const userCancelledVoiceRef = useRef(false);
+
   useEffect(() => {
-    if (prevListeningRef.current && !isListening && transcript && transcript.trim().length > 1) {
-      // Speech finished with transcript
-      if (handsFreeMode) {
-        handleSendMessage(transcript, 'voice');
+    if (prevListeningRef.current && !isListening) {
+      const spokenText = (transcript || '').trim();
+      if (!userCancelledVoiceRef.current && spokenText.length > 1 && !isSubmittingVoiceRef.current && !loading) {
+        isSubmittingVoiceRef.current = true;
+        handleSendMessage(spokenText, 'voice').finally(() => {
+          isSubmittingVoiceRef.current = false;
+        });
       }
+      userCancelledVoiceRef.current = false;
     }
     prevListeningRef.current = isListening;
-  }, [isListening, transcript, handsFreeMode]);
+  }, [isListening, transcript, loading]);
 
   /**
    * Send a message. inputModeOverride can be 'text' (for chips), 'voice', or auto-detected.
@@ -368,8 +377,11 @@ export const ChatbotPage = () => {
           {(isSpeaking || isListening) && (
             <button
               onClick={() => {
+                userCancelledVoiceRef.current = true;
                 cancelSpeech();
                 stopListening();
+                setTranscript('');
+                setInput('');
               }}
               title="Stop speaking / listening immediately"
               className="px-2.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs flex items-center space-x-1 font-bold animate-pulse shadow-md transition-colors"
