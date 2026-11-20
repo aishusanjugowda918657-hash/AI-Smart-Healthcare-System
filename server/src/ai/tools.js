@@ -750,7 +750,9 @@ export async function executePatientChatTool(toolName, args = {}, context = {}) 
         }
 
         const appts = Array.from(docsMap.entries()).map(([id, data]) => ({ id, ...data }));
-        const active = appts.find(a => ['checked_in', 'waiting', 'called', 'in_consultation', 'in_room'].includes(a.status)) || appts[0];
+        const active = appts.find(a => ['waiting', 'checked_in', 'called', 'in_consultation', 'in_room', 'scheduled', 'booked'].includes(String(a.status || '').toLowerCase()))
+          || appts.find(a => !['cancelled', 'no_show', 'completed'].includes(String(a.status || '').toLowerCase()))
+          || appts[0];
         const live = active.live || {};
 
         const waitMinLow = live.waitMinLow ?? active.estimatedWaitMinutes ?? null;

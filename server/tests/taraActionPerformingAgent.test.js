@@ -16,6 +16,7 @@ import { runWithTools } from '../src/ai/geminiClient.js';
 import { getChatFallback } from '../src/ai/fallbacks.js';
 import { buildChatSystemPrompt } from '../src/ai/prompts/chat.js';
 import { assertDbConnected } from '../src/config/firebase.js';
+import { getHospitalTodayStr } from '../src/utils/timezoneDate.js';
 
 // Setup Mock in-memory database
 class MockDocSnapshot {
@@ -185,7 +186,7 @@ describe('TARA Action-Performing AI Voice Agent Tests', () => {
           doctorId: 'doc-cardio-1',
           doctorName: 'Dr. Ramesh Rao',
           departmentName: 'Cardiology',
-          date: '2026-11-19',
+          date: getHospitalTodayStr(),
           bookedStartAt: '10:30',
           status: 'checked_in',
           tokenNumber: 'A-102',
