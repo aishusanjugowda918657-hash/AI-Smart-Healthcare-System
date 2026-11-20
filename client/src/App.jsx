@@ -55,6 +55,7 @@ import ManageDepartments from './components/admin/ManageDepartments';
 import ManagePatients from './components/admin/ManagePatients';
 import QueueMonitor from './components/admin/QueueMonitor';
 import SystemAnalyticsCharts from './components/admin/SystemAnalyticsCharts';
+import StaffShiftManager from './components/admin/StaffShiftManager';
 
 // Dashboard layout wrapper used ONLY for role pages
 const DashboardLayout = () => {
@@ -187,6 +188,7 @@ export const App = () => {
                   <Route path="/admin-dashboard" element={<AdminDashboard />} />
                   <Route path="/manage-doctors" element={<ManageDoctors />} />
                   <Route path="/manage-staff" element={<ManageDoctors />} />
+                  <Route path="/manage-shifts" element={<StaffShiftManager />} />
                   <Route path="/manage-departments" element={<ManageDepartments />} />
                   <Route path="/manage-patients" element={<ManagePatients />} />
                   <Route path="/queue-monitor" element={<QueueMonitor />} />

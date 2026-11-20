@@ -76,6 +76,7 @@ export const Sidebar = ({ mobileOpen = false, onClose = () => {} }) => {
   const adminLinks = [
     { to: '/admin-dashboard', label: 'Admin Overview', icon: LayoutDashboard },
     { to: '/manage-doctors', label: 'Manage Hospital Staff', icon: Users },
+    { to: '/manage-shifts', label: 'Manage Staff Shifts', icon: Clock },
     { to: '/manage-departments', label: 'Departments', icon: Building },
     { to: '/manage-patients', label: 'Patients Directory', icon: UserCheck },
     { to: '/queue-monitor', label: 'Live System Queue', icon: Clock },

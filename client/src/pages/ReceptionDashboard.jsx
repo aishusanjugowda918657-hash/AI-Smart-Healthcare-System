@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import StaffQrScanner from '../components/staff/StaffQrScanner';
+import MyCurrentShiftCard from '../components/common/MyCurrentShiftCard';
 import API from '../services/api';
 import {
   UserPlus, Clock, AlertCircle, CheckCircle2, RotateCcw,
@@ -176,6 +177,9 @@ export const ReceptionDashboard = () => {
           </button>
         </div>
       </div>
+
+      {/* Staff Duty Schedule Banner */}
+      <MyCurrentShiftCard />
 
       {/* Privacy Guard Notice */}
       <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-4 flex items-center gap-3 text-xs text-slate-400">

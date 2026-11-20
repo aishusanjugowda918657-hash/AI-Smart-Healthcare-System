@@ -19,6 +19,12 @@ import {
   updateStaffShift,
   resetStaffPassword
 } from '../controllers/adminStaffController.js';
+import {
+  getShiftOverview,
+  getShiftStaffList,
+  assignStaffShift,
+  getStaffShiftHistory
+} from '../controllers/adminShiftController.js';
 import { adminMergePatients } from '../controllers/patientController.js';
 import { saveDoctorSchedule, getLeaves } from '../controllers/doctorController.js';
 import { adminGenerateSlots, adminCreateLeave, adminDeleteLeave } from '../controllers/slotController.js';
@@ -50,6 +56,12 @@ router.put('/staff/:id', requireAuth, requireRole('admin'), updateStaff);
 router.patch('/staff/:id/status', requireAuth, requireRole('admin'), updateStaffStatus);
 router.patch('/staff/:id/shift', requireAuth, requireRole('admin'), updateStaffShift);
 router.post('/staff/:id/reset-password', requireAuth, requireRole('admin'), resetStaffPassword);
+
+// Centralized Hospital Staff Shift Management (Morning & Night Shifts)
+router.get('/shifts/overview', requireAuth, requireRole('admin'), getShiftOverview);
+router.get('/shifts/staff', requireAuth, requireRole('admin'), getShiftStaffList);
+router.post('/shifts/assign', requireAuth, requireRole('admin'), assignStaffShift);
+router.get('/shifts/history/:id', requireAuth, requireRole('admin'), getStaffShiftHistory);
 
 router.post('/users/:uid/role', requireAuth, requireRole('admin'), setUserRole);
 router.post('/patients/merge', requireAuth, requireRole('admin'), adminMergePatients);

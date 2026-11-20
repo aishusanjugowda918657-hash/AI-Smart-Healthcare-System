@@ -36,6 +36,7 @@ import queueRoutes from './routes/queue.routes.js';
 import reportRoutes from './routes/report.routes.js';
 import visitRoutes from './routes/visit.routes.js';
 import voiceRoutes from './routes/voice.routes.js';
+import { getMyStaffShift } from './controllers/adminShiftController.js';
 
 const app = express();
 
@@ -139,6 +140,7 @@ app.post('/api/internal/tick', async (req, res) => {
 
 // Staff Lookup & Invites Endpoints (PRD F1)
 app.get('/api/staff/patients/lookup', requireAuth, requireRole('doctor', 'nurse', 'reception', 'admin'), staffPatientLookup);
+app.get('/api/staff/my-shift', requireAuth, getMyStaffShift);
 app.post('/api/invites/:healthId/accept', requireAuth, acceptCaregiverInvite);
 
 // Device token management (PRD F8 — client registers FCM token after permission granted)

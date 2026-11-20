@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import API from '../services/api';
+import MyCurrentShiftCard from '../components/common/MyCurrentShiftCard';
 import {
   AlertTriangle, CheckCircle2, ShieldAlert, ArrowDownCircle,
   ArrowUpCircle, Search, RefreshCw, XCircle, User, Clock, FileText
@@ -128,6 +129,9 @@ export const NurseDashboard = () => {
           </button>
         </div>
       </div>
+
+      {/* Staff Duty Schedule Banner */}
+      <MyCurrentShiftCard />
 
       {/* Audit Banner */}
       <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-4 flex items-center gap-3 text-xs text-slate-400">

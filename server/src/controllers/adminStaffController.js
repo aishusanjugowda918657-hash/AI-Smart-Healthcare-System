@@ -27,7 +27,7 @@ import { getHospitalTodayStr } from '../utils/timezoneDate.js';
 import { z } from 'zod';
 
 const VALID_ROLES = ['doctor', 'nurse', 'reception', 'pharmacy'];
-const VALID_SHIFTS = ['day', 'night', 'both'];
+const VALID_SHIFTS = ['morning', 'day', 'night', 'both', 'none', 'unassigned'];
 const VALID_STATUSES = ['ACTIVE', 'INACTIVE'];
 
 // Normalizes input role ('receptionist' -> 'reception')
@@ -47,7 +47,7 @@ const staffRegistrationSchema = z.object({
   phone: z.string().optional().default(''),
   staffId: z.string().optional().default(''),
   departmentId: z.string().optional().default('dept-gen'),
-  shift: z.enum(['day', 'night', 'both']).default('day'),
+  shift: z.enum(['morning', 'day', 'night', 'both', 'none', 'unassigned']).optional().default('none'),
   status: z.enum(['ACTIVE', 'INACTIVE', 'active', 'inactive']).default('ACTIVE'),
 
   // Doctor specific fields
@@ -106,7 +106,7 @@ export const registerStaff = async (req, res, next) => {
     const fullName = data.fullName.trim();
     const password = data.password;
     const status = (data.status || 'ACTIVE').toUpperCase();
-    const shift = data.shift || 'day';
+    const shift = data.shift !== undefined && data.shift !== '' ? data.shift : 'none';
     const departmentId = data.departmentId || 'dept-gen';
 
     const db = assertDbConnected();

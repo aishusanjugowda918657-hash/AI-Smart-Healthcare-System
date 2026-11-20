@@ -21,6 +21,7 @@ import API from '../services/api';
 import { db } from '../config/firebase';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { generateClientDoctorDisplayId } from '../utils/doctorDisplayId';
+import MyCurrentShiftCard from '../components/common/MyCurrentShiftCard';
 
 export const DoctorDashboard = () => {
   const { currentUser } = useAuth();
@@ -295,6 +296,9 @@ export const DoctorDashboard = () => {
           </Link>
         </div>
       </div>
+
+      {/* Staff Duty Schedule Banner */}
+      <MyCurrentShiftCard />
 
       {/* Active Shared Records Banner */}
       {sharedCount > 0 && (

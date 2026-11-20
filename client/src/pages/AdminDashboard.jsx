@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { BarChart3, Sliders, Calendar, Lock, Database, UserCheck, Building, ShieldCheck, Users } from 'lucide-react';
+import { BarChart3, Sliders, Calendar, Lock, Database, UserCheck, Building, ShieldCheck, Users, Clock } from 'lucide-react';
 import AdminAnalyticsCharts from '../components/admin/AdminAnalyticsCharts';
 import AdminSettingsEditor from '../components/admin/AdminSettingsEditor';
 import AuditLogViewer from '../components/admin/AuditLogViewer';
@@ -7,6 +7,7 @@ import ClinicalListsViewer from '../components/admin/ClinicalListsViewer';
 import ScheduleEditor from '../components/admin/ScheduleEditor';
 import LeaveRescheduleAdminBoard from '../components/admin/LeaveRescheduleAdminBoard';
 import StaffManager from '../components/admin/StaffManager';
+import StaffShiftManager from '../components/admin/StaffShiftManager';
 
 export const AdminDashboard = () => {
   const [activeTab, setActiveTab] = useState('analytics');
@@ -14,6 +15,7 @@ export const AdminDashboard = () => {
   const tabs = [
     { id: 'analytics', label: 'Accuracy & Analytics', icon: BarChart3 },
     { id: 'staff', label: 'Hospital Staff', icon: Users },
+    { id: 'shifts', label: 'Staff Shifts', icon: Clock },
     { id: 'settings', label: 'Settings & Roles', icon: Sliders },
     { id: 'schedules', label: 'Schedule Editor', icon: Calendar },
     { id: 'leaves', label: 'Leave Reschedule', icon: Building },
@@ -61,6 +63,7 @@ export const AdminDashboard = () => {
       <div className="transition-all duration-300">
         {activeTab === 'analytics' && <AdminAnalyticsCharts />}
         {activeTab === 'staff' && <StaffManager />}
+        {activeTab === 'shifts' && <StaffShiftManager />}
         {activeTab === 'settings' && <AdminSettingsEditor />}
         {activeTab === 'schedules' && <ScheduleEditor />}
         {activeTab === 'leaves' && <LeaveRescheduleAdminBoard />}

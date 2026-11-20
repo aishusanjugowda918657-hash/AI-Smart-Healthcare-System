@@ -4,6 +4,7 @@ import {
   Lock, AlertTriangle, Clock, Calendar, User
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import MyCurrentShiftCard from '../components/common/MyCurrentShiftCard';
 import API from '../services/api';
 
 export const PharmacyVerifyPage = () => {
@@ -128,6 +129,9 @@ export const PharmacyVerifyPage = () => {
           </button>
         </form>
       </div>
+
+      {/* Staff Duty Schedule Banner */}
+      <MyCurrentShiftCard />
 
       {/* Notifications */}
       {errorMsg && (
