@@ -130,8 +130,6 @@ export async function runWithTools({ system = '', messages = [], tools = [], too
 
   const model = getModelName();
   const sourcesCollector = [];
-  let pendingAction = null;
-  let actionRoute = null;
 
   try {
     const contents = [
@@ -164,79 +162,57 @@ export async function runWithTools({ system = '', messages = [], tools = [], too
       const functionCalls = response?.functionCalls || candidate?.content?.parts?.filter(p => p.functionCall).map(p => p.functionCall);
 
       if (functionCalls && functionCalls.length > 0) {
-        const modelParts = [];
-        const userParts = [];
+        const call = functionCalls[0];
+        const toolName = call.name;
+        const args = call.args || {};
 
-        for (const call of functionCalls) {
-          const toolName = call.name;
-          const args = call.args || {};
-          console.log(`[TARA-TOOL] Invoking tool '${toolName}' (round ${round})`);
-          modelParts.push({ functionCall: { name: toolName, args } });
+        const toolResult = await toolHandler(toolName, args, context, sourcesCollector);
 
-          const toolResult = await toolHandler(toolName, args, context, sourcesCollector);
-          console.log(`[TARA-TOOL] Completed tool '${toolName}' | resultStatus=${toolResult?.status || 'SUCCESS'}`);
+        if (toolResult && toolResult.status === 'CHOICES_REQUIRED') {
+          return {
+            text: toolResult.message,
+            choices: toolResult.choices,
+            sources: sourcesCollector
+          };
+        }
 
-          if (toolResult?.route) {
-            actionRoute = toolResult.route;
-          }
+        if (toolResult && toolResult.actionRequired) {
+          return {
+            text: toolResult.message,
+            actionRequired: toolResult.actionRequired,
+            confirmToken: toolResult.confirmToken,
+            summary: toolResult.summary,
+            sources: sourcesCollector
+          };
+        }
 
-          if (toolResult && toolResult.status === 'CHOICES_REQUIRED') {
-            return {
-              text: toolResult.message,
-              choices: toolResult.choices,
-              sources: sourcesCollector,
-              route: actionRoute
-            };
-          }
+        contents.push({
+          role: 'model',
+          parts: [{ functionCall: { name: toolName, args } }]
+        });
 
-          if (toolResult && toolResult.actionRequired) {
-            pendingAction = {
-              actionRequired: toolResult.actionRequired,
-              confirmToken: toolResult.confirmToken,
-              summary: toolResult.summary,
-              message: toolResult.message
-            };
-          }
-
-          userParts.push({
+        contents.push({
+          role: 'user',
+          parts: [{
             functionResponse: {
               name: toolName,
               response: { output: toolResult }
             }
-          });
-        }
-
-        contents.push({ role: 'model', parts: modelParts });
-        contents.push({ role: 'user', parts: userParts });
-
-        if (pendingAction) {
-          return {
-            text: pendingAction.message || candidate?.content?.parts?.[0]?.text || 'Please confirm to proceed.',
-            actionRequired: pendingAction.actionRequired,
-            confirmToken: pendingAction.confirmToken,
-            summary: pendingAction.summary,
-            route: actionRoute,
-            sources: sourcesCollector
-          };
-        }
+          }]
+        });
 
       } else {
         const text = typeof response?.text === 'function' ? response.text() : (candidate?.content?.parts?.[0]?.text || '');
         return {
           text: text || 'How else can I assist you today?',
-          sources: sourcesCollector,
-          route: actionRoute,
-          actionRequired: pendingAction?.actionRequired || null,
-          confirmToken: pendingAction?.confirmToken || null,
-          summary: pendingAction?.summary || null
+          sources: sourcesCollector
         };
       }
     }
 
     return {
       text: 'Reached maximum reasoning rounds.',
-      sources: sourcesCollector,
-      route: actionRoute
+      sources: sourcesCollector
     };
 
   } catch (err) {

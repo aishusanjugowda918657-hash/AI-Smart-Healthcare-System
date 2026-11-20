@@ -5,9 +5,6 @@
  * - Doctor tools enforce 90-day treating window / active share access checks & write audit logs.
  */
 import { assertDbConnected } from '../config/firebase.js';
-import { getSlots } from '../controllers/slotController.js';
-import { getHospitalTodayStr } from '../utils/timezoneDate.js';
-import { evaluateTriageRules } from '../domain/triage.js';
 
 // In-memory store for pending confirmation tokens (10-minute expiry)
 const pendingConfirmations = new Map();
@@ -75,153 +72,14 @@ export async function verifyDoctorPatientAccess(doctorUid, healthId) {
 
 /**
  * ----------------------------------------------------
- * PATIENT CHATBOT TOOL DECLARATIONS & HANDLERS (F14 & TARA ACTION AGENT)
+ * PATIENT CHATBOT TOOL DECLARATIONS & HANDLERS (F14)
  * ----------------------------------------------------
  */
 export const PATIENT_CHAT_TOOL_DECLARATIONS = [
   {
-    name: 'get_family_members',
-    description: 'Retrieve the authenticated patient\'s registered family members and dependents to book or manage appointments on their behalf.',
-    parameters: { type: 'OBJECT', properties: {}, required: [] }
-  },
-  {
-    name: 'suggest_doctors',
-    description: 'Suggest suitable active doctors based on reason for visit, symptoms, or requested department.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        reason: { type: 'STRING', description: 'Patient reason for visit or symptoms' },
-        departmentId: { type: 'STRING', description: 'Optional department ID (e.g. dept-gen, dept-card, dept-ped, dept-ortho, dept-derm)' },
-        visitType: { type: 'STRING', description: 'new or followup' }
-      }
-    }
-  },
-  {
-    name: 'find_doctors',
-    description: 'List active doctors, optionally filtered by department.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        departmentId: { type: 'STRING', description: 'Department ID, such as dept-gen or dept-card' }
-      }
-    }
-  },
-  {
-    name: 'get_available_slots',
-    description: 'Get genuinely available appointment slots for a specific doctor on a given date (Asia/Kolkata timezone).',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        doctorId: { type: 'STRING', description: 'Doctor ID' },
-        date: { type: 'STRING', description: 'Date in YYYY-MM-DD format' }
-      },
-      required: ['doctorId', 'date']
-    }
-  },
-  {
-    name: 'find_slots',
-    description: 'Find available booking slots for a doctor or department.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        doctorId: { type: 'STRING', description: 'Doctor ID' },
-        departmentId: { type: 'STRING', description: 'Department ID (optional)' },
-        date: { type: 'STRING', description: 'YYYY-MM-DD date' }
-      },
-      required: ['doctorId', 'date']
-    }
-  },
-  {
-    name: 'book_appointment',
-    description: 'Prepare an appointment booking for the patient or a family member after explicit confirmation. Returns confirmation summary and confirmToken.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        doctorId: { type: 'STRING', description: 'Doctor ID' },
-        doctorName: { type: 'STRING', description: 'Doctor name' },
-        date: { type: 'STRING', description: 'Date in YYYY-MM-DD format' },
-        slotId: { type: 'STRING', description: 'Exact slotId returned by get_available_slots' },
-        timeSlot: { type: 'STRING', description: 'Time slot in HH:mm format' },
-        reason: { type: 'STRING', description: 'Patient stated reason for visit' },
-        forWhom: { type: 'STRING', description: 'self or name/relationship of family member' },
-        memberId: { type: 'STRING', description: 'Optional Health ID of family member' },
-        departmentId: { type: 'STRING', description: 'Optional department ID' },
-        confirmed: { type: 'BOOLEAN', description: 'Whether patient has explicitly confirmed the booking' }
-      },
-      required: ['doctorId', 'date', 'slotId', 'timeSlot', 'reason']
-    }
-  },
-  {
-    name: 'prepare_booking',
-    description: 'Prepare an appointment booking. Returns confirmation summary and confirmToken.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        doctorId: { type: 'STRING', description: 'Doctor ID' },
-        date: { type: 'STRING', description: 'YYYY-MM-DD' },
-        timeSlot: { type: 'STRING', description: 'HH:mm' },
-        slotId: { type: 'STRING', description: 'Exact slotId returned by find_slots' },
-        departmentId: { type: 'STRING', description: 'Doctor department ID' },
-        reasonText: { type: 'STRING', description: 'Patient stated reason for visit' },
-        doctorName: { type: 'STRING', description: 'Exact doctor name from find_doctors' }
-      },
-      required: ['doctorId', 'date', 'timeSlot', 'slotId', 'reasonText']
-    }
-  },
-  {
-    name: 'cancel_appointment',
-    description: 'Cancel an upcoming appointment for the patient or their dependent. Requires explicit confirmation.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        appointmentId: { type: 'STRING', description: 'Appointment ID to cancel' },
-        reason: { type: 'STRING', description: 'Reason for cancellation' },
-        confirmed: { type: 'BOOLEAN', description: 'Whether patient has confirmed cancellation' }
-      },
-      required: ['appointmentId']
-    }
-  },
-  {
-    name: 'prepare_cancel',
-    description: 'Prepare appointment cancellation. Returns confirmation summary and confirmToken.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        appointmentId: { type: 'STRING', description: 'Appointment ID' }
-      },
-      required: ['appointmentId']
-    }
-  },
-  {
-    name: 'get_upcoming_appointments',
-    description: 'List upcoming appointments for the authenticated patient and their dependents.',
-    parameters: { type: 'OBJECT', properties: {}, required: [] }
-  },
-  {
-    name: 'get_my_appointments',
-    description: 'List the authenticated patient\'s own appointments to check status or choose one to cancel or reschedule.',
-    parameters: { type: 'OBJECT', properties: {}, required: [] }
-  },
-  {
-    name: 'get_my_token',
-    description: 'Get current queue token number, live queue status, and estimated wait time for today\'s appointment.',
-    parameters: { type: 'OBJECT', properties: {}, required: [] }
-  },
-  {
     name: 'get_token_status',
     description: 'Get current queue token status and estimated wait time for the patient\'s appointments today.',
     parameters: { type: 'OBJECT', properties: {}, required: [] }
-  },
-  {
-    name: 'get_waiting_time',
-    description: 'Get real-time waiting-time estimate and queue length for the patient\'s consultation.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        doctorId: { type: 'STRING', description: 'Doctor ID (optional)' },
-        departmentId: { type: 'STRING', description: 'Department ID (optional)' }
-      }
-    }
   },
   {
     name: 'get_wait_time',
@@ -231,37 +89,6 @@ export const PATIENT_CHAT_TOOL_DECLARATIONS = [
       properties: {
         doctorId: { type: 'STRING', description: 'Doctor ID (optional)' },
         departmentId: { type: 'STRING', description: 'Department ID (optional)' }
-      }
-    }
-  },
-  {
-    name: 'get_latest_prescription',
-    description: 'Retrieve the patient\'s latest prescription, active medicines, dosages, and doctor notes.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        memberId: { type: 'STRING', description: 'Optional Health ID of family member' }
-      }
-    }
-  },
-  {
-    name: 'get_medicine_schedule',
-    description: 'Retrieve the scheduled medicine doses, timings, and intake status for the patient.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        date: { type: 'STRING', description: 'Date in YYYY-MM-DD format (defaults to today)' },
-        memberId: { type: 'STRING', description: 'Optional Health ID of family member' }
-      }
-    }
-  },
-  {
-    name: 'get_next_followup',
-    description: 'Retrieve the next scheduled follow-up consultation date, doctor, and instructions.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        memberId: { type: 'STRING', description: 'Optional Health ID of family member' }
       }
     }
   },
@@ -276,17 +103,39 @@ export const PATIENT_CHAT_TOOL_DECLARATIONS = [
     }
   },
   {
-    name: 'prepare_reschedule',
-    description: 'Prepare rescheduling an existing patient appointment to a real available slot. Requires explicit confirmation before changing it.',
+    name: 'find_slots',
+    description: 'Find available booking slots for a doctor or department.',
     parameters: {
       type: 'OBJECT',
       properties: {
-        appointmentId: { type: 'STRING', description: 'Existing appointment ID from get_my_appointments' },
-        newSlotId: { type: 'STRING', description: 'Exact new slotId returned by find_slots' },
-        newDate: { type: 'STRING', description: 'New date in YYYY-MM-DD format' },
-        newTime: { type: 'STRING', description: 'New time in HH:mm format' }
+        doctorId: { type: 'STRING', description: 'Doctor ID (optional)' },
+        departmentId: { type: 'STRING', description: 'Department ID (optional)' },
+        date: { type: 'STRING', description: 'YYYY-MM-DD date' }
+      }
+    }
+  },
+  {
+    name: 'prepare_booking',
+    description: 'Prepare an appointment booking. Returns confirmation summary and confirmToken.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        doctorId: { type: 'STRING', description: 'Doctor ID' },
+        date: { type: 'STRING', description: 'YYYY-MM-DD' },
+        timeSlot: { type: 'STRING', description: 'HH:mm' }
       },
-      required: ['appointmentId', 'newSlotId', 'newDate', 'newTime']
+      required: ['doctorId', 'date', 'timeSlot']
+    }
+  },
+  {
+    name: 'prepare_cancel',
+    description: 'Prepare appointment cancellation. Returns confirmation summary and confirmToken.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        appointmentId: { type: 'STRING', description: 'Appointment ID' }
+      },
+      required: ['appointmentId']
     }
   },
   {
@@ -312,477 +161,51 @@ export const PATIENT_CHAT_TOOL_DECLARATIONS = [
   }
 ];
 
-function getPatientActionMessage(language, action, details = {}) {
-  const doctor = details.doctorName || 'Doctor';
-  const date = details.date || '';
-  const time = details.time || '';
-  const token = details.token || '';
-  const messages = {
-    en: {
-      booking: `I will book your appointment with ${doctor} on ${date} at ${time}. Please confirm to proceed.`,
-      cancel: `I will cancel your appointment with ${doctor} on ${date}. Please confirm to proceed.`,
-      reschedule: `I will move your appointment with ${doctor} to ${date} at ${time}. Please confirm to proceed.`
-    },
-    kn: {
-      booking: `${date} ರಂದು ${time} ಗಂಟೆಗೆ ${doctor} ಅವರೊಂದಿಗೆ ಅಪಾಯಿಂಟ್ಮೆಂಟ್ ಬುಕ್ ಮಾಡುತ್ತೇನೆ. ಮುಂದುವರಿಸಲು ದೃಢೀಕರಿಸಿ.`,
-      cancel: `${date} ರಂದು ${doctor} ಅವರೊಂದಿಗಿನ ನಿಮ್ಮ ಅಪಾಯಿಂಟ್ಮೆಂಟ್ ರದ್ದು ಮಾಡುತ್ತೇನೆ. ದಯವಿಟ್ಟು ದೃಢೀಕರಿಸಿ.`,
-      reschedule: `${doctor} ಅವರೊಂದಿಗಿನ ನಿಮ್ಮ ಅಪಾಯಿಂಟ್ಮೆಂಟ್ ಅನ್ನು ${date} ರಂದು ${time} ಗಂಟೆಗೆ ಬದಲಾಯಿಸುತ್ತೇನೆ. ದಯವಿಟ್ಟು ದೃಢೀಕರಿಸಿ.`
-    },
-    hi: {
-      booking: `मैं ${date} को ${time} बजे ${doctor} के साथ आपकी अपॉइंटमेंट बुक करूँगा। कृपया पुष्टि करें।`,
-      cancel: `मैं ${date} की ${doctor} के साथ आपकी अपॉइंटमेंट रद्द करूँगा। कृपया पुष्टि करें।`,
-      reschedule: `मैं ${doctor} के साथ आपकी अपॉइंटमेंट ${date} को ${time} बजे के लिए बदलूँगा। कृपया पुष्टि करें।`
-    },
-    te: {
-      booking: `${date} న ${time} గంటలకు ${doctor} తో మీ అపాయింట్‌మెంట్ బుక్ చేస్తాను. దయచేసి నిర్ధారించండి.`,
-      cancel: `${date} న ${doctor} తో మీ అపాయింట్‌మెంట్‌ను రద్దు చేస్తాను. దయచేసి నిర్ధారించండి.`,
-      reschedule: `${doctor} తో మీ అపాయింట్‌మెంట్‌ను ${date} న ${time} గంటలకు మారుస్తాను. దయచేసి నిర్ధారించండి.`
-    },
-    ta: {
-      booking: `${date} அன்று ${time} மணிக்கு ${doctor} அவர்களுடன் உங்கள் சந்திப்பைப் பதிவு செய்கிறேன். உறுதிப்படுத்தவும்.`,
-      cancel: `${date} அன்று ${doctor} அவர்களுடனான உங்கள் சந்திப்பை ரத்து செய்கிறேன். உறுதிப்படுத்தவும்.`,
-      reschedule: `${doctor} அவர்களுடனான உங்கள் சந்திப்பை ${date} அன்று ${time} மணிக்கு மாற்றுகிறேன். உறுதிப்படுத்தவும்.`
-    }
-  };
-  return (messages[language] || messages.en)[action] || messages.en.booking;
-}
-
-export async function executePatientChatTool(toolName, args = {}, context = {}) {
-  const { userId, selectedPatientHealthId, language = 'en' } = context;
+export async function executePatientChatTool(toolName, args, context) {
+  const { userId, selectedPatientHealthId } = context;
   const db = assertDbConnected();
 
   switch (toolName) {
-    case 'get_family_members': {
-      try {
-        const [ownerSnap, primarySnap] = await Promise.all([
-          db.collection('patients').where('ownerUid', '==', userId).get(),
-          db.collection('patients').where('primaryAccountUid', '==', userId).get()
-        ]);
-
-        const docsMap = new Map();
-        [...ownerSnap.docs, ...primarySnap.docs].forEach((doc) => {
-          docsMap.set(doc.id, { id: doc.id, ...doc.data() });
-        });
-
-        const familyMembers = Array.from(docsMap.values())
-          .filter((data) => data.relation !== 'self')
-          .map((data) => ({
-            memberId: data.patientHealthId || data.healthId || data.id,
-            patientHealthId: data.patientHealthId || data.healthId || data.id,
-            name: data.fullName || data.name || 'Family Member',
-            relationship: data.relationship || data.relation || 'Dependent',
-            relation: data.relationship || data.relation || 'Dependent',
-            gender: data.gender || '',
-            dob: data.dob || '',
-            age: data.age || ''
-          }));
-
-        return {
-          familyMembers,
-          count: familyMembers.length,
-          message: familyMembers.length > 0
-            ? `Found ${familyMembers.length} registered family member(s): ${familyMembers.map(m => `${m.name} (${m.relationship})`).join(', ')}.`
-            : 'No family members currently registered under your account.'
-        };
-      } catch (err) {
-        return { familyMembers: [], count: 0, message: 'Could not retrieve family members at this time.' };
-      }
-    }
-
-    case 'suggest_doctors':
-    case 'find_doctors': {
-      const { reason = args.reasonText || '', departmentId, visitType = 'new' } = args;
-      let targetDeptId = departmentId;
-      let triageExplanation = '';
-
-      if (reason && !targetDeptId) {
-        try {
-          const triage = evaluateTriageRules(reason);
-          targetDeptId = triage.departmentId || null;
-          triageExplanation = triage.explanation || `Recommended based on symptoms: ${reason}`;
-        } catch (_) {}
-      }
-
-      let query = db.collection('doctors');
-      if (targetDeptId) {
-        query = query.where('departmentId', '==', targetDeptId);
-      }
-
-      const snapshot = await query.limit(50).get();
-      const doctors = snapshot.docs
-        .map((doc) => {
-          const data = doc.data();
-          return {
-            doctorId: data.doctorId || doc.id,
-            name: data.fullName || data.name || 'Doctor',
-            specialization: data.specialization || data.specialty || '',
-            departmentId: data.departmentId || targetDeptId || null,
-            active: data.active !== false
-          };
-        })
-        .filter((doctor) => doctor.active);
-
-      let fallbackDoctors = doctors;
-      if (doctors.length === 0 && targetDeptId) {
-        const allSnap = await db.collection('doctors').limit(10).get();
-        fallbackDoctors = allSnap.docs
-          .map((doc) => {
-            const data = doc.data();
-            return {
-              doctorId: data.doctorId || doc.id,
-              name: data.fullName || data.name || 'Doctor',
-              specialization: data.specialization || data.specialty || '',
-              departmentId: data.departmentId || null,
-              active: data.active !== false
-            };
-          })
-          .filter((doctor) => doctor.active);
-      }
-
-      return {
-        doctors: fallbackDoctors.slice(0, 10),
-        count: fallbackDoctors.length,
-        recommendedDepartment: targetDeptId || null,
-        reasonExplanation: triageExplanation || null
-      };
-    }
-
-    case 'get_available_slots':
-    case 'find_slots': {
-      const targetDate = args.date;
-      if (!args.doctorId || !targetDate) {
-        return { error: 'doctorId and date are required.' };
-      }
-      if (targetDate < getHospitalTodayStr()) {
-        return { date: targetDate, availableSlots: [], message: 'Cannot retrieve slots for past dates.' };
-      }
-
-      // Verify doctor exists first to prevent generating phantom slots for invalid doctors
-      const docSnap = await db.collection('doctors').doc(args.doctorId).get();
-      let doctorExists = docSnap.exists;
-      if (!doctorExists) {
-        const querySnap = await db.collection('doctors').where('doctorId', '==', args.doctorId).limit(1).get();
-        doctorExists = !querySnap.empty;
-      }
-      if (!doctorExists) {
-        return {
-          date: targetDate,
-          doctorId: args.doctorId,
-          availableSlots: [],
-          count: 0,
-          message: `Doctor '${args.doctorId}' not found in hospital directory.`
-        };
-      }
-
-      const controllerResponse = await new Promise((resolve, reject) => {
-        getSlots(
-          { query: { doctorId: args.doctorId, date: targetDate } },
-          {
-            status() { return this; },
-            json(payload) { resolve(payload); return this; }
-          },
-          reject
-        );
-      });
-
-      const allSlots = controllerResponse?.data?.slots || [];
-      const nowTime = new Date().toLocaleTimeString('en-GB', {
-        timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false
-      });
-      const availableSlots = allSlots
-        .filter((slot) => String(slot.status || '').toLowerCase() === 'free')
-        .filter((slot) => targetDate !== getHospitalTodayStr() || slot.startAt > nowTime)
-        .map((slot) => ({
-          slotId: slot.id,
-          time: slot.startAt,
-          endTime: slot.endAt,
-          status: slot.status
-        }));
-
-      return {
-        date: targetDate,
-        doctorId: args.doctorId,
-        availableSlots: availableSlots.slice(0, 5),
-        count: availableSlots.length,
-        message: availableSlots.length > 0
-          ? `Found ${availableSlots.length} available slot(s).`
-          : 'No available slots for this doctor on the selected date.'
-      };
-    }
-
-    case 'book_appointment':
-    case 'prepare_booking': {
-      const {
-        forWhom = 'self',
-        memberId,
-        otherName,
-        reason = args.reasonText || 'Routine checkup',
-        reasonText = args.reason || 'Routine checkup',
-        doctorId,
-        doctorName,
-        date,
-        slotId,
-        timeSlot = args.time,
-        time = args.timeSlot,
-        departmentId
-      } = args;
-
-      const actualSlotId = slotId;
-      const actualTime = timeSlot || time;
-      const actualReason = reason || reasonText;
-
-      if (!actualSlotId || !doctorId || !date || !actualTime || !actualReason) {
-        return {
-          error: 'A real doctorId, date, time, slotId, and patient-stated reason are required before preparing a booking.'
-        };
-      }
-
-      // Dependent resolution and ownership verification
-      let targetPatientHealthId = selectedPatientHealthId;
-      let targetPatientName = 'Patient';
-
-      if (memberId && memberId !== selectedPatientHealthId && memberId !== userId) {
-        try {
-          let memberDoc = await db.collection('patients').doc(memberId).get();
-          if (!memberDoc.exists) {
-            const qSnap = await db.collection('patients').where('patientHealthId', '==', memberId).limit(1).get();
-            if (!qSnap.empty) {
-              memberDoc = qSnap.docs[0];
-            }
-          }
-          if (memberDoc.exists) {
-            const mData = memberDoc.data();
-            if (mData.ownerUid === userId || mData.primaryAccountUid === userId) {
-              targetPatientHealthId = mData.patientHealthId || memberId;
-              targetPatientName = mData.fullName || mData.name || otherName || 'Family Member';
-            } else {
-              return { error: 'You are not authorized to book for this patient.' };
-            }
-          } else {
-            return { error: 'Patient record not found for the specified memberId.' };
-          }
-        } catch (_) {}
-      } else if (forWhom && forWhom.toLowerCase() !== 'self') {
-        try {
-          const familySnap = await db.collection('patients')
-            .where('ownerUid', '==', userId)
-            .get();
-          const match = familySnap.docs.find(d => {
-            const data = d.data();
-            const r = (data.relationship || data.relation || '').toLowerCase();
-            const n = (data.fullName || data.name || '').toLowerCase();
-            const fw = forWhom.toLowerCase();
-            return r.includes(fw) || fw.includes(r) || n.includes(fw) || fw.includes(n);
-          });
-          if (match) {
-            targetPatientHealthId = match.id;
-            targetPatientName = match.data().fullName || match.data().name || targetPatientName;
-          }
-        } catch (_) {}
-      }
-
-      let resolvedDocName = doctorName;
-      if (!resolvedDocName) {
-        try {
-          const dDoc = await db.collection('doctors').doc(doctorId).get();
-          if (dDoc.exists) resolvedDocName = dDoc.data().fullName || dDoc.data().name;
-        } catch (_) {}
-      }
-
-      const confirmToken = storeConfirmToken({
-        type: 'BOOKING',
-        userId,
-        patientHealthId: targetPatientHealthId,
-        patientName: targetPatientName,
-        forWhom,
-        doctorId,
-        doctorName: resolvedDocName || 'Doctor',
-        departmentId: departmentId || null,
-        date,
-        timeSlot: actualTime,
-        slotId: actualSlotId,
-        reasonText: actualReason
-      });
-
-      const forText = targetPatientHealthId !== selectedPatientHealthId ? ` for ${targetPatientName}` : '';
-      const summary = `Book appointment${forText} with ${resolvedDocName || doctorId} on ${date} at ${actualTime} (${actualReason})`;
-
-      return {
-        actionRequired: 'CONFIRM_BOOKING',
-        confirmToken,
-        summary,
-        forWhom: targetPatientName,
-        patientHealthId: targetPatientHealthId,
-        message: getPatientActionMessage(language, 'booking', { doctorName: resolvedDocName, date, time: actualTime })
-      };
-    }
-
-    case 'cancel_appointment':
-    case 'prepare_cancel': {
-      const { appointmentId, reason = 'Cancelled via TARA AI Assistant' } = args;
-      if (!appointmentId) {
-        return { error: 'appointmentId is required.' };
-      }
-
-      const appointmentRef = db.collection('appointments').doc(appointmentId);
-      const appointmentSnap = await appointmentRef.get();
-      if (!appointmentSnap.exists) return { error: 'Appointment not found.' };
-
-      const appointment = appointmentSnap.data();
-      const ownsAppointment = [
-        appointment.patientUid,
-        appointment.ownerUid,
-        appointment.bookedByUid,
-        appointment.patientId,
-        appointment.patientHealthId
-      ].filter(Boolean).some(id => id === userId || id === selectedPatientHealthId);
-
-      let isDependentAppt = false;
-      if (!ownsAppointment && appointment.patientHealthId) {
-        try {
-          const depDoc = await db.collection('patients').doc(appointment.patientHealthId).get();
-          if (depDoc.exists && (depDoc.data().ownerUid === userId || depDoc.data().primaryAccountUid === userId)) {
-            isDependentAppt = true;
-          }
-        } catch (_) {}
-      }
-
-      if (!ownsAppointment && !isDependentAppt) {
-        return { error: 'You are not authorized to cancel this appointment.' };
-      }
-
-      const confirmToken = storeConfirmToken({
-        type: 'CANCEL',
-        userId,
-        patientHealthId: appointment.patientHealthId || selectedPatientHealthId,
-        appointmentId,
-        reasonText: reason
-      });
-
-      return {
-        actionRequired: 'CONFIRM_CANCEL',
-        confirmToken,
-        summary: `Cancel appointment ${appointment.displayId || appointmentId} with ${appointment.doctorName || 'Doctor'} on ${appointment.date}`,
-        message: getPatientActionMessage(language, 'cancel', { doctorName: appointment.doctorName, date: appointment.date })
-      };
-    }
-
-    case 'get_upcoming_appointments':
-    case 'get_my_appointments': {
-      try {
-        const [depSnap] = await Promise.all([
-          db.collection('patients').where('ownerUid', '==', userId).get()
-        ]);
-        const allowedHealthIds = new Set([selectedPatientHealthId]);
-        depSnap.docs.forEach(d => allowedHealthIds.add(d.id));
-
-        const queries = [
-          db.collection('appointments').where('patientUid', '==', userId).limit(30).get(),
-          db.collection('appointments').where('ownerUid', '==', userId).limit(30).get(),
-          db.collection('appointments').where('bookedByUid', '==', userId).limit(30).get(),
-          db.collection('appointments').where('patientHealthId', '==', selectedPatientHealthId).limit(30).get()
-        ];
-
-        for (const depId of depSnap.docs.map(d => d.id)) {
-          queries.push(db.collection('appointments').where('patientHealthId', '==', depId).limit(20).get());
-        }
-
-        const snapshots = await Promise.all(queries);
-        const seen = new Set();
-        const appointments = [];
-        const todayStr = getHospitalTodayStr();
-
-        for (const snapshot of snapshots) {
-          for (const doc of snapshot.docs) {
-            if (seen.has(doc.id)) continue;
-            seen.add(doc.id);
-            const data = doc.data();
-            if (data.date && data.date >= todayStr && !['cancelled', 'completed', 'no_show'].includes(data.status)) {
-              appointments.push({
-                appointmentId: doc.id,
-                displayId: data.displayId || doc.id,
-                date: data.date,
-                time: data.bookedStartAt || data.timeSlot,
-                doctorName: data.doctorName || 'Doctor',
-                departmentName: data.departmentName || '',
-                patientName: data.patientName || 'Patient',
-                forWhom: data.patientHealthId === selectedPatientHealthId ? 'self' : (data.patientName || 'Dependent'),
-                status: data.status,
-                tokenLabel: data.tokenLabel || data.tokenNumber || null,
-                doctorId: data.doctorId
-              });
-            }
-          }
-        }
-
-        appointments.sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.time).localeCompare(String(b.time)));
-        return {
-          appointments: appointments.slice(0, 15),
-          count: appointments.length,
-          message: appointments.length > 0
-            ? `You have ${appointments.length} upcoming appointment(s).`
-            : 'You have no upcoming appointments scheduled.'
-        };
-      } catch (err) {
-        return { appointments: [], count: 0, message: 'Could not fetch appointments at this time.' };
-      }
-    }
-
-    case 'get_my_token':
     case 'get_token_status': {
-      try {
-        const today = getHospitalTodayStr();
-        const queries = [
-          db.collection('appointments').where('patientHealthId', '==', selectedPatientHealthId).where('date', '==', today).get(),
-          db.collection('appointments').where('patientUid', '==', userId).where('date', '==', today).get()
-        ];
-        const snapshots = await Promise.all(queries);
-        const docsMap = new Map();
-        snapshots.forEach(s => s.docs.forEach(d => docsMap.set(d.id, d.data())));
+      const today = new Date().toISOString().split('T')[0];
+      const snap = await db.collection('appointments')
+        .where('patientHealthId', '==', selectedPatientHealthId)
+        .where('date', '==', today)
+        .get();
 
-        if (docsMap.size === 0) {
-          return {
-            status: 'no_appointment_today',
-            message: 'You do not have an appointment or active token for today.',
-            tokenNumber: null,
-            tokenLabel: null
-          };
-        }
-
-        const appts = Array.from(docsMap.entries()).map(([id, data]) => ({ id, ...data }));
-        const active = appts.find(a => ['waiting', 'checked_in', 'called', 'in_consultation', 'in_room', 'scheduled', 'booked'].includes(String(a.status || '').toLowerCase()))
-          || appts.find(a => !['cancelled', 'no_show', 'completed'].includes(String(a.status || '').toLowerCase()))
-          || appts[0];
-        const live = active.live || {};
-
-        const waitMinLow = live.waitMinLow ?? active.estimatedWaitMinutes ?? null;
-        const waitMinHigh = live.waitMinHigh ?? (waitMinLow !== null ? waitMinLow + 10 : null);
-        const tokenNumber = active.tokenNumber || active.queueNumber || active.tokenLabel || null;
-        const tokenLabel = active.tokenLabel || active.tokenNumber || null;
-
-        return {
-          appointmentId: active.id,
-          tokenNumber,
-          tokenLabel,
-          status: active.status,
-          doctorName: active.doctorName || 'Doctor',
-          estimatedWaitMinutes: waitMinLow,
-          waitMinLow,
-          waitMinHigh,
-          position: live.position || null,
-          message: tokenNumber
-            ? `Your token number is ${tokenLabel || tokenNumber}. Status: ${active.status}.`
-            : 'No active token number has been generated yet for your appointment today.'
-        };
-      } catch (err) {
-        return { status: 'error', message: 'Could not check token status at this time.' };
+      if (snap.empty) {
+        return { status: 'no_appointment_today', message: 'No appointment scheduled for today.' };
       }
+
+      const appts = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const active = appts.find(a => ['checked_in', 'called', 'in_consultation'].includes(a.status)) || appts[0];
+      const live = active.live || {};
+
+      const waitMinLow = live.waitMinLow ?? active.estimatedWaitMinutes ?? 15;
+      const waitMinHigh = live.waitMinHigh ?? (waitMinLow + 10);
+      const waitDisplay = waitMinLow === 0 ? 'No wait – it is your turn!' : `${waitMinLow} to ${waitMinHigh} minutes`;
+
+      return {
+        appointmentId: active.id,
+        tokenNumber: active.tokenNumber || active.queueNumber || active.tokenLabel || 'T-001',
+        tokenLabel: active.tokenLabel || active.tokenNumber,
+        status: active.status,
+        doctorName: active.doctorName || 'Doctor',
+        estimatedWaitMinutes: waitMinLow,
+        waitMinLow,
+        waitMinHigh,
+        waitDisplay,
+        predictedCallAt: live.predictedCallAt || null,
+        position: live.position || null,
+        reasonText: live.reasonText || null
+      };
     }
 
-    case 'get_waiting_time':
     case 'get_wait_time': {
-      const today = getHospitalTodayStr();
+      // Read live queue data for this patient's doctor/dept to return real wait estimates
+      const today = new Date().toISOString().split('T')[0];
       try {
+        // Get patient's own appointment to find their doctor + queue position
         const mySnap = await db.collection('appointments')
           .where('patientHealthId', '==', selectedPatientHealthId)
           .where('date', '==', today)
@@ -790,7 +213,9 @@ export async function executePatientChatTool(toolName, args = {}, context = {}) 
 
         if (!mySnap.empty) {
           const myAppts = mySnap.docs.map(d => ({ id: d.id, ...d.data() }));
-          const myAppt = myAppts.find(a => !['cancelled', 'completed', 'no_show'].includes(a.status)) || myAppts[0];
+          const myAppt = myAppts.find(a =>
+            !['cancelled', 'completed', 'no_show'].includes(a.status)
+          ) || myAppts[0];
 
           if (myAppt) {
             const live = myAppt.live || {};
@@ -799,224 +224,56 @@ export async function executePatientChatTool(toolName, args = {}, context = {}) 
 
             if (waitMinLow !== null) {
               const waitDisplay = waitMinLow === 0
-                ? 'It is your turn now!'
+                ? 'No wait — it is your turn now!'
                 : `${waitMinLow} to ${waitMinHigh} minutes`;
 
               return {
                 estimatedWaitMinutes: waitMinLow,
                 waitMinLow,
                 waitMinHigh,
-                message: `Your current estimated wait time is ${waitDisplay}.${live.reasonText ? ' ' + live.reasonText : ''}`,
+                message: `Your current estimated wait is ${waitDisplay}.${live.reasonText ? ' ' + live.reasonText : ''}`,
                 currentQueueLength: live.position || 1,
-                position: live.position || 1,
-                predictedCallAt: live.predictedCallAt || null
+                predictedCallAt: live.predictedCallAt || null,
+                reasonText: live.reasonText || null
               };
             }
           }
         }
 
-        if (args.doctorId) {
-          const qSnap = await db.collection('appointments')
-            .where('doctorId', '==', args.doctorId)
-            .where('date', '==', today)
-            .get();
-          const queueLength = qSnap.docs.filter(d =>
-            ['checked_in', 'called', 'in_consultation', 'rejoined', 'waiting'].includes(d.data().status)
-          ).length;
-
-          return {
-            estimatedWaitMinutes: null,
-            currentQueueLength: queueLength,
-            message: queueLength > 0
-              ? `There are ${queueLength} patients in queue, but a live waiting-time estimate is not available yet.`
-              : 'There is currently no waiting queue for this doctor.'
-          };
-        }
-
-        return {
-          estimatedWaitMinutes: null,
-          message: 'Live waiting-time information is currently unavailable. Please check with the hospital reception.'
-        };
-      } catch (err) {
-        return {
-          estimatedWaitMinutes: null,
-          message: 'Waiting-time estimate is currently unavailable.'
-        };
-      }
-    }
-
-    case 'get_latest_prescription': {
-      try {
-        let targetHealthId = selectedPatientHealthId;
-        if (args.memberId) {
-          const depDoc = await db.collection('patients').doc(args.memberId).get();
-          if (depDoc.exists && (depDoc.data().ownerUid === userId || depDoc.data().primaryAccountUid === userId)) {
-            targetHealthId = args.memberId;
-          }
-        }
-
-        const snap = await db.collection('prescriptions')
-          .where('patientHealthId', '==', targetHealthId)
-          .orderBy('createdAt', 'desc')
-          .limit(1)
+        // Fallback: query general queue length for the requested doctor/dept
+        const qSnap = await db.collection('appointments')
+          .where('doctorId', '==', args.doctorId || '')
+          .where('date', '==', today)
           .get();
 
-        if (snap.empty) {
-          return {
-            hasPrescription: false,
-            message: 'No prescription records found for this account.',
-            route: '/prescriptions'
-          };
-        }
+        const queueLength = qSnap.docs.filter(d =>
+          ['checked_in', 'called', 'in_consultation', 'rejoined', 'waiting'].includes(d.data().status)
+        ).length;
 
-        const pDoc = snap.docs[0];
-        const pData = pDoc.data();
-        const medicines = (pData.medicines || pData.items || []).map(m => ({
-          name: m.medicineName || m.name || 'Medicine',
-          dosage: m.dosage || m.dose || '',
-          frequency: m.frequency || '',
-          durationDays: m.durationDays || m.duration || '',
-          instructions: m.instructions || m.timing || ''
-        }));
-
+        const estimatedMin = Math.round(queueLength * 12); // 12-min dept average fallback
         return {
-          hasPrescription: true,
-          prescriptionId: pDoc.id,
-          doctorName: pData.doctorName || 'Doctor',
-          date: pData.date || (pData.createdAt?.toDate ? pData.createdAt.toDate().toISOString().split('T')[0] : ''),
-          diagnosis: pData.diagnosis || pData.notes || '',
-          medicines,
-          medicineCount: medicines.length,
-          route: '/prescriptions',
-          message: `Latest prescription from Dr. ${pData.doctorName || 'Doctor'} on ${pData.date || 'recent visit'} includes ${medicines.length} medicine(s). You can view full details on the Prescriptions page.`
+          estimatedWaitMinutes: estimatedMin,
+          waitMinLow: estimatedMin,
+          waitMinHigh: estimatedMin + 10,
+          currentQueueLength: queueLength,
+          message: `Current estimated wait time is approximately ${estimatedMin} to ${estimatedMin + 10} minutes (${queueLength} patients in queue).`
         };
-      } catch (err) {
-        return { hasPrescription: false, message: 'Could not fetch prescription records at this time.', route: '/prescriptions' };
-      }
-    }
-
-    case 'get_medicine_schedule': {
-      try {
-        let targetHealthId = selectedPatientHealthId;
-        if (args.memberId) {
-          const depDoc = await db.collection('patients').doc(args.memberId).get();
-          if (depDoc.exists && (depDoc.data().ownerUid === userId || depDoc.data().primaryAccountUid === userId)) {
-            targetHealthId = args.memberId;
-          }
-        }
-        const date = args.date || getHospitalTodayStr();
-
-        const remSnap = await db.collection('reminders')
-          .where('patientHealthId', '==', targetHealthId)
-          .where('date', '==', date)
-          .get();
-
-        if (!remSnap.empty) {
-          const schedule = remSnap.docs.map(doc => {
-            const d = doc.data();
-            return {
-              id: doc.id,
-              medicineName: d.medicineName || d.name,
-              dose: d.dose || d.dosage,
-              timeSlot: d.timeSlot || d.scheduledTime || d.time,
-              status: d.status || 'PENDING',
-              instructions: d.instructions || ''
-            };
-          });
-
-          return {
-            date,
-            schedule,
-            count: schedule.length,
-            route: '/reminders',
-            message: `You have ${schedule.length} medicine reminder(s) scheduled for ${date}.`
-          };
-        }
-
-        const pSnap = await db.collection('prescriptions')
-          .where('patientHealthId', '==', targetHealthId)
-          .orderBy('createdAt', 'desc')
-          .limit(1)
-          .get();
-
-        if (!pSnap.empty) {
-          const pData = pSnap.docs[0].data();
-          const meds = (pData.medicines || pData.items || []).map(m => ({
-            medicineName: m.medicineName || m.name,
-            dose: m.dosage || m.dose || '',
-            frequency: m.frequency || '',
-            instructions: m.instructions || ''
-          }));
-
-          return {
-            date,
-            schedule: meds,
-            count: meds.length,
-            fromPrescription: true,
-            route: '/reminders',
-            message: `Active medicines from your latest prescription: ${meds.map(m => `${m.medicineName} (${m.frequency || m.instructions || 'as directed'})`).join(', ')}.`
-          };
-        }
-
+      } catch {
         return {
-          date,
-          schedule: [],
-          count: 0,
-          route: '/reminders',
-          message: 'No active medicine schedules or reminders found for today.'
+          estimatedWaitMinutes: 15,
+          waitMinLow: 10,
+          waitMinHigh: 20,
+          currentQueueLength: null,
+          message: 'Estimated wait time is approximately 10 to 20 minutes.'
         };
-      } catch (err) {
-        return { date: args.date || getHospitalTodayStr(), schedule: [], count: 0, route: '/reminders', message: 'Could not fetch medicine schedule at this time.' };
-      }
-    }
-
-    case 'get_next_followup': {
-      try {
-        let targetHealthId = selectedPatientHealthId;
-        if (args.memberId) {
-          const depDoc = await db.collection('patients').doc(args.memberId).get();
-          if (depDoc.exists && (depDoc.data().ownerUid === userId || depDoc.data().primaryAccountUid === userId)) {
-            targetHealthId = args.memberId;
-          }
-        }
-        const todayStr = getHospitalTodayStr();
-
-        const snap = await db.collection('followups')
-          .where('patientHealthId', '==', targetHealthId)
-          .where('date', '>=', todayStr)
-          .orderBy('date', 'asc')
-          .limit(1)
-          .get();
-
-        if (snap.empty) {
-          return {
-            hasNextFollowup: false,
-            message: 'You have no upcoming follow-up appointments scheduled.'
-          };
-        }
-
-        const fData = snap.docs[0].data();
-        return {
-          hasNextFollowup: true,
-          followupId: snap.docs[0].id,
-          date: fData.date,
-          doctorName: fData.doctorName || 'Doctor',
-          department: fData.department || fData.departmentName || '',
-          instructions: fData.instructions || fData.reason || '',
-          message: `Your next follow-up is scheduled on ${fData.date} with ${fData.doctorName || 'your doctor'}.${fData.instructions ? ' Instructions: ' + fData.instructions : ''}`
-        };
-      } catch (err) {
-        return { hasNextFollowup: false, message: 'Could not fetch follow-up information at this time.' };
       }
     }
 
     case 'get_doctor_timings': {
       let docName = 'Hospital Doctors';
       if (args.doctorId) {
-        try {
-          const docRef = await db.collection('users').doc(args.doctorId).get();
-          if (docRef.exists) docName = docRef.data().fullName || docRef.data().name || docName;
-        } catch (_) {}
+        const docRef = await db.collection('users').doc(args.doctorId).get();
+        if (docRef.exists) docName = docRef.data().fullName || docRef.data().name || docName;
       }
       return {
         doctorName: docName,
@@ -1025,33 +282,45 @@ export async function executePatientChatTool(toolName, args = {}, context = {}) 
       };
     }
 
-    case 'prepare_reschedule':
-    case 'reschedule_appointment': {
-      const appointmentRef = db.collection('appointments').doc(args.appointmentId);
-      const appointmentSnap = await appointmentRef.get();
-      if (!appointmentSnap.exists) return { error: 'Appointment not found.' };
-      const appointment = appointmentSnap.data();
-      const ownsAppointment = [appointment.patientUid, appointment.ownerUid, appointment.bookedByUid, appointment.patientId]
-        .filter(Boolean).includes(userId);
-      if (!ownsAppointment) return { error: 'You are not authorized to reschedule this appointment.' };
-      if (!['booked', 'confirmed', 'on_the_way', 'nearby'].includes(String(appointment.status || '').toLowerCase())) {
-        return { error: 'This appointment cannot be rescheduled in its current status.' };
-      }
+    case 'find_slots': {
+      const targetDate = args.date || new Date().toISOString().split('T')[0];
+      return {
+        date: targetDate,
+        availableSlots: ['09:00', '10:30', '11:45', '14:30', '15:15']
+      };
+    }
 
+    case 'prepare_booking': {
       const confirmToken = storeConfirmToken({
-        type: 'RESCHEDULE',
+        type: 'BOOKING',
         userId,
-        appointmentId: args.appointmentId,
-        newSlotId: args.newSlotId,
-        newDate: args.newDate,
-        newTime: args.newTime
+        patientHealthId: selectedPatientHealthId,
+        doctorId: args.doctorId,
+        date: args.date,
+        timeSlot: args.timeSlot
       });
 
       return {
-        actionRequired: 'CONFIRM_RESCHEDULE',
+        actionRequired: 'CONFIRM_BOOKING',
         confirmToken,
-        summary: `Reschedule appointment to ${args.newDate} at ${args.newTime}`,
-        message: getPatientActionMessage(language, 'reschedule', { doctorName: appointment.doctorName, date: args.newDate, time: args.newTime })
+        summary: `Book appointment on ${args.date} at ${args.timeSlot} with Doctor ${args.doctorId}`,
+        message: `I will book an appointment on ${args.date} at ${args.timeSlot}. Please confirm to proceed.`
+      };
+    }
+
+    case 'prepare_cancel': {
+      const confirmToken = storeConfirmToken({
+        type: 'CANCEL',
+        userId,
+        patientHealthId: selectedPatientHealthId,
+        appointmentId: args.appointmentId
+      });
+
+      return {
+        actionRequired: 'CONFIRM_CANCEL',
+        confirmToken,
+        summary: `Cancel appointment ${args.appointmentId}`,
+        message: `I will cancel your appointment ${args.appointmentId}. Please confirm to proceed.`
       };
     }
 
@@ -1064,12 +333,10 @@ export async function executePatientChatTool(toolName, args = {}, context = {}) 
 
     case 'mark_dose_taken': {
       if (args.reminderId) {
-        try {
-          await db.collection('reminders').doc(args.reminderId).set({
-            status: 'TAKEN',
-            takenAt: new Date().toISOString()
-          }, { merge: true });
-        } catch (_) {}
+        await db.collection('reminders').doc(args.reminderId).set({
+          status: 'TAKEN',
+          takenAt: new Date().toISOString()
+        }, { merge: true });
       }
       return { success: true, message: 'Dose marked as taken.' };
     }

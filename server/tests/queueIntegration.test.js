@@ -131,6 +131,7 @@ describe('Phase 6 - Feature F6 & F7 Queue Engine & Doctor Controls Integration T
     });
 
     // Waiting patient #1 in queue
+    const slotTimeStr = new Date(nowTime.getTime() + 15 * 60 * 1000).toTimeString().slice(0, 5);
     await db.collection('appointments').doc(waitingApptId).set({
       id: waitingApptId,
       doctorId,
@@ -138,8 +139,8 @@ describe('Phase 6 - Feature F6 & F7 Queue Engine & Doctor Controls Integration T
       date: todayStr,
       status: 'checked_in',
       checkedInAt: startTimeIso,
-      bookedStartAt: '12:15',
-      timeSlot: '12:15',
+      bookedStartAt: slotTimeStr,
+      timeSlot: slotTimeStr,
       expectedDurationMin: 15,
       visitType: 'new',
       complexity: 'moderate'

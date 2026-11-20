@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bot, Send, ShieldAlert, Sparkles, User, RefreshCw, Mic, MicOff, Volume2, VolumeX, Eye, EyeOff, CheckCircle2, Square, Radio, ArrowRight } from 'lucide-react';
+import { Bot, Send, ShieldAlert, Sparkles, User, RefreshCw, Mic, MicOff, Volume2, VolumeX, Eye, EyeOff, CheckCircle2, Square } from 'lucide-react';
 import { AI_DISCLAIMER_TEXT } from '../utils/constants';
 import { useSpeech } from '../hooks/useSpeech';
 import API from '../services/api';
@@ -12,24 +12,21 @@ export const ChatbotPage = () => {
     {
       id: 'msg-1',
       sender: 'ai',
-      text: "Hello! I’m TARA, your multilingual healthcare companion. ❤️\n\nI can help you:\n- 📅 Suggest doctors & book appointments for you or your family\n- 🎫 Check your token number & real queue wait time\n- 💊 View your latest prescriptions & medicine schedules\n- 🩺 Check upcoming follow-ups & cancel appointments\n\nI am an AI assistant and do not provide medical diagnoses or emergencies. How may I help you today?",
-      inputMode: 'text'
+      text: "Hello! I am your AI Smart Healthcare Assistant. I can help answer hospital questions, check queue token status, and guide booking.\n\nAI assistant. It does not give medical advice.",
+      inputMode: 'text' // initial message, no voice
     }
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [selectedLang, setSelectedLang] = useState('en-IN');
   const [pendingConfirm, setPendingConfirm] = useState(null);
   const [disclaimerChecked, setDisclaimerChecked] = useState(false);
   const messagesEndRef = useRef(null);
 
   const {
-    lang,
-    setLang,
     isListening,
     transcript,
     setTranscript,
-    startListening,
-    stopListening,
     toggleListening,
     speak,
     isSpeaking,
@@ -46,20 +43,15 @@ export const ChatbotPage = () => {
     setSpeakerEnabled,
     lastInputMode,
     setLastInputMode,
-    handsFreeMode,
-    setHandsFreeMode,
     markTextInput,
     markVoiceInput,
     shouldSpeak
-  } = useSpeech('en-IN');
+  } = useSpeech(selectedLang);
 
   const quickChips = [
     { label: 'Book Appointment', text: 'Book Appointment' },
     { label: 'My Token Status', text: 'My Token Status' },
     { label: 'Doctor Timings', text: 'Doctor Timings' },
-    { label: 'My Prescriptions', text: 'Show my latest prescription' },
-    { label: 'Medicine Schedule', text: 'When should I take my medicines?' },
-    { label: 'Next Follow-up', text: 'When is my next follow-up?' },
     { label: 'Talk to Staff', text: 'Talk to Staff' }
   ];
 
@@ -76,29 +68,6 @@ export const ChatbotPage = () => {
   }, [cancelSpeech]);
 
   /**
-   * Auto-send transcript when user finishes speaking in voice mode
-   * Supports BOTH Hands-Free mode and Manual Microphone mode.
-   * Ensures final transcript is submitted exactly once without duplicate calls.
-   */
-  const prevListeningRef = useRef(isListening);
-  const isSubmittingVoiceRef = useRef(false);
-  const userCancelledVoiceRef = useRef(false);
-
-  useEffect(() => {
-    if (prevListeningRef.current && !isListening) {
-      const spokenText = (transcript || '').trim();
-      if (!userCancelledVoiceRef.current && spokenText.length > 1 && !isSubmittingVoiceRef.current && !loading) {
-        isSubmittingVoiceRef.current = true;
-        handleSendMessage(spokenText, 'voice').finally(() => {
-          isSubmittingVoiceRef.current = false;
-        });
-      }
-      userCancelledVoiceRef.current = false;
-    }
-    prevListeningRef.current = isListening;
-  }, [isListening, transcript, loading]);
-
-  /**
    * Send a message. inputModeOverride can be 'text' (for chips), 'voice', or auto-detected.
    */
   const handleSendMessage = async (textToSend, inputModeOverride) => {
@@ -107,74 +76,6 @@ export const ChatbotPage = () => {
 
     // Determine input mode for this message
     const mode = inputModeOverride || (transcript && transcript.trim() === query.trim() ? 'voice' : 'text');
-    const normalizedQuery = query.toLowerCase().trim();
-    const affirmativeReplies = new Set([
-      'yes', 'yes please', 'yeah', 'yep', 'okay', 'ok', 'confirm', 'confirm it', 'book it', 'go ahead', 'proceed', 'sure', 'correct', 'right', 'that works', 'please book', 'please cancel',
-      'ಹೌದು', 'ಹೌದು ಬುಕ್ ಮಾಡಿ', 'ಮಾಡಿ', 'ಸರಿ', 'ಖಚಿತಪಡಿಸಿ', 'ಖಂಡಿತ', 'ಹೂಂ', 'ಬುಕ್ ಮಾಡಿ', 'ರದ್ದು ಮಾಡಿ',
-      'हाँ', 'हां', 'ठीक है', 'हाँ बुक करें', 'कर दीजिए', 'पुष्टि करें', 'बुक करो', 'अवश्य', 'सही है',
-      'అవును', 'అవును బుక్ చేయండి', 'చేయండి', 'సరే', 'నిర్ధారించండి', 'బుక్ చేయండి',
-      'ஆம்', 'சரி', 'ஆம் பதிவு செய்யுங்கள்', 'செய்யுங்கள்', 'உறுதிப்படுத்துகிறேன்', 'பதிவு செய்'
-    ]);
-    const negativeReplies = new Set([
-      'no', 'no thanks', 'cancel', 'dont', "don't", 'stop', 'reject', 'nevermind',
-      'ಬೇಡ', 'ಇಲ್ಲ', 'ನಿಲ್ಲಿಸಿ',
-      'नहीं', 'मत करो', 'रद्द करें', 'ना', 'रुकिए',
-      'வேண்டாம்', 'இல்லை', 'நிறுத்து', 'வேண்டாம் ரத்து செய்',
-      'వద్దు', 'కాదు', 'ఆపండి'
-    ]);
-
-    const cancelMessages = {
-      en: "Okay. I won't make that change.",
-      kn: 'ಸರಿ. ನಾನು ಆ ಬದಲಾವಣೆಯನ್ನು ಮಾಡುವುದಿಲ್ಲ.',
-      hi: 'ठीक है। मैं यह बदलाव नहीं करूँगा।',
-      te: 'సరే. నేను ఈ మార్పు చేయను.',
-      ta: 'சரி. இந்த மாற்றத்தை நான் செய்யமாட்டேன்.'
-    };
-    const cancelMessage = cancelMessages[lang.split('-')[0]] || cancelMessages.en;
-
-    // A spoken/typed yes or no applies to the pending confirmed action, not a new AI question.
-    if (pendingConfirm && affirmativeReplies.has(normalizedQuery)) {
-      cancelSpeech();
-      setMessages((prev) => [...prev, {
-        id: `user-${Date.now()}`, sender: 'user', text: query, inputMode: mode
-      }]);
-      setInput('');
-      setTranscript('');
-      setLastInputMode(mode);
-
-      if (!disclaimerChecked) {
-        const consentMessages = {
-          en: 'Please acknowledge the health disclaimer using the checkbox before I submit this action.',
-          kn: 'ಈ ಕ್ರಮವನ್ನು ಮುಂದುವರಿಸುವ ಮೊದಲು ದಯವಿಟ್ಟು ಆರೋಗ್ಯ ಸೂಚನೆಯನ್ನು ಒಪ್ಪಿಕೊಂಡು ಚೆಕ್‌ಬಾಕ್ಸ್ ಆಯ್ಕೆಮಾಡಿ.',
-          hi: 'इस कार्रवाई से पहले कृपया स्वास्थ्य अस्वीकरण को स्वीकार करने के लिए चेकबॉक्स चुनें।',
-          te: 'ఈ చర్యను కొనసాగించే ముందు దయచేసి ఆరోగ్య ప్రకటనను అంగీకరించడానికి చెక్‌బాక్స్‌ను ఎంచుకోండి.',
-          ta: 'இந்தச் செயலைத் தொடர்வதற்கு முன், சுகாதார மறுப்பை ஏற்க செக்பாக்ஸைத் தேர்ந்தெடுக்கவும்.'
-        };
-        const consentMessage = consentMessages[lang.split('-')[0]] || consentMessages.en;
-        setMessages((prev) => [...prev, {
-          id: `ai-${Date.now()}`, sender: 'ai', text: consentMessage, inputMode: mode
-        }]);
-        if (mode === 'voice' && speakerEnabled && !privacyMode) speak(consentMessage);
-        return;
-      }
-
-      await handleConfirmAction(mode === 'voice');
-      return;
-    }
-
-    if (pendingConfirm && negativeReplies.has(normalizedQuery)) {
-      cancelSpeech();
-      setMessages((prev) => [...prev,
-        { id: `user-${Date.now()}`, sender: 'user', text: query, inputMode: mode },
-        { id: `ai-${Date.now()}`, sender: 'ai', text: cancelMessage, inputMode: mode }
-      ]);
-      setInput('');
-      setTranscript('');
-      setPendingConfirm(null);
-      setLastInputMode(mode);
-      if (mode === 'voice' && speakerEnabled && !privacyMode) speak(cancelMessage);
-      return;
-    }
 
     // Cancel any ongoing speech when sending a new message
     cancelSpeech();
@@ -189,7 +90,7 @@ export const ChatbotPage = () => {
     try {
       const res = await API.post('/ai/chat', {
         message: query,
-        language: (mode === 'voice' ? lang : lang).split('-')[0],
+        language: selectedLang.split('-')[0],
         inputMode: mode, // sent to server (server ignores for logic, only a UI hint)
         history: messages.map(m => ({ role: m.sender === 'user' ? 'user' : 'model', text: m.text }))
       });
@@ -197,23 +98,12 @@ export const ChatbotPage = () => {
       const data = res.data;
       const aiResponse = data.message || data.response || 'How else can I assist you?';
 
-      let actionButtons = data.actionButtons || [];
-      if (data.route && actionButtons.length === 0) {
-        const routeLabels = {
-          '/prescriptions': 'View Prescriptions 💊',
-          '/reminders': 'View Medicine Tracker ⏰',
-          '/book-appointment': 'Book Appointment 📅',
-          '/patient-dashboard': 'Go to Dashboard 🏥'
-        };
-        actionButtons = [{ label: routeLabels[data.route] || 'Open Details', route: data.route }];
-      }
-
       const aiMsg = {
         id: `ai-${Date.now()}`,
         sender: 'ai',
         text: aiResponse,
         quickChips: data.quickChips || null,
-        actionButtons: actionButtons.length > 0 ? actionButtons : null,
+        actionButtons: data.actionButtons || null,
         isEmergency: data.isEmergency || false,
         aiSource: data.aiSource || null,
         inputMode: mode // remember what triggered this reply
@@ -286,15 +176,14 @@ export const ChatbotPage = () => {
     }
   };
 
-  const handleConfirmAction = async (speakConfirmation = lastInputMode === 'voice') => {
+  const handleConfirmAction = async () => {
     if (!pendingConfirm || !disclaimerChecked) return;
 
     setLoading(true);
     try {
       const res = await API.post('/ai/chat/confirm', {
         confirmToken: pendingConfirm.confirmToken,
-        disclaimerAccepted: true,
-        language: lang.split('-')[0]
+        disclaimerAccepted: true
       });
 
       const confirmText = res.data.message || 'Action executed successfully.';
@@ -307,8 +196,7 @@ export const ChatbotPage = () => {
           inputMode: 'text'
         }
       ]);
-      // Speak the actual server-confirmed result when the patient is using voice.
-      if (speakConfirmation && speakerEnabled && !privacyMode) speak(confirmText);
+      // Confirmation is a text action, never auto-speak
       setPendingConfirm(null);
       setDisclaimerChecked(false);
     } catch (err) {
@@ -336,60 +224,23 @@ export const ChatbotPage = () => {
             <Bot className="w-6 h-6 text-teal-200" />
           </div>
           <div>
-            <h2 className="font-bold text-base tracking-tight">TARA</h2>
-            <p className="text-xs text-teal-200">ನಿಮ್ಮ ಆರೋಗ್ಯದ ಗೆಳತಿ · Your healthcare companion</p>
+            <h2 className="font-bold text-base tracking-tight">AI Assistant</h2>
+            <p className="text-xs text-teal-200">It does not give medical advice</p>
           </div>
         </div>
 
         <div className="flex items-center space-x-2">
           {/* Language Selector */}
           <select
-            value={lang}
-            onChange={(e) => setLang(e.target.value)}
+            value={selectedLang}
+            onChange={(e) => setSelectedLang(e.target.value)}
             className="px-2.5 py-1.5 bg-white/10 hover:bg-white/20 border border-white/20 rounded-xl text-xs font-semibold text-white outline-none"
           >
             <option value="en-IN" className="text-slate-900">English</option>
             <option value="hi-IN" className="text-slate-900">हिन्दी (Hindi)</option>
             <option value="kn-IN" className="text-slate-900">ಕನ್ನಡ (Kannada)</option>
             <option value="ta-IN" className="text-slate-900">தமிழ் (Tamil)</option>
-            <option value="te-IN" className="text-slate-900">తెలుగు (Telugu)</option>
           </select>
-
-          {/* Hands-Free Voice Mode Toggle */}
-          <button
-            onClick={() => {
-              const next = !handsFreeMode;
-              setHandsFreeMode(next);
-              if (next && !isListening && !isSpeaking) {
-                startListening();
-              }
-            }}
-            title={handsFreeMode ? "Hands-Free Mode Active (Auto-listens after speaking)" : "Turn on Hands-Free Mode"}
-            className={`px-2.5 py-1.5 rounded-xl text-xs flex items-center space-x-1.5 transition-colors ${
-              handsFreeMode ? 'bg-emerald-500 hover:bg-emerald-600 text-white font-bold' : 'bg-white/10 hover:bg-white/20 text-white'
-            }`}
-          >
-            <Radio className={`w-3.5 h-3.5 ${handsFreeMode ? 'animate-pulse' : ''}`} />
-            <span className="hidden sm:inline">{handsFreeMode ? 'Hands-Free' : 'Manual'}</span>
-          </button>
-
-          {/* Stop Button (Cancels active speech or listening immediately) */}
-          {(isSpeaking || isListening) && (
-            <button
-              onClick={() => {
-                userCancelledVoiceRef.current = true;
-                cancelSpeech();
-                stopListening();
-                setTranscript('');
-                setInput('');
-              }}
-              title="Stop speaking / listening immediately"
-              className="px-2.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs flex items-center space-x-1 font-bold animate-pulse shadow-md transition-colors"
-            >
-              <Square className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Stop</span>
-            </button>
-          )}
 
           {/* Speaker Toggle */}
           <button
@@ -429,7 +280,7 @@ export const ChatbotPage = () => {
       <div className="bg-amber-50 px-4 py-2 border-b border-amber-200 flex items-center justify-between text-[11px] text-amber-900 font-medium">
         <div className="flex items-center space-x-2">
           <ShieldAlert className="w-4 h-4 text-amber-600 flex-shrink-0" />
-          <span>TARA can answer hospital questions and guide appointment actions. She does not diagnose or prescribe.</span>
+          <span>AI Assistant: Answers hospital questions & guided actions. Does not diagnose or prescribe.</span>
         </div>
         {supportMessage && (
           <span className="text-xs text-rose-600 font-semibold">{supportMessage}</span>
@@ -573,7 +424,7 @@ export const ChatbotPage = () => {
               <Sparkles className="w-4 h-4" />
             </div>
             <div className="bg-slate-100 text-slate-500 rounded-2xl p-3 text-xs italic">
-              TARA is thinking...
+              AI Assistant is thinking...
             </div>
           </div>
         )}
@@ -598,7 +449,7 @@ export const ChatbotPage = () => {
         <div className="px-4 py-2 bg-rose-50 border-t border-rose-200 flex items-center justify-between text-xs text-rose-800">
           <div className="flex items-center space-x-2">
             <span className="w-2.5 h-2.5 rounded-full bg-rose-600 animate-ping" />
-            <span className="font-bold">Listening ({lang})...</span>
+            <span className="font-bold">Listening ({selectedLang})...</span>
             <span className="italic truncate max-w-xs">{transcript || 'Speak now...'}</span>
           </div>
           <button onClick={toggleListening} className="text-xs font-bold underline">Done</button>
@@ -630,7 +481,7 @@ export const ChatbotPage = () => {
             type="text"
             value={transcript || input}
             onChange={handleInputChange}
-            placeholder="Talk to TARA or type your message..."
+            placeholder="Type or tap mic to speak..."
             className="flex-1 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-teal-500 focus:bg-white"
           />
 
