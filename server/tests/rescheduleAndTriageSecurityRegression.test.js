@@ -18,10 +18,18 @@ describe('Phase 35 — Rescheduling Security & Triage Escalation Regression Suit
     await db.collection('doctors').doc(testDoctorId).set({
       id: testDoctorId,
       doctorId: testDoctorId,
+      doctorUid: testDoctorUid,
       uid: testDoctorUid,
       name: 'Dr. Reschedule Security',
       departmentId: 'dept-gen',
       active: true
+    }, { merge: true });
+
+    await db.collection('users').doc(testDoctorUid).set({
+      role: 'doctor',
+      doctorId: testDoctorId,
+      fullName: 'Dr. Reschedule Security',
+      status: 'ACTIVE'
     }, { merge: true });
 
     // 2. Seed patient profile
@@ -85,8 +93,8 @@ describe('Phase 35 — Rescheduling Security & Triage Escalation Regression Suit
 
   describe('1. Task 1: Rescheduling Duplicate Prevention & Lock Migration', () => {
     it('rejects rescheduling to a destination date where patient already has an active appointment with the same doctor', async () => {
-      const date1 = '2026-11-01';
-      const date2 = '2026-11-02';
+      const date1 = '2026-11-25';
+      const date2 = '2026-11-26';
 
       // Book Appt 1 on date1
       const appt1Res = await bookTestAppt('slot_r1', date1, '09:00');
@@ -125,8 +133,8 @@ describe('Phase 35 — Rescheduling Security & Triage Escalation Regression Suit
     });
 
     it('successfully reschedules to an open date, migrates locks, and frees original date for new booking', async () => {
-      const date1 = '2026-11-05';
-      const date2 = '2026-11-06';
+      const date1 = '2026-11-27';
+      const date2 = '2026-11-28';
 
       const apptRes = await bookTestAppt('slot_orig', date1, '09:00');
       expect(apptRes.statusCode).toBe(201);
@@ -161,8 +169,8 @@ describe('Phase 35 — Rescheduling Security & Triage Escalation Regression Suit
     });
 
     it('rejects rescheduling an appointment with non-reschedulable status (cancelled or completed)', async () => {
-      const date1 = '2026-11-10';
-      const date2 = '2026-11-11';
+      const date1 = '2026-11-29';
+      const date2 = '2026-11-30';
 
       const apptRes = await bookTestAppt('slot_cancel_test', date1, '09:00');
       const apptId = apptRes.body.data.id;
@@ -185,8 +193,8 @@ describe('Phase 35 — Rescheduling Security & Triage Escalation Regression Suit
     });
 
     it('safely handles concurrent reschedules to the same destination slot', async () => {
-      const date1 = '2026-11-15';
-      const date2 = '2026-11-16';
+      const date1 = '2026-12-01';
+      const date2 = '2026-12-02';
 
       const appt1Res = await bookTestAppt('slot_c1', date1, '09:00');
       const appt1Id = appt1Res.body.data.id;

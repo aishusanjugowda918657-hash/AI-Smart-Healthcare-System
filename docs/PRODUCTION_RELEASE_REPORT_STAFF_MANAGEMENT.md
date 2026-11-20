@@ -100,7 +100,7 @@ All pre-release test suites (85 automated tests) passed with 100% success. Front
    - Custom claims set directly on Firebase Auth tokens (`role`, `staffId`, `doctorId`).
    - Server-side role enforcement via `requireAuth, requireRole('admin')`.
 4. **Shift Assignment Integration:**
-   - Supports Day Shift (09:00–17:00), Night Shift (17:00–09:00 next day), and Rotational.
+   - Strictly supports Morning Shift (09:00 AM – 05:00 PM) and Night Shift (05:00 PM – 09:00 AM next day). Rotational shifts are not supported and are rejected.
    - Real-time shift update endpoint (`PATCH /api/admin/staff/:id/shift`).
 5. **Directory & Lifecycle Controls:**
    - Search by name, staff ID, email, department, or qualification.

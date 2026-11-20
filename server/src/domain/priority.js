@@ -66,6 +66,7 @@ export function isPriorityPatient(apt) {
   if (!apt) return false;
   if (isEmergencyPatient(apt)) return false;
   if (apt.clinicalLevel === 2 || apt.clinicalLevel === ClinicalLevel.URGENT) return true;
+  if (apt.isSenior === true) return true;
   const cat = String(apt.priorityCategory || apt.priority || apt.urgencySuggested || '').trim().toUpperCase();
   return cat === 'HIGH' || cat === 'URGENT' || cat === 'SENIOR' || cat === '2';
 }
@@ -215,7 +216,7 @@ function tieBreaker(a, b) {
  */
 export function effectiveLevel(appointment, now, cfg = { fairnessBumpMin: 30 }) {
   if (isEmergencyPatient(appointment)) return ClinicalLevel.EMERGENCY; // 3
-  if (isPriorityPatient(appointment)) return ClinicalLevel.URGENT; // 2
+  if (isPriorityPatient(appointment) || isFairnessProtected(appointment, now, { fairnessThresholdMin: cfg?.fairnessBumpMin || 30 })) return ClinicalLevel.URGENT; // 2
   return ClinicalLevel.ROUTINE; // 1
 }
 
@@ -264,6 +265,11 @@ export function compareForCalling(a, b, now, cfg = { fairnessThresholdMin: 30 })
 
   // Both are Normal -> preserve relative FIFO order (Rule 2)
   if (!pa && !pb) {
+    if (sameSlotWindow(a, b)) {
+      const va = (a.tags && (a.tags.includes('senior') || a.isSenior)) ? 1 : 0;
+      const vb = (b.tags && (b.tags.includes('senior') || b.isSenior)) ? 1 : 0;
+      if (va !== vb) return vb - va;
+    }
     const diff = getQueueEntryTimeMs(a) - getQueueEntryTimeMs(b);
     if (diff !== 0) return diff;
     return tieBreaker(a, b);

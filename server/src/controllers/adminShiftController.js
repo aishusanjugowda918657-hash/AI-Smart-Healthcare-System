@@ -635,14 +635,13 @@ export const getMyStaffShift = async (req, res, next) => {
       const notifSnap = await db.collection('notifications')
         .where('uid', '==', currentUid)
         .where('type', '==', 'shift_assignment')
-        .limit(10)
         .get();
 
       if (!notifSnap.empty) {
-        const notifs = notifSnap.docs.map((d) => d.data());
+        const notifs = notifSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
         notifs.sort((a, b) => {
-          const aTime = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : new Date(a.createdAt || 0).getTime();
-          const bTime = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : new Date(b.createdAt || 0).getTime();
+          const aTime = a.createdAt?.toMillis ? a.createdAt.toMillis() : (a.createdAt?.toDate ? a.createdAt.toDate().getTime() : new Date(a.createdAt || 0).getTime());
+          const bTime = b.createdAt?.toMillis ? b.createdAt.toMillis() : (b.createdAt?.toDate ? b.createdAt.toDate().getTime() : new Date(b.createdAt || 0).getTime());
           return bTime - aTime;
         });
         const n = notifs[0];

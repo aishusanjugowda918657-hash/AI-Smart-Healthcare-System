@@ -69,10 +69,19 @@ describe('Doctor Consultation Workspace & Clinical Visit Improvements', () => {
       tokenLabel: 'A-01',
       date: new Date().toISOString().split('T')[0]
     });
+
+    const rxSnap = await db.collection('prescriptions').where('appointmentId', '==', TEST_APPOINTMENT_ID).get();
+    for (const doc of rxSnap.docs) {
+      await doc.ref.delete();
+    }
   });
 
   afterAll(async () => {
     const db = assertDbConnected();
+    const rxSnap = await db.collection('prescriptions').where('appointmentId', '==', TEST_APPOINTMENT_ID).get();
+    for (const doc of rxSnap.docs) {
+      await doc.ref.delete();
+    }
     const batch = db.batch();
     batch.delete(db.collection('users').doc(TEST_DOCTOR_UID));
     batch.delete(db.collection('doctors').doc(TEST_DOCTOR_ID));

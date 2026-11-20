@@ -296,7 +296,9 @@ describe('Phase 69/104 — Consultation & Prescription Authorization Regression 
       });
 
     const rxId = rxRes.body.data.prescriptionId;
-    if (rxRes.body.data.id) createdRxDocIds.push(rxRes.body.data.id);
+    if (rxRes.body.data.id && !createdRxDocIds.includes(rxRes.body.data.id)) {
+      createdRxDocIds.push(rxRes.body.data.id);
+    }
     if (rxId) createdRxIds.push(rxId);
 
     const pdfRes = await request(app)

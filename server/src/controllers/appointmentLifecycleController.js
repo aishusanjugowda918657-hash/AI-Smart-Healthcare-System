@@ -955,7 +955,7 @@ export const reportLate = async (req, res, next) => {
       throw new AppError('INVALID_STATE', `Cannot report late for appointment with status '${apt.status}'.`, 400);
     }
 
-    if (normStatus === 'checked_in' || apt.checkedInAt) {
+    if (normStatus === 'checked_in' || (apt.checkedInAt && normStatus !== 'called')) {
       throw new AppError('ALREADY_CHECKED_IN', 'Cannot report late after hospital check-in.', 400);
     }
 

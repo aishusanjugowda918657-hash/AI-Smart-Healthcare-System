@@ -150,7 +150,7 @@ describe('Doctor-Specific Appointment Slot Availability (PRD Core Rule)', () => 
   const doctorA = 'DOC-REAL-001';
   const doctorB = 'DOC-REAL-005';
   const doctorC = 'DOC-REAL-006';
-  const testDate = '2026-11-20';
+  const testDate = '2026-11-27';
   const patientHealthIdA = 'PHI-2026-000100-A';
   const patientHealthIdB = 'PHI-2026-000200-B';
 
@@ -325,8 +325,8 @@ describe('Doctor-Specific Appointment Slot Availability (PRD Core Rule)', () => 
       weekly: [{ dayOfWeek: 5, sessions: [{ start: '09:00', end: '17:00' }] }]
     };
 
-    const slotsDocA = generateSlotsForDoctorDate({ doctorId: doctorA, date: '2026-11-20', schedule: schedA });
-    const slotsDocB = generateSlotsForDoctorDate({ doctorId: doctorB, date: '2026-11-20', schedule: schedB });
+    const slotsDocA = generateSlotsForDoctorDate({ doctorId: doctorA, date: '2026-11-27', schedule: schedA });
+    const slotsDocB = generateSlotsForDoctorDate({ doctorId: doctorB, date: '2026-11-27', schedule: schedB });
 
     const slot1300_A = slotsDocA.find((s) => s.startAt === '13:00');
     const slot1300_B = slotsDocB.find((s) => s.startAt === '13:00');

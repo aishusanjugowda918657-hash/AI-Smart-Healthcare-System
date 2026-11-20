@@ -70,8 +70,8 @@ describe('TARA Natural Conversation & Voice Repair Test Suite', () => {
     }, { merge: true });
 
     // Setup a doctor for slot lookup and suggestions
-    await db.collection('doctors').doc('doc-voice-card-01').set({
-      doctorId: 'doc-voice-card-01',
+    await db.collection('doctors').doc('doc-00-voice-card-01').set({
+      doctorId: 'doc-00-voice-card-01',
       name: 'Dr. Ramesh Heart Specialist',
       fullName: 'Dr. Ramesh Heart Specialist',
       specialization: 'Cardiology',
@@ -86,7 +86,7 @@ describe('TARA Natural Conversation & Voice Repair Test Suite', () => {
       await db.collection('users').doc(testPatientUid).delete();
       await db.collection('patients').doc(testPatientUid).delete();
       await db.collection('patients').doc(`${testPatientUid}-mother`).delete();
-      await db.collection('doctors').doc('doc-voice-card-01').delete();
+      await db.collection('doctors').doc('doc-00-voice-card-01').delete();
     } catch (_) {}
   });
 

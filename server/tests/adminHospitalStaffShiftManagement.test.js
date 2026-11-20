@@ -32,6 +32,12 @@ describe('Centralized Hospital Staff Shift Management Test Suite', () => {
   beforeAll(async () => {
     db = assertDbConnected();
 
+    // Clean up any stale notifications from previous test iterations
+    const staleNotifs = await db.collection('notifications').where('uid', 'in', [mockDoctorUid, mockNurseUid, mockReceptionUid, mockPharmacyUid]).get().catch(() => ({ docs: [] }));
+    for (const d of staleNotifs.docs) {
+      await d.ref.delete().catch(() => {});
+    }
+
     // 1. Setup Admin
     await db.collection('users').doc(mockAdminUid).set({
       uid: mockAdminUid,

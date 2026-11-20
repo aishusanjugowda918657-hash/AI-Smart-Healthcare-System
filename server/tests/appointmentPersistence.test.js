@@ -8,7 +8,7 @@ describe('Appointment Persistence & Cancellation Regression', () => {
   let testPatientUid = 'test-patient-persist';
   let slotId;
 
-  let testDate = '2026-11-01';
+  let testDate = '2026-12-05';
 
   beforeEach(async () => {
     db = assertDbConnected();

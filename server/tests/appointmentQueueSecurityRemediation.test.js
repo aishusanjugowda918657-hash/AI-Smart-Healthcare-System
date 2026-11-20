@@ -7,8 +7,8 @@ import { SlotStatus } from '../src/domain/constants.js';
 
 describe('Phase 28 — Appointment and Queue Security Remediation Regression Suite', () => {
   let db;
-  const testDate = '2026-11-20';
-  const otherDate = '2026-11-21';
+  const testDate = '2026-11-25';
+  const otherDate = '2026-11-26';
   const trackedDocIds = {
     appointments: new Set(),
     tokens: new Set(),

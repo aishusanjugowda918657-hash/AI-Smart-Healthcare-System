@@ -15,7 +15,7 @@ describe('Patient Appointments Fixes Regression Suite', () => {
   const testHealthId = `PHI-TEST-${Date.now()}`;
   const todayStr = formatDateYYYYMMDD();
   const pastDateStr = '2026-10-05';
-  const futureDateStr = '2026-11-20';
+  const futureDateStr = '2026-11-26';
 
   const docGenId = `DOC-TEST-GEN-${Date.now()}`;
   const docGenUid = `uid-${docGenId}`;

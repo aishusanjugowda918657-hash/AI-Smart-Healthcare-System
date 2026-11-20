@@ -335,26 +335,26 @@ export const createDigitalPrescription = async (req, res, next) => {
       });
     }
 
-    const db = assertDbConnected();
+    // Enforce Missing Fields Blocking (Missing dose, frequency, or duration days)
+    const hasMissingFields = medicines.some((m) => {
+      if (typeof m === 'string') return true;
+      const d = m.dosage ?? m.dose;
+      const f = m.frequency ?? m.frequencyCode;
+      const dur = m.durationDays ?? m.days;
+      if (d === '' || f === '' || dur === '') return true;
+      if (!d || !f) return true;
+      return false;
+    });
 
-    // Idempotency: prevent duplicate prescription creation if already issued for this appointment
-    if (appointmentId) {
-      const existingRxSnap = await db.collection('prescriptions')
-        .where('appointmentId', '==', appointmentId)
-        .where('status', 'in', ['ISSUED', 'ACTIVE', 'active', 'issued'])
-        .limit(1)
-        .get();
-
-      if (!existingRxSnap.empty) {
-        const existingRx = { id: existingRxSnap.docs[0].id, ...existingRxSnap.docs[0].data() };
-        return res.status(200).json({
-          success: true,
-          message: 'Prescription already issued for this appointment.',
-          data: existingRx,
-          prescription: existingRx
-        });
-      }
+    if (hasMissingFields) {
+      return res.status(400).json({
+        success: false,
+        code: 'MISSING_FIELDS_BLOCKED',
+        message: 'Prescription cannot be saved: missing required dosage, frequency, or duration (days) fields.'
+      });
     }
+
+    const db = assertDbConnected();
 
     // Resolve canonical doctor ID from trusted server profile if not on req.user
     if (!doctorId && doctorUid) {
@@ -417,6 +417,25 @@ export const createDigitalPrescription = async (req, res, next) => {
             message: 'Forbidden: A doctor can only prescribe for a patient they are actively treating.'
           });
         }
+      }
+    }
+
+    // Idempotency: prevent duplicate prescription creation if already issued for this appointment
+    if (appointmentId) {
+      const existingRxSnap = await db.collection('prescriptions')
+        .where('appointmentId', '==', appointmentId)
+        .where('status', 'in', ['ISSUED', 'ACTIVE', 'active', 'issued'])
+        .limit(1)
+        .get();
+
+      if (!existingRxSnap.empty) {
+        const existingRx = { id: existingRxSnap.docs[0].id, ...existingRxSnap.docs[0].data() };
+        return res.status(200).json({
+          success: true,
+          message: 'Prescription already issued for this appointment.',
+          data: existingRx,
+          prescription: existingRx
+        });
       }
     }
 
@@ -486,25 +505,6 @@ export const createDigitalPrescription = async (req, res, next) => {
       });
     }
 
-    // Enforce Missing Fields Blocking (Missing dose, frequency, or duration days)
-    const hasMissingFields = medicines.some((m) => {
-      if (typeof m === 'string') return true;
-      const d = m.dosage ?? m.dose;
-      const f = m.frequency ?? m.frequencyCode;
-      const dur = m.durationDays ?? m.days;
-      if (d === '' || f === '' || dur === '') return true;
-      if (!d || !f) return true;
-      return false;
-    });
-
-    if (hasMissingFields) {
-      return res.status(400).json({
-        success: false,
-        code: 'MISSING_FIELDS_BLOCKED',
-        message: 'Prescription cannot be saved: missing required dosage, frequency, or duration (days) fields.',
-        safetyResult
-      });
-    }
 
     // Fetch doctor name
     let docDoc = await db.collection('doctors').doc(doctorUid).get();

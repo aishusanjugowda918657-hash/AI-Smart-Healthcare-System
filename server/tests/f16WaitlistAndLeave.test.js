@@ -224,8 +224,8 @@ describe('Phase 11: F16 Doctor Leave & Waitlist Auto-Fill Tests', () => {
       patientName: 'Cand One',
       userId: 'user-cand-1',
       departmentId: 'dept-ortho',
-      dateFrom: '2026-10-28',
-      dateTo: '2026-10-30',
+      dateFrom: '2026-11-28',
+      dateTo: '2026-11-30',
       clinicalLevel: 1
     });
 
@@ -234,8 +234,8 @@ describe('Phase 11: F16 Doctor Leave & Waitlist Auto-Fill Tests', () => {
       patientName: 'Cand Two',
       userId: 'user-cand-2',
       departmentId: 'dept-ortho',
-      dateFrom: '2026-10-28',
-      dateTo: '2026-10-30',
+      dateFrom: '2026-11-28',
+      dateTo: '2026-11-30',
       clinicalLevel: 2
     });
 
@@ -251,7 +251,7 @@ describe('Phase 11: F16 Doctor Leave & Waitlist Auto-Fill Tests', () => {
         slotId: 'slot-waitlist-target',
         doctorId: 'doc-f16-101',
         doctorName: 'Dr. Leave Doctor',
-        date: '2026-10-29',
+        date: '2026-11-29',
         timeSlot: '15:00'
       },
       expiresAt: new Date(Date.now() - 1000).toISOString(), // Past expiry
@@ -261,7 +261,7 @@ describe('Phase 11: F16 Doctor Leave & Waitlist Auto-Fill Tests', () => {
     await db.collection('slots').doc('slot-waitlist-target').set({
       id: 'slot-waitlist-target',
       doctorId: 'doc-f16-101',
-      date: '2026-10-29',
+      date: '2026-11-29',
       timeSlot: '15:00',
       departmentId: 'dept-ortho',
       available: true
