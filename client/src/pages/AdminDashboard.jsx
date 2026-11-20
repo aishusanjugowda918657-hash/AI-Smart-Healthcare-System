@@ -1,17 +1,19 @@
 import React, { useState } from 'react';
-import { BarChart3, Sliders, Calendar, Lock, Database, UserCheck, Building, ShieldCheck } from 'lucide-react';
+import { BarChart3, Sliders, Calendar, Lock, Database, UserCheck, Building, ShieldCheck, Users } from 'lucide-react';
 import AdminAnalyticsCharts from '../components/admin/AdminAnalyticsCharts';
 import AdminSettingsEditor from '../components/admin/AdminSettingsEditor';
 import AuditLogViewer from '../components/admin/AuditLogViewer';
 import ClinicalListsViewer from '../components/admin/ClinicalListsViewer';
 import ScheduleEditor from '../components/admin/ScheduleEditor';
 import LeaveRescheduleAdminBoard from '../components/admin/LeaveRescheduleAdminBoard';
+import StaffManager from '../components/admin/StaffManager';
 
 export const AdminDashboard = () => {
   const [activeTab, setActiveTab] = useState('analytics');
 
   const tabs = [
     { id: 'analytics', label: 'Accuracy & Analytics', icon: BarChart3 },
+    { id: 'staff', label: 'Hospital Staff', icon: Users },
     { id: 'settings', label: 'Settings & Roles', icon: Sliders },
     { id: 'schedules', label: 'Schedule Editor', icon: Calendar },
     { id: 'leaves', label: 'Leave Reschedule', icon: Building },
@@ -58,6 +60,7 @@ export const AdminDashboard = () => {
       {/* Active Tab View */}
       <div className="transition-all duration-300">
         {activeTab === 'analytics' && <AdminAnalyticsCharts />}
+        {activeTab === 'staff' && <StaffManager />}
         {activeTab === 'settings' && <AdminSettingsEditor />}
         {activeTab === 'schedules' && <ScheduleEditor />}
         {activeTab === 'leaves' && <LeaveRescheduleAdminBoard />}

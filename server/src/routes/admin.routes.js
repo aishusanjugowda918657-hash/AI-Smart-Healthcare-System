@@ -9,6 +9,16 @@ import {
   getAdminPatients,
   getAdminLiveQueue
 } from '../controllers/adminController.js';
+import {
+  registerStaff,
+  listStaff,
+  getStaffStats,
+  getStaffById,
+  updateStaff,
+  updateStaffStatus,
+  updateStaffShift,
+  resetStaffPassword
+} from '../controllers/adminStaffController.js';
 import { adminMergePatients } from '../controllers/patientController.js';
 import { saveDoctorSchedule, getLeaves } from '../controllers/doctorController.js';
 import { adminGenerateSlots, adminCreateLeave, adminDeleteLeave } from '../controllers/slotController.js';
@@ -30,6 +40,16 @@ router.get('/live-queue', requireAuth, requireRole('admin'), getAdminLiveQueue);
 // Notification Pipeline Diagnostics & Safe Test-Send (PRD F8)
 router.get('/notifications/diagnostics', requireAuth, requireRole('admin'), getNotificationDiagnostics);
 router.post('/notifications/test-send', requireAuth, requireRole('admin'), sendDiagnosticTestNotification);
+
+// Hospital Staff & Doctor Management (PRD & Admin Center)
+router.get('/staff/stats', requireAuth, requireRole('admin'), getStaffStats);
+router.get('/staff', requireAuth, requireRole('admin'), listStaff);
+router.post('/staff', requireAuth, requireRole('admin'), registerStaff);
+router.get('/staff/:id', requireAuth, requireRole('admin'), getStaffById);
+router.put('/staff/:id', requireAuth, requireRole('admin'), updateStaff);
+router.patch('/staff/:id/status', requireAuth, requireRole('admin'), updateStaffStatus);
+router.patch('/staff/:id/shift', requireAuth, requireRole('admin'), updateStaffShift);
+router.post('/staff/:id/reset-password', requireAuth, requireRole('admin'), resetStaffPassword);
 
 router.post('/users/:uid/role', requireAuth, requireRole('admin'), setUserRole);
 router.post('/patients/merge', requireAuth, requireRole('admin'), adminMergePatients);

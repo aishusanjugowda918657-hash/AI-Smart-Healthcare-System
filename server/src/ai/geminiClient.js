@@ -130,6 +130,8 @@ export async function runWithTools({ system = '', messages = [], tools = [], too
 
   const model = getModelName();
   const sourcesCollector = [];
+  let pendingAction = null;
+  let actionRoute = null;
 
   try {
     const contents = [
@@ -162,57 +164,77 @@ export async function runWithTools({ system = '', messages = [], tools = [], too
       const functionCalls = response?.functionCalls || candidate?.content?.parts?.filter(p => p.functionCall).map(p => p.functionCall);
 
       if (functionCalls && functionCalls.length > 0) {
-        const call = functionCalls[0];
-        const toolName = call.name;
-        const args = call.args || {};
+        const modelParts = [];
+        const userParts = [];
 
-        const toolResult = await toolHandler(toolName, args, context, sourcesCollector);
+        for (const call of functionCalls) {
+          const toolName = call.name;
+          const args = call.args || {};
+          modelParts.push({ functionCall: { name: toolName, args } });
 
-        if (toolResult && toolResult.status === 'CHOICES_REQUIRED') {
-          return {
-            text: toolResult.message,
-            choices: toolResult.choices,
-            sources: sourcesCollector
-          };
-        }
+          const toolResult = await toolHandler(toolName, args, context, sourcesCollector);
 
-        if (toolResult && toolResult.actionRequired) {
-          return {
-            text: toolResult.message,
-            actionRequired: toolResult.actionRequired,
-            confirmToken: toolResult.confirmToken,
-            summary: toolResult.summary,
-            sources: sourcesCollector
-          };
-        }
+          if (toolResult?.route) {
+            actionRoute = toolResult.route;
+          }
 
-        contents.push({
-          role: 'model',
-          parts: [{ functionCall: { name: toolName, args } }]
-        });
+          if (toolResult && toolResult.status === 'CHOICES_REQUIRED') {
+            return {
+              text: toolResult.message,
+              choices: toolResult.choices,
+              sources: sourcesCollector,
+              route: actionRoute
+            };
+          }
 
-        contents.push({
-          role: 'user',
-          parts: [{
+          if (toolResult && toolResult.actionRequired) {
+            pendingAction = {
+              actionRequired: toolResult.actionRequired,
+              confirmToken: toolResult.confirmToken,
+              summary: toolResult.summary,
+              message: toolResult.message
+            };
+          }
+
+          userParts.push({
             functionResponse: {
               name: toolName,
               response: { output: toolResult }
             }
-          }]
-        });
+          });
+        }
+
+        contents.push({ role: 'model', parts: modelParts });
+        contents.push({ role: 'user', parts: userParts });
+
+        if (pendingAction) {
+          return {
+            text: pendingAction.message || candidate?.content?.parts?.[0]?.text || 'Please confirm to proceed.',
+            actionRequired: pendingAction.actionRequired,
+            confirmToken: pendingAction.confirmToken,
+            summary: pendingAction.summary,
+            route: actionRoute,
+            sources: sourcesCollector
+          };
+        }
 
       } else {
         const text = typeof response?.text === 'function' ? response.text() : (candidate?.content?.parts?.[0]?.text || '');
         return {
           text: text || 'How else can I assist you today?',
-          sources: sourcesCollector
+          sources: sourcesCollector,
+          route: actionRoute,
+          actionRequired: pendingAction?.actionRequired || null,
+          confirmToken: pendingAction?.confirmToken || null,
+          summary: pendingAction?.summary || null
         };
       }
     }
 
     return {
       text: 'Reached maximum reasoning rounds.',
-      sources: sourcesCollector
+      sources: sourcesCollector,
+      route: actionRoute
     };
 
   } catch (err) {

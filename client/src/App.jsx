@@ -186,6 +186,7 @@ export const App = () => {
                 <Route element={<ProtectedRoute allowedRoles={['admin']} />}>
                   <Route path="/admin-dashboard" element={<AdminDashboard />} />
                   <Route path="/manage-doctors" element={<ManageDoctors />} />
+                  <Route path="/manage-staff" element={<ManageDoctors />} />
                   <Route path="/manage-departments" element={<ManageDepartments />} />
                   <Route path="/manage-patients" element={<ManagePatients />} />
                   <Route path="/queue-monitor" element={<QueueMonitor />} />
