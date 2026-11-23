@@ -24,6 +24,7 @@ import PatientDashboard from './pages/PatientDashboard';
 import DoctorDashboard from './pages/DoctorDashboard';
 import AdminDashboard from './pages/AdminDashboard';
 import ChatbotPage from './pages/ChatbotPage';
+import VoiceAssistantPage from './pages/VoiceAssistantPage';
 import NotFound from './pages/NotFound';
 import NotificationsPage from './pages/NotificationsPage';
 import AppointmentBookingForm from './components/patient/AppointmentBookingForm';
@@ -157,6 +158,7 @@ export const App = () => {
                   <Route path="/follow-ups" element={<FollowUpList />} />
                   <Route path="/notifications" element={<NotificationsPage />} />
                   <Route path="/ai-chat" element={<ChatbotPage />} />
+                  <Route path="/voice-assistant" element={<VoiceAssistantPage />} />
                 </Route>
 
                 {/* Doctor Routes (Task A) */}

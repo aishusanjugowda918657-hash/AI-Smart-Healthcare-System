@@ -35,6 +35,7 @@ import checkinRoutes from './routes/checkin.routes.js';
 import queueRoutes from './routes/queue.routes.js';
 import reportRoutes from './routes/report.routes.js';
 import visitRoutes from './routes/visit.routes.js';
+import voiceRoutes from './routes/voice.routes.js';
 import { getMyStaffShift } from './controllers/adminShiftController.js';
 
 const app = express();
@@ -190,6 +191,7 @@ app.post('/api/alerts/:id/send-reminder', requireAuth, requireRole('doctor', 'ad
 app.post('/alerts/:id/send-reminder', requireAuth, requireRole('doctor', 'admin'), sendPatientReminderAlert);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/voice', voiceRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/patient-agent', patientAgentRoutes);
 app.use('/api/slots', slotRoutes);

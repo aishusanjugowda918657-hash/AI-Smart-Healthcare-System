@@ -4,6 +4,7 @@ import flags from './src/config/flags.js';
 import { startScheduler } from './src/jobs/scheduler.js';
 import { isEmulator } from './src/config/firebase.js';
 import { validateStagingPreflight } from './src/config/stagingPreflight.js';
+import { attachVoiceStreamServer } from './src/services/voiceStreamServer.js';
 
 // Preflight check for staging environment mode
 const isStagingMode =
@@ -38,6 +39,10 @@ const server = app.listen(PORT, '0.0.0.0', async () => {
   } else {
     console.log('FLAG_SCHEDULER is false. Scheduler loop disabled (trigger manually via /api/internal/tick).');
   }
+
+  // Attach Realtime Voice WebSocket Stream Server
+  attachVoiceStreamServer(server);
+  console.log('[VoiceStream] Attached Realtime Voice Streaming WebSocket at /api/voice/stream');
 });
 
 // Container Runtime Graceful Shutdown (Cloud Run / Render / Kubernetes)

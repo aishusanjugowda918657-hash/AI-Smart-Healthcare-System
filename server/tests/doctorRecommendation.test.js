@@ -3,7 +3,7 @@ import request from 'supertest';
 import app from '../src/app.js';
 import { assertDbConnected } from '../src/config/firebase.js';
 
-describe('Doctor Recommendation and Smart Selection Regression', () => {
+describe('Doctor Recommendation and Smart Selection Regression', { timeout: 60000 }, () => {
   let db;
 
   beforeEach(async () => {

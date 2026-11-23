@@ -287,6 +287,20 @@ export const ChatbotPage = () => {
         )}
       </div>
 
+      {/* Switch to Multilingual Voice Assistant Pill */}
+      <div className="bg-teal-50 px-4 py-1.5 border-b border-teal-200/80 flex items-center justify-between text-xs text-teal-900">
+        <div className="flex items-center space-x-2">
+          <Mic className="w-3.5 h-3.5 text-teal-700 animate-pulse" />
+          <span className="font-medium">Want hands-free speaking? Try our new Multilingual Voice Assistant!</span>
+        </div>
+        <button
+          onClick={() => navigate('/voice-assistant')}
+          className="px-2.5 py-0.5 bg-teal-700 hover:bg-teal-800 text-white rounded-lg text-[11px] font-semibold transition"
+        >
+          Open Voice Mode &rarr;
+        </button>
+      </div>
+
       {/* Message History */}
       <div className="flex-1 p-4 sm:p-6 overflow-y-auto space-y-4">
         {messages.map((m) => (

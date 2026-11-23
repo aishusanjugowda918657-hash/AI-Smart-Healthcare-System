@@ -158,6 +158,26 @@ export const PATIENT_CHAT_TOOL_DECLARATIONS = [
       },
       required: ['reminderId']
     }
+  },
+  {
+    name: 'get_latest_prescription',
+    description: 'Retrieve the patient\'s latest active digital prescription and medication details.',
+    parameters: { type: 'OBJECT', properties: {}, required: [] }
+  },
+  {
+    name: 'get_medicine_reminders',
+    description: 'Retrieve scheduled medicine reminders and dosage times for the patient.',
+    parameters: { type: 'OBJECT', properties: {}, required: [] }
+  },
+  {
+    name: 'get_upcoming_followups',
+    description: 'Retrieve upcoming doctor follow-ups and scheduled review dates for the patient.',
+    parameters: { type: 'OBJECT', properties: {}, required: [] }
+  },
+  {
+    name: 'get_hospital_info',
+    description: 'Get hospital information including departments, working hours, and emergency desk details.',
+    parameters: { type: 'OBJECT', properties: {}, required: [] }
   }
 ];
 
@@ -339,6 +359,111 @@ export async function executePatientChatTool(toolName, args, context) {
         }, { merge: true });
       }
       return { success: true, message: 'Dose marked as taken.' };
+    }
+
+    case 'get_latest_prescription': {
+      const snap = await db.collection('prescriptions')
+        .where('patientHealthId', '==', selectedPatientHealthId)
+        .get();
+
+      if (snap.empty) {
+        return { message: 'No active prescriptions found on your health record.' };
+      }
+
+      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      docs.sort((a, b) => new Date(b.createdAt || b.date || 0) - new Date(a.createdAt || a.date || 0));
+      const latest = docs[0];
+
+      const medicines = (latest.items || []).map(m => ({
+        name: m.medicineName || m.name,
+        dosage: m.dose || m.dosage,
+        frequency: m.frequency,
+        instructions: m.instructions || m.timing || 'As directed by physician'
+      }));
+
+      return {
+        prescriptionId: latest.prescriptionId || latest.id,
+        date: latest.date || latest.createdAt?.slice(0, 10),
+        doctorName: latest.doctorName || 'Attending Physician',
+        medicines,
+        diagnosis: latest.diagnosis || null,
+        advice: latest.generalAdvice || latest.notes || null,
+        message: medicines.length > 0
+          ? `Your latest prescription from Dr. ${latest.doctorName || 'Doctor'} includes ${medicines.map(m => `${m.name} (${m.dosage}, ${m.frequency})`).join(', ')}.`
+          : 'Prescription details retrieved with no active medication items.'
+      };
+    }
+
+    case 'get_medicine_reminders': {
+      const snap = await db.collection('reminders')
+        .where('patientHealthId', '==', selectedPatientHealthId)
+        .get();
+
+      if (snap.empty) {
+        return { message: 'You have no scheduled medicine reminders right now.' };
+      }
+
+      const reminders = snap.docs.map(d => {
+        const data = d.data();
+        return {
+          id: d.id,
+          medicineName: data.medicineName || data.title || 'Medicine',
+          dose: data.dose || data.dosage || '',
+          scheduledTime: data.time || data.scheduledTime || data.dueAt || '',
+          status: data.status || 'PENDING'
+        };
+      });
+
+      return {
+        reminders,
+        message: `You have ${reminders.length} reminder(s): ${reminders.map(r => `${r.medicineName} at ${r.scheduledTime} [${r.status}]`).join('; ')}`
+      };
+    }
+
+    case 'get_upcoming_followups': {
+      const followSnap = await db.collection('followups')
+        .where('patientHealthId', '==', selectedPatientHealthId)
+        .get();
+
+      if (followSnap.empty) {
+        return { message: 'You have no upcoming follow-ups scheduled at this time.' };
+      }
+
+      const followups = followSnap.docs.map(d => {
+        const data = d.data();
+        return {
+          id: d.id,
+          doctorName: data.doctorName || 'Doctor',
+          targetDate: data.targetDate || data.recommendedDate || '',
+          notes: data.notes || data.reason || 'General clinical review',
+          status: data.status || 'PENDING'
+        };
+      });
+
+      return {
+        followups,
+        message: `You have ${followups.length} follow-up(s) scheduled. Next review: ${followups[0].doctorName} on ${followups[0].targetDate}.`
+      };
+    }
+
+    case 'get_hospital_info': {
+      return {
+        hospitalName: 'SmartCare Multispecialty Hospital',
+        departments: [
+          'Cardiology',
+          'General Medicine',
+          'Pediatrics',
+          'Orthopedics',
+          'Dermatology',
+          'ENT',
+          'Neurology',
+          'Gynecology'
+        ],
+        opdHours: 'Monday to Saturday: 08:00 AM - 04:00 PM',
+        emergencyServices: '24x7 Emergency Casualty & Trauma Care (Dial 108 / 112)',
+        helpdeskPhone: '080-23456789',
+        location: 'Main Block, Rajajinagar, Bengaluru, Karnataka 560010'
+      };
     }
 
     default:
