@@ -289,7 +289,46 @@ export function useVoiceAssistant(initialLang = 'en-IN') {
           }
         }
 
-        const response = await API.post('/voice/chat', payload);
+        let response;
+        try {
+          response = await API.post('/voice/chat', payload);
+        } catch (voiceErr) {
+          if (voiceErr.response?.status === 404) {
+            console.warn('[useVoiceAssistant] /voice/chat returned 404, falling back to /ai/chat');
+            const cleanLang = (lang || 'en').split('-')[0];
+            const chatRes = await API.post('/ai/chat', {
+              message: queryText || 'Hello',
+              language: cleanLang,
+              inputMode: audioBlob ? 'voice' : 'text',
+              history: messages
+                .filter((m) => m.sender === 'user' || m.sender === 'assistant')
+                .slice(-10)
+                .map((m) => ({
+                  role: m.sender === 'user' ? 'user' : 'model',
+                  text: m.text
+                }))
+            });
+            const chatData = chatRes.data?.data || chatRes.data || {};
+            const fallbackReply = chatData.message || chatData.response || 'I have processed your request.';
+            response = {
+              data: {
+                success: true,
+                message: fallbackReply,
+                language: lang,
+                audioBase64: null,
+                actionPending: chatData.confirmToken
+                  ? {
+                      action: 'CONFIRM_ACTION',
+                      confirmToken: chatData.confirmToken,
+                      summary: chatData.summary || fallbackReply
+                    }
+                  : null
+              }
+            };
+          } else {
+            throw voiceErr;
+          }
+        }
         const data = response.data?.data || response.data;
 
         if (data.language && data.language !== lang) {
@@ -619,12 +658,45 @@ export function useVoiceAssistant(initialLang = 'en-IN') {
       setSessionState('processing');
 
       try {
-        const response = await API.post('/voice/chat', {
-          confirmToken: token,
-          confirmed: isConfirmed,
-          message: isConfirmed ? 'Confirm action' : 'Cancel action',
-          language: lang
-        });
+        let response;
+        try {
+          response = await API.post('/voice/chat', {
+            confirmToken: token,
+            confirmed: isConfirmed,
+            message: isConfirmed ? 'Confirm action' : 'Cancel action',
+            language: lang
+          });
+        } catch (confirmErr) {
+          if (confirmErr.response?.status === 404) {
+            console.warn('[useVoiceAssistant] /voice/chat returned 404 on confirm, falling back to /ai/chat/confirm');
+            const cleanLang = (lang || 'en').split('-')[0];
+            if (isConfirmed) {
+              const confirmRes = await API.post('/ai/chat/confirm', {
+                confirmToken: token,
+                disclaimerAccepted: true,
+                language: cleanLang
+              });
+              const cData = confirmRes.data?.data || confirmRes.data || {};
+              response = {
+                data: {
+                  success: true,
+                  message: cData.message || 'Action confirmed successfully.',
+                  audioBase64: null
+                }
+              };
+            } else {
+              response = {
+                data: {
+                  success: true,
+                  message: 'Action cancelled.',
+                  audioBase64: null
+                }
+              };
+            }
+          } else {
+            throw confirmErr;
+          }
+        }
 
         const data = response.data?.data || response.data;
         const replyText = data.message || (isConfirmed ? 'Action confirmed.' : 'Action cancelled.');
