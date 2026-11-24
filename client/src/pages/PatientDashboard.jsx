@@ -6,7 +6,7 @@ import FamilyMembersManager from '../components/patient/FamilyMembersManager';
 import { HealthIdCard } from '../components/patient/HealthIdCard';
 import AppointmentDetailsActions from '../components/patient/AppointmentDetailsActions';
 import API from '../services/api';
-import { Calendar, Clock, Pill, FileText, User, Phone, Heart, Shield, Bot, AlertCircle, CheckCircle2, XCircle, Hourglass, Stethoscope } from 'lucide-react';
+import { Calendar, Clock, Pill, FileText, User, Phone, Heart, Shield, Bot, AlertCircle, CheckCircle2, XCircle, Hourglass, Stethoscope, Mic } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import QRCode from 'qrcode';
 import { getTodayInHospitalTz } from '../utils/formatters';
@@ -352,18 +352,18 @@ export const PatientDashboard = () => {
         <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-3">
           <div className="flex items-center space-x-3">
             <div className="p-3 bg-teal-50 text-teal-600 rounded-2xl">
-              <Bot className="w-6 h-6" />
+              <Mic className="w-6 h-6" />
             </div>
             <div>
-              <h3 className="font-bold text-slate-800 text-sm">AI Health Support</h3>
-              <p className="text-xs text-slate-500">Ask medical questions & get triage guidance</p>
+              <h3 className="font-bold text-slate-800 text-sm">SmartCare Voice Assistant</h3>
+              <p className="text-xs text-slate-500">Book appointments & hospital services via voice</p>
             </div>
           </div>
           <Link
-            to="/ai-chat"
+            to="/voice-assistant"
             className="inline-block w-full text-center py-2.5 bg-teal-50 hover:bg-teal-100 text-teal-700 text-xs font-bold rounded-xl transition-colors"
           >
-            Launch AI Health Support &rarr;
+            Launch Voice Assistant &rarr;
           </Link>
         </div>
 

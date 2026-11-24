@@ -64,19 +64,6 @@ export const Navbar = ({ onToggleMobileMenu, mobileMenuOpen = false }) => {
         {/* Right Navigation Controls - Show ONLY when authenticated & synced */}
         {isAuthenticated && (
           <div className="flex items-center space-x-2 sm:space-x-4">
-            
-            {/* AI Chatbot Launcher Link — Only for Patient role */}
-            {roleKey === 'patient' && (
-              <Link
-                to="/ai-chat"
-                className="flex items-center space-x-1.5 px-3 py-1.5 bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 rounded-xl text-xs font-semibold transition-colors"
-                data-testid="navbar-ai-health-support"
-              >
-                <Bot className="w-4 h-4 text-teal-600" />
-                <span className="hidden sm:inline">AI Health Support</span>
-              </Link>
-            )}
-
             {/* Readable Notification Center Bell */}
             <NotificationBell />
 

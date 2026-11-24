@@ -61,8 +61,7 @@ export const Sidebar = ({ mobileOpen = false, onClose = () => {} }) => {
     { to: '/medical-history', label: 'Medical History', icon: FileText },
     { to: '/prescriptions', label: 'My Prescriptions', icon: Pill },
     { to: '/medicine-reminders', label: 'Medicine Reminders', icon: Bell },
-    { to: '/voice-assistant', label: 'Voice Assistant', icon: Mic },
-    { to: '/ai-chat', label: 'AI Health Assistant', icon: Bot }
+    { to: '/voice-assistant', label: 'Voice Assistant', icon: Mic }
   ];
 
   const doctorLinks = [
