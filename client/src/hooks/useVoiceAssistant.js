@@ -23,7 +23,29 @@ export const SUPPORTED_LANGUAGES = [
 
 export function useVoiceAssistant(initialLang = 'en-IN') {
   const [sessionState, setSessionState] = useState('idle'); // idle | requesting_permission | listening | processing | speaking | interrupted | error
-  const [lang, setLang] = useState(initialLang);
+  const [lang, setLangState] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = sessionStorage.getItem('smartcare_voice_language');
+        if (saved && SUPPORTED_LANGUAGES.some((l) => l.code === saved)) {
+          return saved;
+        }
+      } catch (_) {}
+    }
+    return initialLang;
+  });
+
+  const setLang = useCallback((newLang, isManual = false) => {
+    setLangState(newLang);
+    if (typeof window !== 'undefined') {
+      try {
+        sessionStorage.setItem('smartcare_voice_language', newLang);
+        if (isManual) {
+          sessionStorage.setItem('smartcare_voice_lang_manual', 'true');
+        }
+      } catch (_) {}
+    }
+  }, []);
   const [transcript, setTranscript] = useState('');
   const [messages, setMessages] = useState([
     {
@@ -50,11 +72,25 @@ export function useVoiceAssistant(initialLang = 'en-IN') {
   const wsRef = useRef(null);
   const isHandsFreeRef = useRef(handsFree);
   const sessionActiveRef = useRef(false);
+  const silenceTimerRef = useRef(null);
+  const hasSpokenRef = useRef(false);
+  const transcriptRef = useRef('');
+  const stopListeningRef = useRef(null);
+  const pendingActionRef = useRef(pendingAction);
+  const messagesRef = useRef(messages);
 
-  // Keep ref synchronized with state
+  // Keep refs synchronized with state
   useEffect(() => {
     isHandsFreeRef.current = handsFree;
   }, [handsFree]);
+
+  useEffect(() => {
+    pendingActionRef.current = pendingAction;
+  }, [pendingAction]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   // Fetch assistant config on mount
   useEffect(() => {
@@ -86,21 +122,31 @@ export function useVoiceAssistant(initialLang = 'en-IN') {
    * Stop active audio playback immediately (Barge-in / Interrupt)
    */
   const interrupt = useCallback(() => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+    hasSpokenRef.current = false;
+
     if (activeAudioRef.current) {
       try {
         activeAudioRef.current.pause();
         activeAudioRef.current.currentTime = 0;
-        activeAudioRef.current = null;
+        activeAudioRef.current.src = '';
       } catch (e) {
         console.warn('[useVoiceAssistant] Error stopping audio:', e.message);
       }
+      activeAudioRef.current = null;
     }
-    if (window.speechSynthesis && window.speechSynthesis.speaking) {
-      window.speechSynthesis.cancel();
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch (_) {}
     }
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'interrupt' }));
     }
+    setSessionState('idle');
   }, []);
 
   /**
@@ -206,28 +252,49 @@ export function useVoiceAssistant(initialLang = 'en-IN') {
       setMessages((prev) => [...prev, userMsg]);
 
       try {
+        const recentHistory = (messagesRef.current || [])
+          .filter(m => m.text && !m.text.startsWith('Hello! I am your SmartCare Voice Assistant'))
+          .slice(-6)
+          .map(m => ({
+            role: m.sender === 'user' ? 'user' : 'assistant',
+            content: m.text
+          }));
+
+        const isManual = typeof window !== 'undefined' && sessionStorage.getItem('smartcare_voice_lang_manual') === 'true';
         let payload = {
           message: queryText,
           language: lang,
-          confirmToken: pendingAction?.confirmToken || null
+          isManualSelection: isManual,
+          history: recentHistory,
+          confirmToken: pendingActionRef.current?.confirmToken || pendingAction?.confirmToken || null
         };
 
-        if (audioBlob) {
-          const reader = new FileReader();
-          const base64Promise = new Promise((resolve) => {
-            reader.onloadend = () => {
-              const res = reader.result;
-              const base64 = typeof res === 'string' ? res.split(',')[1] : '';
-              resolve(base64);
-            };
-          });
-          reader.readAsDataURL(audioBlob);
-          payload.audioBase64 = await base64Promise;
-          payload.mimeType = audioBlob.type || 'audio/wav';
+        // Only attach raw audioBase64 if there is no transcript text provided (e.g. STT needed on backend)
+        if (audioBlob && !queryText.trim()) {
+          // Guard against payload too large (> 1.5MB)
+          if (audioBlob.size > 1.5 * 1024 * 1024) {
+            console.warn('[useVoiceAssistant] Audio blob size exceeds 1.5MB limit, omitting raw audio to prevent 413 error');
+          } else {
+            const reader = new FileReader();
+            const base64Promise = new Promise((resolve) => {
+              reader.onloadend = () => {
+                const res = reader.result;
+                const base64 = typeof res === 'string' ? res.split(',')[1] : '';
+                resolve(base64);
+              };
+            });
+            reader.readAsDataURL(audioBlob);
+            payload.audioBase64 = await base64Promise;
+            payload.mimeType = (audioBlob.type || 'audio/webm').split(';')[0].trim().toLowerCase();
+          }
         }
 
         const response = await API.post('/voice/chat', payload);
         const data = response.data?.data || response.data;
+
+        if (data.language && data.language !== lang) {
+          setLang(data.language, false);
+        }
 
         const replyText = data.message || data.text || 'I have processed your request.';
         const assistantMsg = {
@@ -250,7 +317,7 @@ export function useVoiceAssistant(initialLang = 'en-IN') {
         playAudioResponse(data.audioBase64, replyText);
       } catch (err) {
         console.error('[useVoiceAssistant] Voice turn failed:', err);
-        const errorText = err.response?.data?.message || 'I am currently unable to process your voice request. Please try again.';
+        const errorText = err.response?.data?.message || (err.response?.status === 413 ? 'Audio was too large. Please tap the mic and speak briefly.' : 'I am currently unable to process your voice request. Please try again.');
         setMessages((prev) => [
           ...prev,
           {
@@ -275,6 +342,12 @@ export function useVoiceAssistant(initialLang = 'en-IN') {
     interrupt();
     setErrorMessage(null);
     setTranscript('');
+    transcriptRef.current = '';
+    hasSpokenRef.current = false;
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
     setSessionState('requesting_permission');
 
     try {
@@ -291,7 +364,7 @@ export function useVoiceAssistant(initialLang = 'en-IN') {
       sessionActiveRef.current = true;
       setSessionState('listening');
 
-      // Audio Level Visualizer
+      // Audio Level Visualizer & Voice Activity Detection (VAD)
       try {
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
         if (AudioContextClass) {
@@ -304,6 +377,10 @@ export function useVoiceAssistant(initialLang = 'en-IN') {
           analyserRef.current = analyser;
 
           const dataArray = new Uint8Array(analyser.frequencyBinCount);
+          let noiseBaseline = 0;
+          let calibrationFrames = 0;
+          const maxCalibrationFrames = 25; // calibrate first ~250ms of ambient noise
+
           const checkVolume = () => {
             if (analyserRef.current) {
               analyserRef.current.getByteFrequencyData(dataArray);
@@ -312,7 +389,33 @@ export function useVoiceAssistant(initialLang = 'en-IN') {
                 sum += dataArray[i];
               }
               const avg = sum / dataArray.length;
-              setAudioLevel(Math.min(1, avg / 128));
+              const level = Math.min(1, avg / 128);
+              setAudioLevel(level);
+
+              if (calibrationFrames < maxCalibrationFrames) {
+                noiseBaseline = (noiseBaseline * calibrationFrames + avg) / (calibrationFrames + 1);
+                calibrationFrames++;
+              }
+
+              // Voice Activity Detection: speech must rise above calibrated background noise floor
+              const speechThreshold = Math.max(10.0, noiseBaseline + 7.0);
+              const isSpeaking = avg > speechThreshold && level > 0.03;
+
+              if (isSpeaking) {
+                hasSpokenRef.current = true;
+                if (silenceTimerRef.current) {
+                  clearTimeout(silenceTimerRef.current);
+                  silenceTimerRef.current = null;
+                }
+              } else if (hasSpokenRef.current) {
+                // If user finished speaking and silence is sustained for 1.1s, auto-stop and submit
+                if (!silenceTimerRef.current) {
+                  silenceTimerRef.current = setTimeout(() => {
+                    stopListeningRef.current?.();
+                  }, 1100);
+                }
+              }
+
               animationFrameRef.current = requestAnimationFrame(checkVolume);
             }
           };
@@ -321,6 +424,13 @@ export function useVoiceAssistant(initialLang = 'en-IN') {
       } catch (audioCtxErr) {
         console.warn('[useVoiceAssistant] Visualizer init skipped:', audioCtxErr.message);
       }
+
+      // Initial idle timeout: if no speech is detected after 9 seconds, close mic gracefully
+      silenceTimerRef.current = setTimeout(() => {
+        if (!hasSpokenRef.current && sessionActiveRef.current) {
+          stopListeningRef.current?.();
+        }
+      }, 9000);
 
       // Browser Web Speech Recognition for Realtime UI feedback
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -333,14 +443,43 @@ export function useVoiceAssistant(initialLang = 'en-IN') {
 
           recognition.onresult = (event) => {
             let current = '';
+            let hasFinal = false;
             for (let i = 0; i < event.results.length; i++) {
               current += event.results[i][0].transcript;
+              if (event.results[i].isFinal) {
+                hasFinal = true;
+              }
             }
+            transcriptRef.current = current;
             setTranscript(current);
+            hasSpokenRef.current = true;
+
+            // Reset silence countdown on recognized speech
+            if (silenceTimerRef.current) {
+              clearTimeout(silenceTimerRef.current);
+            }
+            // If final speech recognized, submit promptly after 800ms
+            const waitDelay = hasFinal ? 800 : 1100;
+            silenceTimerRef.current = setTimeout(() => {
+              stopListeningRef.current?.();
+            }, waitDelay);
+          };
+
+          recognition.onspeechend = () => {
+            // Native speech recognition detects speech completion
+            if (sessionActiveRef.current && (hasSpokenRef.current || transcriptRef.current)) {
+              if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+              silenceTimerRef.current = setTimeout(() => {
+                stopListeningRef.current?.();
+              }, 750);
+            }
           };
 
           recognition.onend = () => {
-            // Finished speaking via recognition
+            // Finished speaking detected by speech recognition engine -> auto-submit
+            if (sessionActiveRef.current && (hasSpokenRef.current || transcriptRef.current)) {
+              stopListeningRef.current?.();
+            }
           };
 
           recognition.onerror = (e) => {
@@ -386,6 +525,11 @@ export function useVoiceAssistant(initialLang = 'en-IN') {
    * Stop Listening and Process Spoken Audio
    */
   const stopListening = useCallback(() => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = null;
@@ -399,7 +543,8 @@ export function useVoiceAssistant(initialLang = 'en-IN') {
       recognitionRef.current = null;
     }
 
-    const currentTranscript = transcript ? transcript.trim() : '';
+    const currentTranscript = (transcriptRef.current || transcript || '').trim();
+    hasSpokenRef.current = false;
 
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.onstop = () => {
@@ -423,6 +568,11 @@ export function useVoiceAssistant(initialLang = 'en-IN') {
       mediaStreamRef.current = null;
     }
   }, [transcript, sendVoiceTurn]);
+
+  // Keep stopListeningRef synchronized with latest function
+  useEffect(() => {
+    stopListeningRef.current = stopListening;
+  }, [stopListening]);
 
   /**
    * Stop Complete Session and Release Hardware

@@ -132,25 +132,60 @@ export async function runWithTools({ system = '', messages = [], tools = [], too
   const sourcesCollector = [];
 
   try {
-    const contents = [
-      { role: 'user', parts: [{ text: system }] }
-    ];
+    const rawContents = [];
 
     (messages || []).forEach(m => {
       const role = (m.role === 'assistant' || m.role === 'model') ? 'model' : 'user';
-      contents.push({ role, parts: [{ text: m.text || m.content || m.message || '' }] });
+      let parts = [];
+      if (Array.isArray(m.parts) && m.parts.length > 0) {
+        parts = m.parts.filter(p => p && (p.text || p.functionCall || p.functionResponse));
+      } else {
+        const txt = String(m.text || m.content || m.message || '').trim();
+        if (txt) {
+          parts = [{ text: txt }];
+        }
+      }
+      if (parts.length > 0) {
+        rawContents.push({ role, parts });
+      }
     });
+
+    // Gemini API requires multiturn conversations to start with a 'user' turn
+    while (rawContents.length > 0 && rawContents[0].role !== 'user') {
+      rawContents.shift();
+    }
+
+    if (rawContents.length === 0) {
+      rawContents.push({ role: 'user', parts: [{ text: 'Hello' }] });
+    }
+
+    // Merge consecutive turns of the same role to strictly alternate user/model
+    const contents = [];
+    for (const item of rawContents) {
+      if (contents.length > 0 && contents[contents.length - 1].role === item.role) {
+        // Merge text parts into the previous turn
+        const prev = contents[contents.length - 1];
+        prev.parts = [...prev.parts, ...item.parts];
+      } else {
+        contents.push(item);
+      }
+    }
 
     let round = 0;
     while (round < maxRounds) {
       round++;
 
+      const config = {
+        tools: [{ functionDeclarations: tools }]
+      };
+      if (system) {
+        config.systemInstruction = system;
+      }
+
       const req = aiClient.models.generateContent({
         model,
         contents,
-        config: {
-          tools: [{ functionDeclarations: tools }]
-        }
+        config
       });
 
       const timeout = new Promise((_, reject) =>
@@ -159,7 +194,8 @@ export async function runWithTools({ system = '', messages = [], tools = [], too
 
       const response = await Promise.race([req, timeout]);
       const candidate = response?.candidates?.[0];
-      const functionCalls = response?.functionCalls || candidate?.content?.parts?.filter(p => p.functionCall).map(p => p.functionCall);
+      const functionCalls = (typeof response?.functionCalls === 'function' ? response.functionCalls() : response?.functionCalls) ||
+        candidate?.content?.parts?.filter(p => p.functionCall).map(p => p.functionCall);
 
       if (functionCalls && functionCalls.length > 0) {
         const call = functionCalls[0];
@@ -186,10 +222,14 @@ export async function runWithTools({ system = '', messages = [], tools = [], too
           };
         }
 
-        contents.push({
-          role: 'model',
-          parts: [{ functionCall: { name: toolName, args } }]
-        });
+        if (candidate?.content) {
+          contents.push(candidate.content);
+        } else {
+          contents.push({
+            role: 'model',
+            parts: [{ functionCall: { name: toolName, args } }]
+          });
+        }
 
         contents.push({
           role: 'user',

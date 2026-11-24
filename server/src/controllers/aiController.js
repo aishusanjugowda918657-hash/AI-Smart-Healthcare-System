@@ -68,13 +68,22 @@ export const aiChat = async (req, res, next) => {
       const db = assertDbConnected();
       switch (quickIntent) {
         case 'BOOK_APPOINTMENT': {
-          // Return the same reply as the help article book_appointment (answer + numbered steps + actionButtons).
-          // Fake SELECT_DEPT_* chips removed.
-          const helpReply = getHelpReplyById('book_appointment', language) || searchHelp('book appointment', language)?.reply;
-          if (helpReply) {
-            return res.status(200).json(helpReply);
-          }
-          break;
+          const bookingPrompts = {
+            en: 'Certainly. Please tell me what health problem or symptoms you are experiencing. I will help you find the appropriate department and available doctor.',
+            kn: 'ಖಂಡಿತ. ನಿಮಗೆ ಯಾವ ಆರೋಗ್ಯ ಸಮಸ್ಯೆ ಅಥವಾ ಲಕ್ಷಣಗಳು ಕಂಡುಬರುತ್ತಿವೆ ಎಂದು ತಿಳಿಸಿ. ಸೂಕ್ತ ವಿಭಾಗ ಮತ್ತು ಲಭ್ಯವಿರುವ ವೈದ್ಯರನ್ನು ಹುಡುಕಲು ನಾನು ನಿಮಗೆ ಸಹಾಯ ಮಾಡುತ್ತೇನೆ.',
+            hi: 'ज़रूर। कृपया मुझे बताएं कि आपको क्या स्वास्थ्य समस्या या लक्षण महसूस हो रहे हैं। मैं आपको उचित विभाग और उपलब्ध डॉक्टर खोजने में मदद करूँगा।',
+            te: 'ఖచ్చితంగా. మీకు ఏ ఆరోగ్య సమస్య లేదా లక్షణాలు ఉన్నాయో దయచేసి చెప్పండి. తగిన విభాగాన్ని మరియు అందుబాటులో ఉన్న వైద్యుడిని కనుగొనడంలో నేను మీకు సహాయం చేస్తాను.',
+            ta: 'நிச்சயமாக. உங்களுக்கு என்ன உடல்நலப் பிரச்சனை அல்லது அறிகுறிகள் உள்ளன என்பதை என்னிடம் கூறுங்கள். பொருத்தமான துறை மற்றும் மருத்துவரை கண்டுபிடிக்க நான் உங்களுக்கு உதவுகிறேன்.'
+          };
+          const lk = (language || 'en').split('-')[0].toLowerCase();
+          const promptMsg = bookingPrompts[lk] || bookingPrompts.en;
+          return res.status(200).json({
+            success: true,
+            language,
+            message: promptMsg,
+            response: promptMsg,
+            aiSource: 'reception_intake'
+          });
         }
 
         case 'TOKEN_STATUS': {

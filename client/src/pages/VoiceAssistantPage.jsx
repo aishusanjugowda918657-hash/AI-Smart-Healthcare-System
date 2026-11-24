@@ -9,6 +9,8 @@ import {
   Radio,
   Send,
   Trash2,
+  ArrowLeft,
+  LogOut,
   ShieldAlert,
   Sparkles,
   Bot,
@@ -63,6 +65,15 @@ export const VoiceAssistantPage = () => {
     setInputText('');
   };
 
+  const handleExit = () => {
+    stopSession();
+    if (window.history.length > 1) {
+      navigate(-1);
+    } else {
+      navigate('/patient/dashboard');
+    }
+  };
+
   const quickChips = [
     { label: 'My Token Status', query: 'What is my current token status and wait time?' },
     { label: 'Doctor Timings', query: 'What are the doctor OPD timings and schedule?' },
@@ -96,7 +107,7 @@ export const VoiceAssistantPage = () => {
           {/* Language Selector */}
           <select
             value={lang}
-            onChange={(e) => setLang(e.target.value)}
+            onChange={(e) => setLang(e.target.value, true)}
             className="px-2.5 py-1.5 bg-white/10 hover:bg-white/20 border border-white/20 rounded-xl text-xs font-semibold text-white outline-none focus:ring-2 focus:ring-teal-400 transition"
           >
             {SUPPORTED_LANGUAGES.map((l) => (
@@ -127,6 +138,16 @@ export const VoiceAssistantPage = () => {
             className="p-1.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs transition"
           >
             <Trash2 className="w-4 h-4" />
+          </button>
+
+          {/* Exit Chat Button */}
+          <button
+            onClick={handleExit}
+            title="Exit voice assistant and return"
+            className="px-2.5 py-1.5 bg-rose-500/20 hover:bg-rose-600 border border-rose-400/30 text-rose-100 hover:text-white rounded-xl text-xs flex items-center space-x-1.5 transition font-semibold"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Exit Chat</span>
           </button>
         </div>
       </div>
@@ -293,14 +314,29 @@ export const VoiceAssistantPage = () => {
               </button>
             </div>
           ) : sessionState === 'speaking' ? (
-            <div className="relative flex items-center justify-center">
-              <div className="absolute w-20 h-20 rounded-full bg-emerald-500/20 animate-ping" />
+            <div className="flex items-center space-x-4">
+              {/* Interrupt & Speak */}
+              <div className="relative flex items-center justify-center">
+                <div className="absolute w-20 h-20 rounded-full bg-emerald-500/20 animate-ping" />
+                <button
+                  onClick={() => {
+                    interrupt();
+                    setTimeout(() => startListening(), 80);
+                  }}
+                  className="relative z-10 w-16 h-16 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center shadow-lg shadow-emerald-600/30 transition-transform active:scale-95"
+                  title="Tap to Interrupt & Speak"
+                >
+                  <Volume2 className="w-7 h-7 animate-pulse" />
+                </button>
+              </div>
+
+              {/* Stop Speaking / Mute Audio */}
               <button
                 onClick={interrupt}
-                className="relative z-10 w-16 h-16 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center shadow-lg shadow-emerald-600/30 transition-transform active:scale-95"
-                title="Tap to Interrupt (Barge-in)"
+                className="w-12 h-12 rounded-full bg-rose-600 hover:bg-rose-700 text-white flex items-center justify-center shadow-md shadow-rose-600/30 transition-transform active:scale-95"
+                title="Stop Speaking"
               >
-                <Volume2 className="w-7 h-7 animate-pulse" />
+                <VolumeX className="w-5 h-5" />
               </button>
             </div>
           ) : sessionState === 'processing' ? (
@@ -323,9 +359,9 @@ export const VoiceAssistantPage = () => {
 
         <p className="text-[11px] text-slate-500 text-center font-medium">
           {sessionState === 'listening'
-            ? 'Listening... Speak your request naturally, then tap the square to finish.'
+            ? 'Listening... Speak your request naturally. Assistant automatically responds when you finish.'
             : sessionState === 'speaking'
-            ? 'Assistant is speaking. Tap the green button to interrupt anytime.'
+            ? 'Assistant is speaking. Tap green to speak again, or red to stop audio.'
             : sessionState === 'processing'
             ? 'Analyzing healthcare request...'
             : 'Tap the microphone to start talking, or type your message below.'}

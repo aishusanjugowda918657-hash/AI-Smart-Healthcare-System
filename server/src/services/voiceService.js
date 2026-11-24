@@ -45,7 +45,7 @@ export function normalizeLanguageCode(code) {
   if (!code) return DEFAULT_LANGUAGE;
   const match = SUPPORTED_VOICE_LANGUAGES.find(
     (l) => l.code.toLowerCase() === code.toLowerCase() ||
-           l.code.toLowerCase().startsWith(code.toLowerCase().split('-')[0])
+      l.code.toLowerCase().startsWith(code.toLowerCase().split('-')[0])
   );
   return match ? match.code : DEFAULT_LANGUAGE;
 }
@@ -89,8 +89,27 @@ export async function transcribeAudio(audioBuffer, options = {}) {
 
   const normalizedLang = languageCode ? normalizeLanguageCode(languageCode) : undefined;
 
+  // Guard against empty audio buffers (< 16 bytes)
+  if (!audioBuffer || audioBuffer.length < 16) {
+    return {
+      transcript: '',
+      languageCode: normalizedLang || DEFAULT_LANGUAGE,
+      languageProbability: 0,
+      requestId: null
+    };
+  }
+
+  const cleanMime = (mimeType || 'audio/wav').split(';')[0].trim().toLowerCase();
+  const ext = cleanMime.includes('webm')
+    ? 'audio.webm'
+    : cleanMime.includes('ogg')
+      ? 'audio.ogg'
+      : cleanMime.includes('mp3') || cleanMime.includes('mpeg')
+        ? 'audio.mp3'
+        : 'audio.wav';
+
   const form = new FormData();
-  form.append('file', new Blob([audioBuffer], { type: mimeType }), 'audio.wav');
+  form.append('file', new Blob([audioBuffer], { type: cleanMime }), ext);
   form.append('model', model);
   if (normalizedLang) {
     form.append('language_code', normalizedLang);
@@ -106,6 +125,15 @@ export async function transcribeAudio(audioBuffer, options = {}) {
 
   if (!response.ok) {
     const errText = await response.text();
+    // If Sarvam failed to read file (empty / bad header), gracefully return empty transcript
+    if (errText.includes('Failed to read the file') || errText.includes('audio format')) {
+      return {
+        transcript: '',
+        languageCode: normalizedLang || DEFAULT_LANGUAGE,
+        languageProbability: 0,
+        requestId: null
+      };
+    }
     const error = new Error(`Sarvam STT failed with status ${response.status}: ${errText}`);
     error.code = 'STT_PROVIDER_ERROR';
     error.statusCode = response.status >= 500 ? 502 : 400;

@@ -129,6 +129,23 @@ export function checkQuickChipIntent(message = '') {
 
   const lower = clean.toLowerCase();
 
+  // If the user is having a conversational dialogue (e.g. "not step", "can you", "book for me"), bypass quick chip
+  if (
+    lower.includes('not step') ||
+    lower.includes('no step') ||
+    lower.includes('can i') ||
+    lower.includes('can you') ||
+    lower.includes('will you') ||
+    lower.includes('for me') ||
+    lower.includes('ಮಾಡುತ್ತೀರಾ') ||
+    lower.includes('ಮಾಡಿ') ||
+    lower.includes('చేస్తారా') ||
+    lower.includes('कर दो') ||
+    lower.includes('करेंगे')
+  ) {
+    return null;
+  }
+
   if (lower.includes('book appointment') || lower.includes('book slot') || lower.includes('schedule appointment') || lower.includes('अपॉइंटमेंट') || lower.includes('ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್') || lower.includes('அப்பாயிண்ட்மெண்ட்')) {
     return 'BOOK_APPOINTMENT';
   }

@@ -7,20 +7,34 @@ export const HealthBanner = () => {
   const apiBaseUrl = API.defaults?.baseURL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
 
   useEffect(() => {
+    let timer;
+    let isMounted = true;
+
     const checkHealth = async () => {
       try {
         const res = await API.get('/health');
-        if (!res.data || !res.data.success) {
-          setUnreachable(true);
-        } else {
-          setUnreachable(false);
+        if (isMounted) {
+          if (res.data && res.data.success) {
+            setUnreachable(false);
+          } else {
+            setUnreachable(true);
+            timer = setTimeout(checkHealth, 2500);
+          }
         }
       } catch (err) {
-        setUnreachable(true);
+        if (isMounted) {
+          setUnreachable(true);
+          timer = setTimeout(checkHealth, 2500);
+        }
       }
     };
 
     checkHealth();
+
+    return () => {
+      isMounted = false;
+      if (timer) clearTimeout(timer);
+    };
   }, []);
 
   if (!unreachable) return null;

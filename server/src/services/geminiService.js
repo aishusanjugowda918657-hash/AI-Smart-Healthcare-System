@@ -5,7 +5,7 @@ import { ai, getAiClient } from '../config/gemini.js';
  * with fallback to the standard default model.
  */
 export const getModelName = () => {
-  return process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+  return process.env.GEMINI_MODEL || 'gemini-flash-lite-latest';
 };
 
 /**

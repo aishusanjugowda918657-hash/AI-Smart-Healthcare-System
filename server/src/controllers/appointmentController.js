@@ -867,8 +867,15 @@ export const cancelAppointment = async (req, res, next) => {
     const apptData = apptDoc.data();
 
     // Security: Verify authenticated user owns this appointment or is staff
-    const isStaff = ['doctor', 'admin'].includes(role);
-    if (!isStaff && apptData.patientUid && apptData.patientUid !== patientUid) {
+    const isStaff = ['doctor', 'admin', 'reception', 'nurse'].includes(role);
+    const matchesOwner =
+      !apptData.patientUid ||
+      apptData.patientUid === patientUid ||
+      apptData.ownerUid === patientUid ||
+      apptData.bookedByUid === patientUid ||
+      (req.user?.patientHealthId && apptData.patientHealthId === req.user.patientHealthId);
+
+    if (!isStaff && !matchesOwner) {
       return res.status(403).json({
         success: false,
         message: 'Security Error: You can only cancel your own appointments.'

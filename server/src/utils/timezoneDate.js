@@ -96,6 +96,44 @@ export function isSlotInPast(dateStr, timeSlotStr, dateObj = clock.now()) {
 }
 
 /**
+ * Parse any natural language time string into a canonical 24-hour HH:mm string.
+ * Accurately distinguishes AM and PM, preventing 10:30 PM from turning into 10:30.
+ * Examples:
+ *   "10:30 PM" -> { time24: '22:30', isPM: true, isExplicitAmpm: true }
+ *   "10:30 AM" -> { time24: '10:30', isPM: false, isExplicitAmpm: true }
+ *   "10:30"    -> { time24: '10:30', isPM: false, isExplicitAmpm: false }
+ */
+export function normalizeTo24HourTime(timeInput) {
+  if (!timeInput || typeof timeInput !== 'string') return null;
+  const raw = timeInput.trim().toLowerCase();
+  const isNight = raw.includes('night') || raw.includes('evening') || raw.includes('pm') || raw.includes('p.m') || raw.includes('afternoon');
+  const isMorning = raw.includes('morning') || raw.includes('am') || raw.includes('a.m');
+  const clean = raw.replace(/(night|evening|afternoon|morning|o'clock|clock|am|pm|a\.m\.|p\.m\.|at|in\s+the)/g, '').trim();
+
+  let hours = 0;
+  let minutes = 0;
+  if (clean.includes(':') || clean.includes('.')) {
+    const parts = clean.split(/[:.]/).map(p => parseInt(p, 10));
+    hours = parts[0] || 0;
+    minutes = parts[1] || 0;
+  } else {
+    hours = parseInt(clean, 10) || 0;
+    minutes = 0;
+  }
+
+  if (isNaN(hours) || hours < 0 || hours > 24 || isNaN(minutes) || minutes < 0 || minutes > 59) return null;
+  if (isNight && hours < 12) {
+    hours += 12;
+  } else if (isMorning && hours === 12) {
+    hours = 0;
+  }
+
+  const time24 = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+  const display12 = formatSlotTimeDisplay(time24);
+  return { time24, display12, hours, minutes, isPM: hours >= 12, isExplicitAmpm: isNight || isMorning };
+}
+
+/**
  * Checks whether an appointment's grace period has expired in Asia/Kolkata.
  */
 export function isGracePeriodExpired(dateStr, timeSlotStr, graceMinutes = 5, dateObj = clock.now()) {
