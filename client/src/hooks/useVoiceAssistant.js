@@ -76,6 +76,11 @@ export function useVoiceAssistant(initialLang = 'en-IN') {
   const hasSpokenRef = useRef(false);
   const transcriptRef = useRef('');
   const stopListeningRef = useRef(null);
+  const startListeningRef = useRef(null);
+  const utteranceRef = useRef(null);
+  const speechWatchdogRef = useRef(null);
+  const speechPollRef = useRef(null);
+  const speakDelayTimerRef = useRef(null);
   const pendingActionRef = useRef(pendingAction);
   const messagesRef = useRef(messages);
 
@@ -118,6 +123,27 @@ export function useVoiceAssistant(initialLang = 'en-IN') {
     };
   }, []);
 
+  const clearSpeechTimers = useCallback(() => {
+    if (speakDelayTimerRef.current) {
+      clearTimeout(speakDelayTimerRef.current);
+      speakDelayTimerRef.current = null;
+    }
+    if (speechWatchdogRef.current) {
+      clearTimeout(speechWatchdogRef.current);
+      speechWatchdogRef.current = null;
+    }
+    if (speechPollRef.current) {
+      clearInterval(speechPollRef.current);
+      speechPollRef.current = null;
+    }
+    if (utteranceRef.current) {
+      utteranceRef.current.onstart = null;
+      utteranceRef.current.onend = null;
+      utteranceRef.current.onerror = null;
+      utteranceRef.current = null;
+    }
+  }, []);
+
   /**
    * Stop active audio playback immediately (Barge-in / Interrupt)
    */
@@ -126,10 +152,13 @@ export function useVoiceAssistant(initialLang = 'en-IN') {
       clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
     }
+    clearSpeechTimers();
     hasSpokenRef.current = false;
 
     if (activeAudioRef.current) {
       try {
+        activeAudioRef.current.onended = null;
+        activeAudioRef.current.onerror = null;
         activeAudioRef.current.pause();
         activeAudioRef.current.currentTime = 0;
         activeAudioRef.current.src = '';
@@ -147,14 +176,98 @@ export function useVoiceAssistant(initialLang = 'en-IN') {
       wsRef.current.send(JSON.stringify({ type: 'interrupt' }));
     }
     setSessionState('idle');
-  }, []);
+  }, [clearSpeechTimers]);
 
   /**
-   * Play TTS audio from base64 WAV payload
+   * Play TTS audio from base64 WAV payload with resilient browser speech fallback
    */
   const playAudioResponse = useCallback(
     (audioBase64, fallbackText) => {
       interrupt();
+
+      let finished = false;
+      const finishSpeaking = () => {
+        if (finished) return;
+        finished = true;
+        clearSpeechTimers();
+        activeAudioRef.current = null;
+        if (sessionActiveRef.current && isHandsFreeRef.current) {
+          setSessionState('listening');
+          setTimeout(() => {
+            startListeningRef.current?.();
+          }, 400);
+        } else {
+          setSessionState('idle');
+        }
+      };
+
+      const speakWithBrowserFallback = (text) => {
+        if (typeof window === 'undefined' || !('speechSynthesis' in window) || !text) {
+          finishSpeaking();
+          return;
+        }
+
+        // Delay speak slightly after cancel() to avoid Chromium synchronous cancel+speak hang
+        speakDelayTimerRef.current = setTimeout(() => {
+          try {
+            const synth = window.speechSynthesis;
+            if (synth.paused) synth.resume();
+
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = lang;
+            utterance.rate = 0.95;
+
+            // Select matching voice if available
+            const voices = typeof synth.getVoices === 'function' ? synth.getVoices() : [];
+            const langPrefix = (lang || 'en').split('-')[0].toLowerCase();
+            const matchedVoice =
+              voices.find((v) => v.lang?.toLowerCase() === (lang || '').toLowerCase()) ||
+              voices.find((v) => v.lang?.toLowerCase().startsWith(langPrefix));
+            if (matchedVoice) {
+              utterance.voice = matchedVoice;
+            }
+
+            // Retain strong reference so V8 GC cannot drop onend/onerror handlers
+            utteranceRef.current = utterance;
+
+            let started = false;
+            utterance.onstart = () => {
+              started = true;
+              if (!finished) setSessionState('speaking');
+            };
+            utterance.onend = finishSpeaking;
+            utterance.onerror = () => finishSpeaking();
+
+            setSessionState('speaking');
+            synth.speak(utterance);
+
+            // Poll synth.speaking in case Chrome drops onend
+            const startedAt = Date.now();
+            speechPollRef.current = setInterval(() => {
+              if (finished) return;
+              const elapsed = Date.now() - startedAt;
+              if (elapsed > 800 && !synth.speaking && !synth.pending) {
+                finishSpeaking();
+              } else if (!started && elapsed > 2000 && !synth.speaking) {
+                finishSpeaking();
+              }
+            }, 400);
+
+            // Hard watchdog timeout so UI never stays stuck in "Speaking..."
+            const maxSpeakMs = Math.min(35000, Math.max(8000, text.length * 140));
+            speechWatchdogRef.current = setTimeout(() => {
+              if (!finished) {
+                try {
+                  synth.cancel();
+                } catch (_) {}
+                finishSpeaking();
+              }
+            }, maxSpeakMs);
+          } catch (e) {
+            finishSpeaking();
+          }
+        }, 60);
+      };
 
       if (audioBase64) {
         try {
@@ -162,31 +275,32 @@ export function useVoiceAssistant(initialLang = 'en-IN') {
           activeAudioRef.current = audio;
 
           audio.onplay = () => {
-            setSessionState('speaking');
+            if (!finished) setSessionState('speaking');
           };
 
-          audio.onended = () => {
-            activeAudioRef.current = null;
-            if (sessionActiveRef.current && isHandsFreeRef.current) {
-              setSessionState('listening');
-              // Automatically resume listening for hands-free dialogue
-              setTimeout(() => {
-                startListening();
-              }, 400);
-            } else {
-              setSessionState('idle');
-            }
-          };
+          audio.onended = finishSpeaking;
 
           audio.onerror = (e) => {
             console.warn('[useVoiceAssistant] Audio playback error, falling back:', e);
             activeAudioRef.current = null;
-            setSessionState('idle');
+            speakWithBrowserFallback(fallbackText);
           };
+
+          const maxAudioMs = Math.min(45000, Math.max(12000, (fallbackText?.length || 80) * 160));
+          speechWatchdogRef.current = setTimeout(() => {
+            if (!finished) {
+              try {
+                audio.pause();
+              } catch (_) {}
+              finishSpeaking();
+            }
+          }, maxAudioMs);
 
           audio.play().catch((err) => {
             console.warn('[useVoiceAssistant] Audio play failed (autoplay policy):', err.message);
-            setSessionState('idle');
+            activeAudioRef.current = null;
+            clearSpeechTimers();
+            speakWithBrowserFallback(fallbackText);
           });
           return;
         } catch (err) {
@@ -194,42 +308,9 @@ export function useVoiceAssistant(initialLang = 'en-IN') {
         }
       }
 
-      // Fallback: Browser Web Speech synthesis if cloud audio is not available
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window && fallbackText) {
-        try {
-          window.speechSynthesis.cancel();
-          const utterance = new SpeechSynthesisUtterance(fallbackText);
-          utterance.lang = lang;
-          utterance.rate = 0.95;
-
-          utterance.onstart = () => {
-            setSessionState('speaking');
-          };
-
-          utterance.onend = () => {
-            if (sessionActiveRef.current && isHandsFreeRef.current) {
-              setSessionState('listening');
-              setTimeout(() => {
-                startListening();
-              }, 400);
-            } else {
-              setSessionState('idle');
-            }
-          };
-
-          utterance.onerror = () => {
-            setSessionState('idle');
-          };
-
-          window.speechSynthesis.speak(utterance);
-        } catch (e) {
-          setSessionState('idle');
-        }
-      } else {
-        setSessionState('idle');
-      }
+      speakWithBrowserFallback(fallbackText);
     },
-    [interrupt, lang]
+    [interrupt, clearSpeechTimers, lang]
   );
 
   /**
@@ -295,12 +376,16 @@ export function useVoiceAssistant(initialLang = 'en-IN') {
         } catch (voiceErr) {
           if (voiceErr.response?.status === 404) {
             console.warn('[useVoiceAssistant] /voice/chat returned 404, falling back to /ai/chat');
+            const trimmedQuery = (queryText || '').trim();
+            if (!trimmedQuery) {
+              throw new Error('Could not recognize speech clearly. Please tap the microphone and speak again or type your message.');
+            }
             const cleanLang = (lang || 'en').split('-')[0];
             const chatRes = await API.post('/ai/chat', {
-              message: queryText || 'Hello',
+              message: trimmedQuery,
               language: cleanLang,
               inputMode: audioBlob ? 'voice' : 'text',
-              history: messages
+              history: (messagesRef.current || [])
                 .filter((m) => m.sender === 'user' || m.sender === 'assistant')
                 .slice(-10)
                 .map((m) => ({
@@ -608,7 +693,11 @@ export function useVoiceAssistant(initialLang = 'en-IN') {
     }
   }, [transcript, sendVoiceTurn]);
 
-  // Keep stopListeningRef synchronized with latest function
+  // Keep startListeningRef and stopListeningRef synchronized with latest functions
+  useEffect(() => {
+    startListeningRef.current = startListening;
+  }, [startListening]);
+
   useEffect(() => {
     stopListeningRef.current = stopListening;
   }, [stopListening]);
